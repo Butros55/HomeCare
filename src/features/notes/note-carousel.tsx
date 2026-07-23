@@ -54,13 +54,29 @@ function useKeyboardInset(): number {
   return inset;
 }
 
-/** Einflug: von links nach rechts nacheinander, mit leichtem Überschwingen. */
+/**
+ * Öffnen in zwei Schichten, damit nichts abgeschnitten wird:
+ *  1. Das ganze Karussell fährt wie ein Widget-Panel von unten herein – es
+ *     liegt unter dem Stift-Dock, die Karten kommen also dahinter hervor.
+ *  2. Die Karten selbst hüpfen nur ein kleines Stück nacheinander hoch (links
+ *     zuerst, rechts zuletzt) und schwingen dabei leicht über.
+ * Ein großer Kartenweg wäre vom waagerechten Scroller senkrecht beschnitten
+ * worden – der muss `overflow-y: hidden` haben, sobald er waagerecht scrollt.
+ */
+const PANEL_ENTER_MS = 340;
+const PANEL_LEAVE_MS = 220;
+const PANEL_ENTER_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
+const PANEL_LEAVE_EASING = 'cubic-bezier(0.4, 0, 1, 1)';
+
+const CARD_HOP_PX = 28;
+/** Schlüssel des leeren „+"-Blatts in der Karten-Registry. */
+const NEW_SHEET_KEY = '__new__';
 const ENTER_STAGGER_MS = 45;
-const LEAVE_STAGGER_MS = 30;
-/** Dezentes Überschwingen – stärkere Kurven würden oben sichtbar anschlagen. */
-const ENTER_EASING = 'cubic-bezier(0.21, 1.11, 0.35, 1)';
+const LEAVE_STAGGER_MS = 28;
+/** Kurzes, weiches Überschwingen – nur wenige Pixel über die Ruhelage. */
+const ENTER_EASING = 'cubic-bezier(0.18, 1.35, 0.4, 1)';
 const LEAVE_EASING = 'cubic-bezier(0.4, 0, 1, 1)';
-/** Luft über den Karten, damit das Überschwingen nicht abgeschnitten wird. */
+/** Luft über den Karten, damit das Überschwingen nicht anschlägt. */
 const OVERSHOOT_HEADROOM = '2.5rem';
 
 /**
@@ -104,6 +120,9 @@ export function NoteCarousel({
   const scrollerRef = React.useRef<HTMLDivElement>(null);
   const cardRefs = React.useRef<Map<string, HTMLElement>>(new Map());
   const frameRef = React.useRef<number | null>(null);
+  const glideRef = React.useRef<number | null>(null);
+  const wasOpenRef = React.useRef(false);
+  const seenIdsRef = React.useRef<Set<string>>(new Set(notes.map((note) => note.id)));
   const [editingId, setEditingId] = React.useState<string | null>(null);
   const keyboardInset = useKeyboardInset();
 
@@ -144,6 +163,75 @@ export function NoteCarousel({
     });
   }, [applyFan]);
 
+  const stopGlide = React.useCallback(() => {
+    if (glideRef.current !== null) {
+      window.cancelAnimationFrame(glideRef.current);
+      glideRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Eigene, bewusst gemächliche Scroll-Animation – `behavior: 'smooth'` wirkt
+   * für das Zurückrutschen viel zu ruckartig.
+   */
+  const glideTo = React.useCallback(
+    (targetLeft: number, duration: number) => {
+      const scroller = scrollerRef.current;
+      if (!scroller) return;
+      stopGlide();
+      const startLeft = scroller.scrollLeft;
+      const delta = targetLeft - startLeft;
+      if (Math.abs(delta) < 1) return;
+      const startTime = performance.now();
+      const safeDuration = Math.max(1, duration);
+      const step = (now: number) => {
+        const progress = Math.min(1, (now - startTime) / safeDuration);
+        const eased = 1 - (1 - progress) ** 3;
+        scroller.scrollLeft = startLeft + delta * eased;
+        glideRef.current = progress < 1 ? window.requestAnimationFrame(step) : null;
+      };
+      glideRef.current = window.requestAnimationFrame(step);
+    },
+    [stopGlide],
+  );
+
+  /** Ein Blatt mittig ins Karussell fahren – ausschließlich waagerecht. */
+  const centerOn = React.useCallback(
+    (key: string, duration = 460) => {
+      const scroller = scrollerRef.current;
+      const node = cardRefs.current.get(key);
+      if (!scroller || !node) return;
+      const scrollerRect = scroller.getBoundingClientRect();
+      const nodeRect = node.getBoundingClientRect();
+      const delta =
+        nodeRect.left + nodeRect.width / 2 - (scrollerRect.left + scrollerRect.width / 2);
+      glideTo(scroller.scrollLeft + delta, duration);
+    },
+    [glideTo],
+  );
+
+  /**
+   * Beim Loslassen soll nie das leere „+"-Blatt in der Mitte stehen bleiben –
+   * dann rutscht das erste echte Blatt sanft nach (das „+" bleibt links
+   * daneben sichtbar und antippbar).
+   */
+  const settleOnRealSheet = React.useCallback(() => {
+    const scroller = scrollerRef.current;
+    const firstNoteId = notes[0]?.id;
+    // Während des Anlegens nicht dazwischenfunken – die neue Seite zentriert
+    // sich selbst, sobald sie da ist.
+    if (!scroller || !firstNoteId || creating) return;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const center = scrollerRect.left + scrollerRect.width / 2;
+    const closest = [...cardRefs.current.entries()]
+      .map(([key, node]) => {
+        const nodeRect = node.getBoundingClientRect();
+        return { key, distance: Math.abs(nodeRect.left + nodeRect.width / 2 - center) };
+      })
+      .sort((left, right) => left.distance - right.distance)[0];
+    if (closest?.key === NEW_SHEET_KEY) centerOn(firstNoteId, 620);
+  }, [centerOn, creating, notes]);
+
   React.useEffect(() => {
     const scroller = scrollerRef.current;
     if (!scroller) return;
@@ -157,19 +245,31 @@ export function NoteCarousel({
     };
   }, [applyFan, notes.length, open]);
 
-  // Aktive Seite mittig einfahren – bewusst nur waagerecht im Karussell selbst,
-  // damit scrollIntoView nicht nebenbei die Seite darunter verschiebt.
+  /**
+   * Mittig eingefahren wird nur beim Öffnen und bei einer frisch angelegten
+   * Seite – ausdrücklich NICHT beim Antippen. Sonst verschöbe der erste Tipp
+   * eines Doppeltipps die Karten, und der zweite Tipp träfe die Nachbarseite.
+   */
   React.useEffect(() => {
+    const justOpened = open && !wasOpenRef.current;
+    const isNewNote = selectedId !== null && !seenIdsRef.current.has(selectedId);
+    wasOpenRef.current = open;
+    seenIdsRef.current = new Set(notes.map((note) => note.id));
     if (!open || !selectedId) return;
+    if (justOpened || isNewNote) centerOn(selectedId, justOpened ? 260 : 460);
+  }, [centerOn, notes, open, selectedId]);
+
+  // Beim Loslassen zurückrutschen. `scrollend` deckt zusätzlich den Nachlauf
+  // des Schwungscrollens auf Touch-Geräten ab – ganz ohne Timer.
+  React.useEffect(() => {
     const scroller = scrollerRef.current;
-    const node = cardRefs.current.get(selectedId);
-    if (!scroller || !node) return;
-    const scrollerRect = scroller.getBoundingClientRect();
-    const nodeRect = node.getBoundingClientRect();
-    const delta =
-      nodeRect.left + nodeRect.width / 2 - (scrollerRect.left + scrollerRect.width / 2);
-    if (Math.abs(delta) > 1) scroller.scrollBy({ left: delta, behavior: 'smooth' });
-  }, [open, selectedId]);
+    if (!scroller) return;
+    const onSettle = () => settleOnRealSheet();
+    scroller.addEventListener('scrollend', onSettle);
+    return () => scroller.removeEventListener('scrollend', onSettle);
+  }, [settleOnRealSheet]);
+
+  React.useEffect(() => stopGlide, [stopGlide]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -205,15 +305,15 @@ export function NoteCarousel({
   };
 
   /**
-   * Gestaffelter Ein-/Ausflug je Karte – offen: links zuerst, zu: rechts
+   * Kleiner, gestaffelter Hüpfer je Karte – offen: links zuerst, zu: rechts
    * zuerst. Bewusst als Inline-Transform: Tailwinds `translate-y-*` schreibt
    * die CSS-Eigenschaft `translate`, die hier nicht mitanimiert würde.
    */
   const flightStyle = (index: number): React.CSSProperties => ({
-    transform: open ? 'translateY(0)' : 'translateY(135%)',
+    transform: open ? 'translateY(0)' : `translateY(${CARD_HOP_PX}px)`,
     opacity: open ? 1 : 0,
     transitionProperty: 'transform, opacity',
-    transitionDuration: open ? '420ms' : '260ms',
+    transitionDuration: open ? '300ms' : '160ms',
     transitionTimingFunction: open ? ENTER_EASING : LEAVE_EASING,
     transitionDelay: `${(open ? index : total - 1 - index) * (open ? ENTER_STAGGER_MS : LEAVE_STAGGER_MS)}ms`,
     willChange: 'transform, opacity',
@@ -223,20 +323,26 @@ export function NoteCarousel({
     <div
       ref={rootRef}
       className={cn(
-        // Kein eigenes Panel: die Karten liegen direkt auf dem Papier – und
-        // oberhalb des Stift-Docks, damit dieses frei bedienbar bleibt.
-        // Bewusst ohne overflow-hidden: sonst würde der Einflug oben anschlagen
-        // (verborgen wird über die Deckkraft, geclippt wird vom Elternbereich).
-        'absolute inset-x-0 bottom-16 z-40 pointer-coarse:bottom-20',
+        // Kein eigenes Panel hinter den Karten: sie liegen direkt auf dem
+        // Papier. z-10 hält das Karussell unter dem Stift-Dock (z-20) – beim
+        // Öffnen kommen die Karten hinter der Werkzeugleiste hervor.
+        'absolute inset-x-0 bottom-16 z-10 pointer-coarse:bottom-20',
         open ? 'pointer-events-auto' : 'pointer-events-none',
       )}
       style={
         {
           '--sheet-h': SHEET_HEIGHT,
           height: `calc(${SHEET_HEIGHT} + 8.5rem + ${OVERSHOOT_HEADROOM})`,
-          // Mit der Bildschirmtastatur nach oben wandern und wieder zurück.
-          transform: keyboardInset > 0 ? `translateY(-${keyboardInset}px)` : undefined,
-          transition: 'transform 220ms ease-out',
+          // Panel-Fahrt von unten + Ausweichen vor der Bildschirmtastatur.
+          transform: open
+            ? keyboardInset > 0
+              ? `translateY(-${keyboardInset}px)`
+              : 'translateY(0)'
+            : 'translateY(115%)',
+          transitionProperty: 'transform',
+          transitionDuration: `${open ? PANEL_ENTER_MS : PANEL_LEAVE_MS}ms`,
+          transitionTimingFunction: open ? PANEL_ENTER_EASING : PANEL_LEAVE_EASING,
+          willChange: 'transform',
         } as React.CSSProperties
       }
       aria-hidden={!open}
@@ -265,6 +371,9 @@ export function NoteCarousel({
       <div
         ref={scrollerRef}
         onScroll={scheduleFan}
+        onPointerDown={stopGlide}
+        onPointerUp={settleOnRealSheet}
+        onPointerCancel={settleOnRealSheet}
         className="scrollbar-none flex snap-x snap-proximity items-end gap-3 overflow-x-auto overflow-y-hidden pb-8"
         style={{
           paddingTop: OVERSHOOT_HEADROOM,
@@ -273,7 +382,7 @@ export function NoteCarousel({
       >
         {/* Leeres Blatt: ein Tipp darauf legt sofort eine neue Seite an. */}
         <div className="shrink-0" style={flightStyle(0)}>
-          <SheetColumn ref={(node) => registerCard('__new__', node)}>
+          <SheetColumn ref={(node) => registerCard(NEW_SHEET_KEY, node)}>
             <SheetShell
               onClick={onCreate}
               disabled={creating}
