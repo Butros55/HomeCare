@@ -5,6 +5,7 @@ import { addDays } from 'date-fns';
 import { SERIES_MATERIALIZATION_DAYS } from '@/lib/app-config';
 import {
   checkAppointmentConflicts,
+  checkBudgetConflicts,
   hasErrors,
   hasWarnings,
   type Conflict,
@@ -12,10 +13,12 @@ import {
 import {
   calendarDayInZone,
   dayPeriodInZone,
+  monthPeriodInZone,
   toUtcDateOnly,
   utcDate,
   zonedWallTimeToUtc,
 } from '@/lib/dates';
+import { getCustomerBudgetMinutes, PLANNED_STATUSES } from '@/lib/hours';
 import { estimateTravelSeconds } from '@/lib/geo';
 import {
   buildRecurrenceRule,
@@ -205,7 +208,7 @@ export async function collectConflicts(
     }
   }
 
-  return checkAppointmentConflicts({
+  const conflicts = checkAppointmentConflicts({
     candidate: {
       id: candidate.id,
       assignedEmployeeId: candidate.assignedEmployeeId,
@@ -232,6 +235,45 @@ export async function collectConflicts(
     travel,
     timezone,
   });
+
+  // Kopplung Termin ↔ Kundenbudget: warnt, wenn der Termin ohne bzw. über dem
+  // gebuchten Kontingent des Monats liegt (Zeitraum-Semantik wie hours-service).
+  const month = monthPeriodInZone(candidate.startAt, timezone);
+  const [budgets, plannedAppointments] = await Promise.all([
+    db.customerHourBudget.findMany({
+      where: {
+        customerId: candidate.customerId,
+        periodStart: { lt: month.end },
+        periodEnd: { gte: month.start },
+      },
+      include: { adjustments: true },
+    }),
+    db.appointment.findMany({
+      where: {
+        customerId: candidate.customerId,
+        deletedAt: null,
+        status: { in: [...PLANNED_STATUSES] },
+        startAt: { gte: month.start, lt: month.end },
+        ...(candidate.id ? { id: { not: candidate.id } } : {}),
+      },
+      select: { durationMinutes: true },
+    }),
+  ]);
+  conflicts.push(
+    ...checkBudgetConflicts({
+      budgetMinutes:
+        budgets.length === 0
+          ? null
+          : getCustomerBudgetMinutes(budgets, budgets.flatMap((b) => b.adjustments)),
+      plannedMinutesExcludingCandidate: plannedAppointments.reduce(
+        (sum, a) => sum + a.durationMinutes,
+        0,
+      ),
+      candidateMinutes: candidate.durationMinutes,
+    }),
+  );
+
+  return conflicts;
 }
 
 // ---------------------------------------------------------------------------

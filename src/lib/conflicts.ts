@@ -22,7 +22,9 @@ export type ConflictType =
   | 'DAY_MAX_EXCEEDED'
   | 'OUTSIDE_CUSTOMER_WINDOW'
   | 'ADDRESS_MISSING'
-  | 'DUPLICATE_SERIES_OCCURRENCE';
+  | 'DUPLICATE_SERIES_OCCURRENCE'
+  | 'NO_HOUR_BUDGET'
+  | 'HOUR_BUDGET_OVERPLANNED';
 
 export interface Conflict {
   type: ConflictType;
@@ -233,6 +235,42 @@ export function checkAppointmentConflicts(input: ConflictCheckInput): Conflict[]
   }
 
   return conflicts;
+}
+
+/**
+ * Kopplung Termin ↔ Kundenbudget (Anfrage Juli 2026): Termine sollen nicht
+ * unbemerkt ohne bzw. über das gebuchte Kundenkontingent geplant werden.
+ * Warnungen blockieren nicht – Planung bleibt möglich, aber sichtbar begründet.
+ */
+export function checkBudgetConflicts(input: {
+  /** Korrigiertes Kundenbudget im Terminzeitraum; null = gar kein Budget angelegt. */
+  budgetMinutes: number | null;
+  /** Bereits geplante Minuten des Kunden im selben Zeitraum (ohne den Kandidaten). */
+  plannedMinutesExcludingCandidate: number;
+  candidateMinutes: number;
+}): Conflict[] {
+  const fmtHours = (minutes: number) => `${Math.round((minutes / 60) * 10) / 10} h`;
+  if (input.budgetMinutes === null) {
+    return [
+      {
+        type: 'NO_HOUR_BUDGET',
+        severity: 'WARNING',
+        message:
+          'Der Kunde hat im Terminzeitraum kein Stundenbudget – der Termin wäre nicht durch gebuchte Stunden gedeckt.',
+      },
+    ];
+  }
+  const total = input.plannedMinutesExcludingCandidate + input.candidateMinutes;
+  if (total > input.budgetMinutes) {
+    return [
+      {
+        type: 'HOUR_BUDGET_OVERPLANNED',
+        severity: 'WARNING',
+        message: `Mit diesem Termin sind ${fmtHours(total)} verplant – das Kundenbudget beträgt ${fmtHours(input.budgetMinutes)} (${fmtHours(total - input.budgetMinutes)} darüber).`,
+      },
+    ];
+  }
+  return [];
 }
 
 /** Doppelte Serienerzeugung: identisches Vorkommen existiert bereits. */

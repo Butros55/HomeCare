@@ -6,7 +6,7 @@ import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
 import { EntityAvatar } from '@/components/ui/misc';
-import { EmptyState, Panel, PanelBody, PanelHeader, PanelTitle, ProgressBar, StatTile } from '@/components/ui/panel';
+import { EmptyState, Panel, PanelBody, PanelHeader, PanelTitle, ProgressBar } from '@/components/ui/panel';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Table, TableWrapper, TBody, Td, Th, THead, Tr } from '@/components/ui/table';
 import { formatDate, formatDateTime, monthPeriodInZone, toDateInputValue } from '@/lib/dates';
@@ -30,6 +30,7 @@ import { ContactActions } from '@/features/customers/contact-actions';
 import { CustomerLocationMap } from '@/features/map/location-map';
 import { AllocateHoursButton } from '@/features/hours/allocate-hours-button';
 import { AdjustBudgetButton, CreateBudgetButton } from '@/features/hours/budget-dialogs';
+import { CustomerHourTiles } from '@/features/hours/hour-detail-tiles';
 import { CustomerAppointmentButtons } from '@/features/appointments/create-appointment-button';
 
 export const metadata: Metadata = { title: 'Kunde' };
@@ -51,10 +52,10 @@ export default async function CustomerDetailPage({
   searchParams,
 }: {
   params: Promise<{ customerId: string }>;
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; monat?: string }>;
 }) {
   const { customerId } = await params;
-  const { tab: rawTab } = await searchParams;
+  const { tab: rawTab, monat } = await searchParams;
   const tab: TabKey = (TABS.some((t) => t.key === rawTab) ? rawTab : 'uebersicht') as TabKey;
 
   let detail: Awaited<ReturnType<typeof getCustomerDetail>>;
@@ -68,7 +69,13 @@ export default async function CustomerDetailPage({
   if (!customer) notFound();
 
   const timezone = ctx.organization.timezone;
-  const period = monthPeriodInZone(new Date(), timezone);
+  // ?monat=YYYY-MM erlaubt den Blick auf andere Zeiträume (Stunden-Tab).
+  const monthMatch = /^(\d{4})-(\d{2})$/.exec(monat ?? '');
+  const anchor = monthMatch
+    ? new Date(Date.UTC(Number(monthMatch[1]), Number(monthMatch[2]) - 1, 15))
+    : new Date();
+  const period = monthPeriodInZone(anchor, timezone);
+  const monthIso = toDateInputValue(period.start, timezone).slice(0, 7);
   const stats = await getCustomerHourStats(customerId, period);
   const name = `${customer.firstName} ${customer.lastName}`;
   const address = customer.addresses[0] ?? null;
@@ -133,6 +140,8 @@ export default async function CustomerDetailPage({
             address={address}
             stats={stats}
             timezone={timezone}
+            monthIso={monthIso}
+            canAllocate={canAllocate}
           />
         ) : null}
         {tab === 'termine' ? <AppointmentsTab customerId={customerId} timezone={timezone} /> : null}
@@ -143,6 +152,8 @@ export default async function CustomerDetailPage({
             canAllocate={canAllocate}
             canManageBudgets={hasPermission(ctx, 'budgets.manage')}
             stats={stats}
+            monthIso={monthIso}
+            period={period}
           />
         ) : null}
         {tab === 'mitarbeiter' ? <EmployeesTab customerId={customerId} customer={customer} /> : null}
@@ -166,6 +177,8 @@ async function OverviewTab({
   addressLine,
   stats,
   timezone,
+  monthIso,
+  canAllocate,
 }: {
   customerId: string;
   name: string;
@@ -174,6 +187,8 @@ async function OverviewTab({
   addressLine: string | null;
   stats: Awaited<ReturnType<typeof getCustomerHourStats>>;
   timezone: string;
+  monthIso: string;
+  canAllocate: boolean;
 }) {
   const [nextAppointment, recentActivity] = await Promise.all([
     db.appointment.findFirst({
@@ -196,17 +211,12 @@ async function OverviewTab({
 
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <StatTile label="Gebuchte Stunden" value={formatMinutesAsHours(stats.budgetMinutes)} hint="aktueller Monat" />
-        <StatTile
-          label="Zugewiesen"
-          value={formatMinutesAsHours(stats.allocatedMinutes)}
-          hint={`${formatMinutesAsHours(stats.unallocatedMinutes)} offen`}
-          tone={stats.unallocatedMinutes > 0 ? 'warning' : 'success'}
-        />
-        <StatTile label="Geplant" value={formatMinutesAsHours(stats.plannedMinutes)} hint={`${formatMinutesAsHours(Math.max(0, stats.unplannedMinutes))} unverplant`} />
-        <StatTile label="Geleistet" value={formatMinutesAsHours(stats.completedMinutes)} hint="bestätigte Einsätze" tone="success" />
-      </div>
+      <CustomerHourTiles
+        customerId={customerId}
+        monthIso={monthIso}
+        stats={stats}
+        canAllocate={canAllocate}
+      />
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Panel>
@@ -468,12 +478,16 @@ async function HoursTab({
   canAllocate,
   canManageBudgets,
   stats,
+  monthIso,
+  period,
 }: {
   customerId: string;
   timezone: string;
   canAllocate: boolean;
   canManageBudgets: boolean;
   stats: Awaited<ReturnType<typeof getCustomerHourStats>>;
+  monthIso: string;
+  period: { start: Date; end: Date };
 }) {
   const budgets = await db.customerHourBudget.findMany({
     where: { customerId },
@@ -491,29 +505,48 @@ async function HoursTab({
     },
   });
 
+  // Monatswahl: ‹ vorheriger / nächster › Monat als Links (?monat=YYYY-MM).
+  const monthLabel = new Intl.DateTimeFormat('de-DE', {
+    timeZone: timezone,
+    month: 'long',
+    year: 'numeric',
+  }).format(period.start);
+  const shiftMonth = (offset: number) => {
+    const [y, m] = monthIso.split('-').map(Number);
+    const shifted = new Date(Date.UTC(y!, m! - 1 + offset, 15));
+    const iso = `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}`;
+    return `/customers/${customerId}?tab=stunden&monat=${iso}`;
+  };
+
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <StatTile label="Budget (Monat)" value={formatMinutesAsHours(stats.budgetMinutes)} />
-        <StatTile
-          label="Noch nicht zugewiesen"
-          value={formatMinutesAsHours(stats.unallocatedMinutes)}
-          tone={stats.unallocatedMinutes > 0 ? 'warning' : 'success'}
-        />
-        <StatTile label="Noch nicht verplant" value={formatMinutesAsHours(Math.max(0, stats.unplannedMinutes))} />
-        <StatTile label="Geleistet" value={formatMinutesAsHours(stats.completedMinutes)} tone="success" />
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-[length:var(--text-base)] font-semibold">{monthLabel}</h2>
+        <div className="flex items-center gap-1">
+          <Button asChild variant="outline" size="sm" aria-label="Vorheriger Monat">
+            <Link href={shiftMonth(-1)}>‹</Link>
+          </Button>
+          <Button asChild variant="outline" size="sm" aria-label="Nächster Monat">
+            <Link href={shiftMonth(1)}>›</Link>
+          </Button>
+        </div>
       </div>
+
+      <CustomerHourTiles
+        customerId={customerId}
+        monthIso={monthIso}
+        stats={stats}
+        canAllocate={canAllocate}
+        showFunnel
+      />
 
       {canAllocate || canManageBudgets ? (
         <div className="flex flex-wrap justify-end gap-2">
           {canManageBudgets ? (
             <CreateBudgetButton
               customerId={customerId}
-              defaultPeriodStart={toDateInputValue(monthPeriodInZone(new Date(), timezone).start, timezone)}
-              defaultPeriodEnd={toDateInputValue(
-                new Date(monthPeriodInZone(new Date(), timezone).end.getTime() - 1),
-                timezone,
-              )}
+              defaultPeriodStart={toDateInputValue(period.start, timezone)}
+              defaultPeriodEnd={toDateInputValue(new Date(period.end.getTime() - 1), timezone)}
             />
           ) : null}
           {canAllocate ? (

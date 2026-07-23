@@ -7,7 +7,7 @@ import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
 import { EntityAvatar } from '@/components/ui/misc';
-import { Panel, PanelBody, PanelHeader, PanelTitle, StatTile } from '@/components/ui/panel';
+import { Panel, PanelBody, PanelHeader, PanelTitle } from '@/components/ui/panel';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Table, TableWrapper, TBody, Td, Th, THead, Tr } from '@/components/ui/table';
 import { formatDate, formatDateTime, monthPeriodInZone, weekPeriodInZone } from '@/lib/dates';
@@ -37,6 +37,7 @@ import { AbsenceManager, DeleteAbsenceButton } from '@/features/employees/absenc
 import { AvailabilityEditor } from '@/features/employees/availability-editor';
 import { EmployeeRowActions } from '@/features/employees/employee-row-actions';
 import { AllocateFromEmployeeButton } from '@/features/hours/allocate-from-employee-button';
+import { EmployeeHourTiles } from '@/features/hours/hour-detail-tiles';
 import { RevokeAllocationButton } from '@/features/hours/revoke-allocation-button';
 
 export const metadata: Metadata = { title: 'Mitarbeiter' };
@@ -171,9 +172,9 @@ export default async function EmployeeDetailPage({
           <OverviewTab
             employee={employee}
             weekStats={weekStats}
-            monthStats={monthStats}
             timezone={timezone}
             isSelf={isSelf}
+            canAllocate={canAllocate && employee.status === 'ACTIVE' && employee.canReceiveHours}
           />
         ) : null}
         {tab === 'kalender' ? <CalendarTab employeeId={employeeId} timezone={timezone} /> : null}
@@ -202,9 +203,9 @@ export default async function EmployeeDetailPage({
 async function OverviewTab({
   employee,
   weekStats,
-  monthStats,
   timezone,
   isSelf,
+  canAllocate,
 }: {
   employee: {
     id: string;
@@ -216,9 +217,9 @@ async function OverviewTab({
     user: { email: string; lastLoginAt: Date | null } | null;
   };
   weekStats: Awaited<ReturnType<typeof getEmployeeHourStats>>;
-  monthStats: Awaited<ReturnType<typeof getEmployeeHourStats>>;
   timezone: string;
   isSelf: boolean;
+  canAllocate: boolean;
 }) {
   const [nextAppointments, customerCount] = await Promise.all([
     db.appointment.findMany({
@@ -246,33 +247,21 @@ async function OverviewTab({
 
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <StatTile
-          label="Ziel (Woche)"
-          value={weekStats.targetMinutes != null ? formatMinutesAsHours(weekStats.targetMinutes) : '—'}
-          hint={`Monat: ${monthStats.targetMinutes != null ? formatMinutesAsHours(monthStats.targetMinutes) : '—'}`}
-        />
-        <StatTile
-          label="Zugewiesen (Woche)"
-          value={formatMinutesAsHours(weekStats.allocatedMinutes)}
-          hint={
-            weekStats.forwardedMinutes > 0
-              ? `${formatMinutesAsHours(weekStats.forwardedMinutes)} weitergegeben`
-              : 'aus Kundenbudgets'
-          }
-        />
-        <StatTile
-          label="Geplant (Woche)"
-          value={formatMinutesAsHours(weekStats.plannedMinutes)}
-          hint={`Geleistet: ${formatMinutesAsHours(weekStats.completedMinutes)}`}
-        />
-        <StatTile
-          label="Fehlend zum Ziel"
-          value={formatMinutesAsHours(weekStats.missingByAllocation)}
-          tone={weekStats.missingByAllocation > 0 ? 'warning' : 'success'}
-          hint={`nach Planung: ${formatMinutesAsHours(weekStats.missingByPlanning)}`}
-        />
-      </div>
+      <EmployeeHourTiles
+        employeeId={employee.id}
+        periodKind="week"
+        labels={{ target: 'Woche', allocated: 'Woche', planned: 'Woche', missing: 'Woche' }}
+        stats={{
+          targetMinutes: weekStats.targetMinutes,
+          allocatedMinutes: weekStats.allocatedMinutes,
+          forwardedMinutes: weekStats.forwardedMinutes,
+          plannedMinutes: weekStats.plannedMinutes,
+          completedMinutes: weekStats.completedMinutes,
+          missingByAllocation: weekStats.missingByAllocation,
+          missingByPlanning: weekStats.missingByPlanning,
+        }}
+        canAllocate={canAllocate}
+      />
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Panel>
@@ -784,16 +773,21 @@ function ReportsTab({
 }) {
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <StatTile label="Zugewiesen (Monat)" value={formatMinutesAsHours(monthStats.allocatedMinutes)} />
-        <StatTile label="Geplant (Monat)" value={formatMinutesAsHours(monthStats.plannedMinutes)} />
-        <StatTile label="Geleistet (Monat)" value={formatMinutesAsHours(monthStats.completedMinutes)} tone="success" />
-        <StatTile
-          label="Eigenverpflichtung"
-          value={formatMinutesAsHours(monthStats.selfObligationMinutes)}
-          hint="erhalten minus weitergegeben"
-        />
-      </div>
+      <EmployeeHourTiles
+        employeeId={employeeId}
+        periodKind="month"
+        labels={{ target: 'Monat', allocated: 'Monat', planned: 'Monat', missing: 'Monat' }}
+        stats={{
+          targetMinutes: monthStats.targetMinutes,
+          allocatedMinutes: monthStats.allocatedMinutes,
+          forwardedMinutes: monthStats.forwardedMinutes,
+          plannedMinutes: monthStats.plannedMinutes,
+          completedMinutes: monthStats.completedMinutes,
+          missingByAllocation: monthStats.missingByAllocation,
+          missingByPlanning: monthStats.missingByPlanning,
+        }}
+        canAllocate={false}
+      />
       <div className="flex justify-end">
         <Button asChild variant="secondary" size="sm">
           <Link href={`/reports?employeeId=${employeeId}`}>Detaillierte Auswertung öffnen</Link>

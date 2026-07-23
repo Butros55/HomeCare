@@ -642,3 +642,12 @@
     padding: 2px 6px;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Leaflet: interne Panes nutzen z-index bis ~700 und würden sonst über
+ * Dialogen/Overlays (z-50) liegen. isolation kapselt die Stacking-Kontexte.
+ * ------------------------------------------------------------------------- */
+.leaflet-container {
+  isolation: isolate;
+  z-index: 0;
+}

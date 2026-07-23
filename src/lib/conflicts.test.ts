@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   checkAppointmentConflicts,
+  checkBudgetConflicts,
   hasErrors,
   hasWarnings,
   type ConflictCheckInput,
@@ -243,5 +244,49 @@ describe('checkAppointmentConflicts', () => {
       'OUTSIDE_AVAILABILITY',
       'OVERLAP',
     ]);
+  });
+});
+
+describe('checkBudgetConflicts', () => {
+  it('warnt ohne Budget im Terminzeitraum', () => {
+    const conflicts = checkBudgetConflicts({
+      budgetMinutes: null,
+      plannedMinutesExcludingCandidate: 0,
+      candidateMinutes: 120,
+    });
+    expect(conflicts).toEqual([
+      expect.objectContaining({ type: 'NO_HOUR_BUDGET', severity: 'WARNING' }),
+    ]);
+  });
+
+  it('warnt bei Überplanung über das Budget hinaus', () => {
+    const conflicts = checkBudgetConflicts({
+      budgetMinutes: 720, // 12 h
+      plannedMinutesExcludingCandidate: 660, // 11 h
+      candidateMinutes: 120, // + 2 h → 13 h
+    });
+    expect(conflicts).toEqual([
+      expect.objectContaining({ type: 'HOUR_BUDGET_OVERPLANNED', severity: 'WARNING' }),
+    ]);
+    expect(conflicts[0]!.message).toContain('13 h');
+    expect(conflicts[0]!.message).toContain('12 h');
+  });
+
+  it('bleibt still, solange das Budget reicht (Grenze inklusiv)', () => {
+    expect(
+      checkBudgetConflicts({
+        budgetMinutes: 720,
+        plannedMinutesExcludingCandidate: 600,
+        candidateMinutes: 120,
+      }),
+    ).toEqual([]);
+    // Budget 0 zählt als vorhandenes (aufgebrauchtes) Budget → Überplanung.
+    expect(
+      checkBudgetConflicts({
+        budgetMinutes: 0,
+        plannedMinutesExcludingCandidate: 0,
+        candidateMinutes: 30,
+      }),
+    ).toEqual([expect.objectContaining({ type: 'HOUR_BUDGET_OVERPLANNED' })]);
   });
 });
