@@ -65,6 +65,7 @@ export function AppointmentFormDialog({
   employees,
   prefill,
   editTarget,
+  fixedEmployeeId,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -72,6 +73,11 @@ export function AppointmentFormDialog({
   employees: { id: string; name: string }[];
   prefill?: { customerId?: string; date?: string; startTime?: string; series?: boolean };
   editTarget?: AppointmentEditTarget;
+  /**
+   * Reduziertes UI (Solo/Mitarbeiter): Termine werden automatisch dem eigenen
+   * Profil zugewiesen – das Mitarbeiter-Feld entfällt komplett.
+   */
+  fixedEmployeeId?: string | null;
 }) {
   const router = useRouter();
   const isEdit = Boolean(editTarget);
@@ -79,7 +85,9 @@ export function AppointmentFormDialog({
 
   const today = new Date().toISOString().slice(0, 10);
   const [customerId, setCustomerId] = React.useState(prefill?.customerId ?? '');
-  const [employeeId, setEmployeeId] = React.useState(editTarget?.values.assignedEmployeeId ?? '');
+  const [employeeId, setEmployeeId] = React.useState(
+    editTarget?.values.assignedEmployeeId || fixedEmployeeId || '',
+  );
   const [title, setTitle] = React.useState(editTarget?.values.title ?? 'Hauswirtschaftlicher Einsatz');
   const [description, setDescription] = React.useState(editTarget?.values.description ?? '');
   const [date, setDate] = React.useState(editTarget?.values.date ?? prefill?.date ?? today);
@@ -285,25 +293,27 @@ export function AppointmentFormDialog({
                   </Select>
                 </div>
               ) : null}
-              <div>
-                <Label htmlFor="af-employee">Mitarbeiter</Label>
-                <Select
-                  value={employeeId || 'NONE'}
-                  onValueChange={(v) => setEmployeeId(v === 'NONE' ? '' : v)}
-                >
-                  <SelectTrigger id="af-employee">
-                    <SelectValue placeholder="Noch offen" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="NONE">Noch offen (nicht zugewiesen)</SelectItem>
-                    {employees.map((employee) => (
-                      <SelectItem key={employee.id} value={employee.id}>
-                        {employee.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              {!fixedEmployeeId ? (
+                <div>
+                  <Label htmlFor="af-employee">Mitarbeiter</Label>
+                  <Select
+                    value={employeeId || 'NONE'}
+                    onValueChange={(v) => setEmployeeId(v === 'NONE' ? '' : v)}
+                  >
+                    <SelectTrigger id="af-employee">
+                      <SelectValue placeholder="Noch offen" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="NONE">Noch offen (nicht zugewiesen)</SelectItem>
+                      {employees.map((employee) => (
+                        <SelectItem key={employee.id} value={employee.id}>
+                          {employee.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
               <div>
                 <Label htmlFor="af-title" required>
                   Titel

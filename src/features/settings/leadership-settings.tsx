@@ -14,6 +14,7 @@ import { Table, TBody, Td, Th, THead, Tr } from '@/components/ui/table';
 import {
   AddLeadershipButton,
   DefaultPermissionsSettings,
+  ModeSettings,
 } from '@/features/settings/leadership-dialogs';
 import {
   MemberPermissionsEditor,
@@ -64,6 +65,8 @@ export async function LeadershipSettings() {
 
   return (
     <>
+      <ModeSettings soloMode={ctx.organization.soloMode} />
+
       <Panel>
         <PanelHeader>
           <PanelTitle>Leitung ({leaders.length})</PanelTitle>

@@ -5,7 +5,7 @@ import { CalendarPlus, Clock, Search, UserPlus } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 
-import { NAV_SECTIONS, type NavPermissions } from '@/components/layout/nav-items';
+import { navSectionsFor, type NavPermissions, type NavUiMode } from '@/components/layout/nav-items';
 import { EntityAvatar } from '@/components/ui/misc';
 
 /** Treffer der globalen Suche (Server Action, organisationsgebunden). */
@@ -31,12 +31,14 @@ export function CommandPalette({
   open,
   onOpenChange,
   permissions,
+  uiMode = 'team',
   canCreate,
   onSearch,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   permissions: NavPermissions;
+  uiMode?: NavUiMode;
   canCreate: boolean;
   /** Globale Suche; wird ab dem Suchmodul gesetzt (Phase 12). */
   onSearch?: (query: string) => Promise<SearchResultItem[]>;
@@ -107,9 +109,9 @@ export function CommandPalette({
 
   if (!open) return null;
 
-  const navItems = NAV_SECTIONS.flatMap((section) => section.items).filter(
-    (item) => !item.requires || permissions[item.requires],
-  );
+  const navItems = navSectionsFor(uiMode)
+    .flatMap((section) => section.items)
+    .filter((item) => !item.requires || permissions[item.requires]);
 
   const quickActions = canCreate
     ? [

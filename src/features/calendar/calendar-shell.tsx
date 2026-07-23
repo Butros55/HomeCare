@@ -60,6 +60,8 @@ export interface CalendarShellProps {
   canManage: boolean;
   isEmployeeOnly: boolean;
   ownEmployeeId: string | null;
+  /** Reduziertes UI (Solo/Mitarbeiter): Termine automatisch selbst zuweisen. */
+  simplePlanning?: boolean;
   initialView: string;
   initialColorBy: 'customer' | 'employee' | 'status' | 'team';
   employees: { id: string; name: string }[];
@@ -589,6 +591,7 @@ export function CalendarShell(props: CalendarShellProps) {
           customers={props.customers}
           employees={props.employees}
           prefill={createPrefill}
+          fixedEmployeeId={props.simplePlanning ? props.ownEmployeeId : null}
         />
       ) : null}
 

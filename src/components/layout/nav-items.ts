@@ -36,6 +36,9 @@ export interface NavSection {
   items: NavItem[];
 }
 
+/** UI-Modus (Server-seitig aus Rolle + Organisation ermittelt, s. src/server/permissions). */
+export type NavUiMode = 'solo' | 'employee' | 'team';
+
 export const NAV_SECTIONS: NavSection[] = [
   {
     items: [
@@ -61,11 +64,37 @@ export const NAV_SECTIONS: NavSection[] = [
   },
 ];
 
+/**
+ * Reduzierte Navigation für den Alltagsbetrieb: Solo-Leitung und
+ * Mitarbeiter-Konten sehen nur „Mein Tag“, Kalender, Kunden, Routen –
+ * ohne Mitarbeiterverwaltung und Auswertungen.
+ */
+const REDUCED_NAV_SECTIONS: NavSection[] = [
+  {
+    items: [
+      { href: '/dashboard', label: 'Mein Tag', icon: LayoutDashboard },
+      { href: '/calendar', label: 'Kalender', icon: CalendarDays },
+      { href: '/customers', label: 'Kunden', icon: Contact, requires: 'customers' },
+      { href: '/routes', label: 'Routen', icon: Route, requires: 'routes' },
+    ],
+  },
+  {
+    items: [
+      { href: '/notifications', label: 'Benachrichtigungen', icon: Bell },
+      { href: '/settings', label: 'Einstellungen', icon: Settings },
+    ],
+  },
+];
+
+export function navSectionsFor(mode: NavUiMode): NavSection[] {
+  return mode === 'team' ? NAV_SECTIONS : REDUCED_NAV_SECTIONS;
+}
+
 /** Mobile Bottom-Navigation: maximal 5 Punkte, Rest im „Mehr“-Menü. */
-export function bottomNavItems(permissions: NavPermissions): NavItem[] {
-  const all = NAV_SECTIONS.flatMap((section) => section.items).filter(
-    (item) => !item.requires || permissions[item.requires],
-  );
+export function bottomNavItems(permissions: NavPermissions, mode: NavUiMode = 'team'): NavItem[] {
+  const all = navSectionsFor(mode)
+    .flatMap((section) => section.items)
+    .filter((item) => !item.requires || permissions[item.requires]);
   const preferred = ['/dashboard', '/calendar', '/customers', '/routes'];
   const main = preferred
     .map((href) => all.find((item) => item.href === href))
@@ -81,9 +110,9 @@ export function bottomNavItems(permissions: NavPermissions): NavItem[] {
   return main;
 }
 
-export function moreNavItems(permissions: NavPermissions): NavItem[] {
-  const main = new Set(bottomNavItems(permissions).map((item) => item.href));
-  return NAV_SECTIONS.flatMap((section) => section.items).filter(
-    (item) => (!item.requires || permissions[item.requires]) && !main.has(item.href),
-  );
+export function moreNavItems(permissions: NavPermissions, mode: NavUiMode = 'team'): NavItem[] {
+  const main = new Set(bottomNavItems(permissions, mode).map((item) => item.href));
+  return navSectionsFor(mode)
+    .flatMap((section) => section.items)
+    .filter((item) => (!item.requires || permissions[item.requires]) && !main.has(item.href));
 }

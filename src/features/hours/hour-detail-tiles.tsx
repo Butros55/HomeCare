@@ -83,8 +83,14 @@ function TileButton({
   );
 }
 
-/** Funnel: macht die Beziehung der vier Kennzahlen sichtbar. */
-export function HourFunnel({ stats }: { stats: CustomerHourStatsSerialized }) {
+/** Funnel: macht die Beziehung der Kennzahlen sichtbar (Solo ohne Zuweisung). */
+export function HourFunnel({
+  stats,
+  showAllocation = true,
+}: {
+  stats: CustomerHourStatsSerialized;
+  showAllocation?: boolean;
+}) {
   const max = Math.max(stats.budgetMinutes, stats.plannedMinutes, stats.allocatedMinutes, 1);
   const rows = [
     {
@@ -94,16 +100,20 @@ export function HourFunnel({ stats }: { stats: CustomerHourStatsSerialized }) {
       color: 'var(--color-brand)',
       explain: 'Kontingent des Kunden (Budget + Korrekturen)',
     },
-    {
-      key: 'allocated',
-      label: 'Zugewiesen',
-      minutes: stats.allocatedMinutes,
-      color: 'var(--color-info, #2f80ed)',
-      explain:
-        stats.unallocatedMinutes > 0
-          ? `${formatMinutesAsHours(stats.unallocatedMinutes)} noch keinem Mitarbeiter zugeteilt`
-          : 'vollständig an Mitarbeiter verteilt',
-    },
+    ...(showAllocation
+      ? [
+          {
+            key: 'allocated',
+            label: 'Zugewiesen',
+            minutes: stats.allocatedMinutes,
+            color: 'var(--color-info, #2f80ed)',
+            explain:
+              stats.unallocatedMinutes > 0
+                ? `${formatMinutesAsHours(stats.unallocatedMinutes)} noch keinem Mitarbeiter zugeteilt`
+                : 'vollständig an Mitarbeiter verteilt',
+          },
+        ]
+      : []),
     {
       key: 'planned',
       label: 'Verplant',
@@ -143,10 +153,16 @@ export function HourFunnel({ stats }: { stats: CustomerHourStatsSerialized }) {
           </span>
         </div>
       ))}
-      <p className="pt-1 text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
-        „Zugewiesen“ (an Mitarbeiter verteilt) und „Verplant“ (in Terminen) sind zwei getrennte Schritte –
-        beide schöpfen aus den gebuchten Stunden.
-      </p>
+      {showAllocation ? (
+        <p className="pt-1 text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+          „Zugewiesen“ (an Mitarbeiter verteilt) und „Verplant“ (in Terminen) sind zwei getrennte Schritte –
+          beide schöpfen aus den gebuchten Stunden.
+        </p>
+      ) : (
+        <p className="pt-1 text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+          Gebuchte Stunden werden über Termine verplant und nach dem Einsatz als geleistet bestätigt.
+        </p>
+      )}
     </div>
   );
 }
@@ -161,12 +177,15 @@ export function CustomerHourTiles({
   stats,
   canAllocate,
   showFunnel = false,
+  showAllocation = true,
 }: {
   customerId: string;
   monthIso: string;
   stats: CustomerHourStatsSerialized;
   canAllocate: boolean;
   showFunnel?: boolean;
+  /** Solo-Modus: Zuweisungs-Schritt komplett ausblenden. */
+  showAllocation?: boolean;
 }) {
   const [metric, setMetric] = React.useState<CustomerMetric | null>(null);
   const [detail, setDetail] = React.useState<CustomerHourDetail | null>(null);
@@ -189,24 +208,26 @@ export function CustomerHourTiles({
 
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <div className={cn('grid grid-cols-2 gap-3', showAllocation ? 'xl:grid-cols-4' : 'xl:grid-cols-3')}>
         <TileButton
           label="Gebuchte Stunden"
           value={formatMinutesAsHours(stats.budgetMinutes)}
           hint="Kontingent des Kunden"
           onClick={() => setMetric('budget')}
         />
-        <TileButton
-          label="Zugewiesen"
-          value={formatMinutesAsHours(stats.allocatedMinutes)}
-          hint={
-            stats.unallocatedMinutes > 0
-              ? `${formatMinutesAsHours(stats.unallocatedMinutes)} offen`
-              : 'vollständig verteilt'
-          }
-          tone={stats.unallocatedMinutes > 0 ? 'warning' : 'success'}
-          onClick={() => setMetric('allocated')}
-        />
+        {showAllocation ? (
+          <TileButton
+            label="Zugewiesen"
+            value={formatMinutesAsHours(stats.allocatedMinutes)}
+            hint={
+              stats.unallocatedMinutes > 0
+                ? `${formatMinutesAsHours(stats.unallocatedMinutes)} offen`
+                : 'vollständig verteilt'
+            }
+            tone={stats.unallocatedMinutes > 0 ? 'warning' : 'success'}
+            onClick={() => setMetric('allocated')}
+          />
+        ) : null}
         <TileButton
           label="Verplant"
           value={formatMinutesAsHours(stats.plannedMinutes)}
@@ -229,7 +250,7 @@ export function CustomerHourTiles({
 
       {showFunnel ? (
         <div className="rounded-[var(--radius-xl)] border border-[var(--color-line-subtle)] bg-[var(--color-panel)] p-4 shadow-[var(--shadow-panel)]">
-          <HourFunnel stats={stats} />
+          <HourFunnel stats={stats} showAllocation={showAllocation} />
         </div>
       ) : null}
 

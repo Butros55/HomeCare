@@ -92,6 +92,33 @@ export function RegisterForm() {
         />
         <FieldHint>Mindestens 8 Zeichen, mit Buchstabe und Ziffer.</FieldHint>
       </div>
+
+      <fieldset>
+        <legend className="mb-1.5 block text-[length:var(--text-sm)] font-medium">
+          Wie startest du?
+        </legend>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-[var(--radius-lg)] border border-[var(--color-line)] p-3 transition-colors has-checked:border-[var(--color-brand)] has-checked:bg-[var(--color-brand-subtle)]">
+            <input type="radio" name="startMode" value="solo" defaultChecked className="mt-0.5 accent-[var(--color-brand)]" />
+            <span>
+              <span className="block text-[length:var(--text-sm)] font-medium">Erstmal alleine</span>
+              <span className="block text-[length:var(--text-xs)] text-[var(--color-ink-muted)]">
+                Eigene Termine, Kunden und Routen – schlankes Alltags-UI.
+              </span>
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-[var(--radius-lg)] border border-[var(--color-line)] p-3 transition-colors has-checked:border-[var(--color-brand)] has-checked:bg-[var(--color-brand-subtle)]">
+            <input type="radio" name="startMode" value="team" className="mt-0.5 accent-[var(--color-brand)]" />
+            <span>
+              <span className="block text-[length:var(--text-sm)] font-medium">Mit Mitarbeitern</span>
+              <span className="block text-[length:var(--text-xs)] text-[var(--color-ink-muted)]">
+                Volle Leitungs-Ansicht mit Zuweisung und Verwaltung.
+              </span>
+            </span>
+          </label>
+        </div>
+        <FieldHint>Lässt sich jederzeit in den Einstellungen umstellen.</FieldHint>
+      </fieldset>
       <Button type="submit" variant="primary" size="lg" className="w-full" loading={pending}>
         Kostenlos starten
       </Button>

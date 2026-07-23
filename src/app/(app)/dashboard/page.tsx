@@ -26,14 +26,22 @@ import { formatDate, formatDateTime, formatTime, formatWeekday } from '@/lib/dat
 import { formatMinutesAsHours } from '@/lib/duration';
 import { formatTravelSeconds, googleMapsDirectionsUrl } from '@/lib/geo';
 import { APPOINTMENT_STATUS, statusOf } from '@/lib/status-maps';
-import { hasPermission, requireOrganizationMembership } from '@/server/permissions';
+import { hasPermission, requireOrganizationMembership, uiModeFor } from '@/server/permissions';
 import { getDashboardData } from '@/server/services/dashboard-service';
+import { MyDayDashboard } from './my-day';
 
 export const metadata: Metadata = { title: 'Dashboard' };
 
 /** Operatives Dashboard (Anforderung 15): Wichtigstes oben links, alles klickbar. */
 export default async function DashboardPage() {
   const ctx = await requireOrganizationMembership();
+
+  // Solo-Leitung & Mitarbeiter: reduziertes Alltags-UI statt Leitungs-Dashboard.
+  const mode = uiModeFor(ctx);
+  if (mode !== 'team') {
+    return <MyDayDashboard ctx={ctx} mode={mode} />;
+  }
+
   const data = await getDashboardData(ctx);
   const timezone = ctx.organization.timezone;
   const now = new Date();

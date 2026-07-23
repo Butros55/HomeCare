@@ -39,6 +39,33 @@ export async function updateOrganizationAction(
   });
 }
 
+/**
+ * UI-Modus der Organisation umstellen: „Alleine“ (reduziertes Alltags-UI)
+ * oder „Leitung mit Team“ (volle Verwaltung). Jederzeit wechselbar.
+ */
+export async function updateSoloModeAction(
+  soloMode: boolean,
+): Promise<ActionResult<{ done: true }>> {
+  return runAction(async () => {
+    const ctx = await requirePermission('settings.manage');
+    await db.organization.update({
+      where: { id: ctx.organization.id },
+      data: { soloMode: Boolean(soloMode) },
+    });
+    await writeAuditLog({
+      organizationId: ctx.organization.id,
+      actorUserId: ctx.user.id,
+      action: 'organization.updated',
+      entityType: 'Organization',
+      entityId: ctx.organization.id,
+      metadata: { soloMode: Boolean(soloMode) },
+    });
+    // Modus verändert Navigation und Dashboards überall.
+    revalidatePath('/', 'layout');
+    return { done: true as const };
+  });
+}
+
 const defaultPermissionsSchema = z.object({
   leadership: z.array(z.enum(EDITABLE_PERMISSIONS as [string, ...string[]])),
   employee: z.array(z.enum(EDITABLE_PERMISSIONS as [string, ...string[]])),

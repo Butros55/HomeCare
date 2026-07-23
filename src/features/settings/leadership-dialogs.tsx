@@ -1,6 +1,6 @@
 'use client';
 
-import { UserPlus } from 'lucide-react';
+import { User, UserPlus, UsersRound } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -9,9 +9,79 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
 import { FieldHint, Input, Label } from '@/components/ui/input';
 import { Panel, PanelBody, PanelHeader, PanelTitle } from '@/components/ui/panel';
+import { cn } from '@/lib/utils';
 import { inviteLeadershipAction } from '@/server/actions/member-actions';
-import { updateDefaultPermissionsAction } from '@/server/actions/settings-actions';
+import {
+  updateDefaultPermissionsAction,
+  updateSoloModeAction,
+} from '@/server/actions/settings-actions';
 import { PermissionChecklist } from '@/features/settings/member-permissions-editor';
+
+/**
+ * Umschalter „Alleine“ ↔ „Leitung mit Team“: bestimmt, ob das reduzierte
+ * Alltags-UI oder die volle Verwaltung angezeigt wird.
+ */
+export function ModeSettings({ soloMode }: { soloMode: boolean }) {
+  const router = useRouter();
+  const [pending, startTransition] = React.useTransition();
+
+  const setMode = (nextSolo: boolean) => {
+    if (nextSolo === soloMode) return;
+    startTransition(async () => {
+      const result = await updateSoloModeAction(nextSolo);
+      if (result.ok) {
+        toast.success(
+          nextSolo
+            ? 'Alleine-Modus aktiv – die App zeigt jetzt das reduzierte Alltags-UI.'
+            : 'Leitungs-Modus aktiv – volle Verwaltung eingeblendet.',
+        );
+        router.refresh();
+      } else {
+        toast.error(result.message);
+      }
+    });
+  };
+
+  const optionClass = (active: boolean) =>
+    cn(
+      'flex flex-1 cursor-pointer items-start gap-3 rounded-[var(--radius-lg)] border p-3.5 text-left transition-colors',
+      active
+        ? 'border-[var(--color-brand)] bg-[var(--color-brand-subtle)]'
+        : 'border-[var(--color-line)] hover:border-[var(--color-line-strong)]',
+    );
+
+  return (
+    <Panel>
+      <PanelHeader>
+        <PanelTitle>Ansicht & Modus</PanelTitle>
+      </PanelHeader>
+      <PanelBody>
+        <div className="flex flex-col gap-2.5 sm:flex-row">
+          <button type="button" disabled={pending} onClick={() => setMode(true)} className={optionClass(soloMode)}>
+            <User className="mt-0.5 size-4.5 shrink-0 text-[var(--color-brand)]" aria-hidden />
+            <span>
+              <span className="block text-[length:var(--text-sm)] font-semibold">Alleine</span>
+              <span className="block text-[length:var(--text-xs)] text-[var(--color-ink-muted)]">
+                Nur eigene Termine, Kunden und Routen – stark reduziertes UI für den täglichen
+                Betrieb, ohne Mitarbeiter- und Zuweisungslogik.
+              </span>
+            </span>
+          </button>
+          <button type="button" disabled={pending} onClick={() => setMode(false)} className={optionClass(!soloMode)}>
+            <UsersRound className="mt-0.5 size-4.5 shrink-0 text-[var(--color-brand)]" aria-hidden />
+            <span>
+              <span className="block text-[length:var(--text-sm)] font-semibold">Leitung mit Team</span>
+              <span className="block text-[length:var(--text-xs)] text-[var(--color-ink-muted)]">
+                Volle Ansicht: Mitarbeiter verwalten, Stunden zuweisen, alle Termine und Routen
+                der Organisation planen.
+              </span>
+            </span>
+          </button>
+        </div>
+      </PanelBody>
+    </Panel>
+  );
+}
 
 /** Weiteres Leitungs-Konto per E-Mail einladen. */
 export function AddLeadershipButton() {

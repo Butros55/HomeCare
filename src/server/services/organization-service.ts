@@ -45,6 +45,8 @@ export async function createOrganizationWithOwner(input: {
   lastName: string;
   email: string;
   password: string;
+  /** 'solo' = startet ohne Mitarbeiter (reduziertes UI); 'team' = volles Leitungs-UI. */
+  startMode?: 'solo' | 'team';
 }): Promise<{ user: User; organization: Organization }> {
   const passwordHash = await hashPassword(input.password);
   const slug = await uniqueSlug(input.organizationName);
@@ -60,7 +62,7 @@ export async function createOrganizationWithOwner(input: {
     });
 
     const organization = await tx.organization.create({
-      data: { name: input.organizationName, slug },
+      data: { name: input.organizationName, slug, soloMode: input.startMode !== 'team' },
     });
 
     await tx.organizationMembership.create({

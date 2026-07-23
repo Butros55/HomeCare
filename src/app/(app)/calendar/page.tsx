@@ -7,6 +7,7 @@ import {
   getManagedEmployeeIds,
   hasPermission,
   requireOrganizationMembership,
+  uiModeFor,
 } from '@/server/permissions';
 import { CalendarShell } from '@/features/calendar/calendar-shell';
 
@@ -61,6 +62,7 @@ export default async function CalendarPage({
       canManage={canManage}
       isEmployeeOnly={ctx.membership.role === 'EMPLOYEE'}
       ownEmployeeId={ctx.employee?.id ?? null}
+      simplePlanning={uiModeFor(ctx) !== 'team'}
       initialView={preference?.calendarView ?? 'timeGridWeek'}
       initialColorBy={(preference?.calendarColorBy as 'customer' | 'employee' | 'status' | 'team') ?? 'customer'}
       employees={employees.map((e) => ({ id: e.id, name: employeeDisplayName(e, ctx.user.id) }))}

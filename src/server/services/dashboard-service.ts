@@ -52,6 +52,206 @@ export interface TodayEntry {
   hasConflict: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// „Mein Tag“ – reduziertes Alltags-Dashboard (Solo-Leitung & Mitarbeiter)
+// ---------------------------------------------------------------------------
+
+export interface MyDayEntry {
+  appointmentId: string;
+  title: string;
+  customerId: string;
+  customerName: string;
+  customerColor: string;
+  startAt: Date;
+  endAt: Date;
+  status: string;
+  unassigned: boolean;
+  addressLine: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  /** Fahrzeit vom vorherigen Stopp (bzw. vom Startpunkt zum ersten Termin). */
+  travelSeconds: number | null;
+  /** Späteste Abfahrt, um pünktlich zu sein. */
+  departureAt: Date | null;
+}
+
+/**
+ * Daten für das reduzierte „Mein Tag“-UI: ausschließlich die eigenen Termine
+ * (Solo-Modus: zusätzlich noch nicht zugewiesene – sie gehören faktisch der
+ * Leitung), Tagesroute mit Abfahrtszeiten ab dem Startpunkt, Wochenüberblick
+ * und offene Stunden.
+ */
+export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned: boolean }) {
+  const orgId = ctx.organization.id;
+  const timezone = ctx.organization.timezone;
+  const now = new Date();
+  const today = dayPeriodInZone(now, timezone);
+  const week = weekPeriodInZone(now, timezone);
+  const month = monthPeriodInZone(now, timezone);
+
+  const ownEmployeeId = ctx.employee?.id ?? null;
+  const mineFilter = options.includeUnassigned
+    ? {
+        OR: [
+          ...(ownEmployeeId ? [{ assignedEmployeeId: ownEmployeeId }] : []),
+          { assignedEmployeeId: null },
+        ],
+      }
+    : { assignedEmployeeId: ownEmployeeId ?? '-' };
+
+  const [todayAppointments, upcoming, weekAppointments] = await Promise.all([
+    db.appointment.findMany({
+      where: {
+        organizationId: orgId,
+        deletedAt: null,
+        startAt: { gte: today.start, lt: today.end },
+        status: { notIn: ['CANCELLED', 'DRAFT'] },
+        ...mineFilter,
+      },
+      include: {
+        customer: { select: { id: true, firstName: true, lastName: true, color: true } },
+        locationAddress: {
+          select: { street: true, houseNumber: true, postalCode: true, city: true, latitude: true, longitude: true },
+        },
+      },
+      orderBy: { startAt: 'asc' },
+    }),
+    db.appointment.findMany({
+      where: {
+        organizationId: orgId,
+        deletedAt: null,
+        startAt: { gte: today.end },
+        status: { in: ['PLANNED', 'CONFIRMED'] },
+        ...mineFilter,
+      },
+      include: { customer: { select: { id: true, firstName: true, lastName: true, color: true } } },
+      orderBy: { startAt: 'asc' },
+      take: 6,
+    }),
+    db.appointment.findMany({
+      where: {
+        organizationId: orgId,
+        deletedAt: null,
+        startAt: { gte: week.start, lt: week.end },
+        status: { in: ['PLANNED', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED'] },
+        ...mineFilter,
+      },
+      select: { durationMinutes: true, startAt: true, status: true },
+    }),
+  ]);
+
+  // Abfahrtszeiten: Startpunkt der Organisation → erster Termin → Folgetermine.
+  const startLocation = ctx.organization.defaultStartLocation as
+    | { latitude?: number | null; longitude?: number | null }
+    | null;
+  const entries: MyDayEntry[] = [];
+  let previousCoordinate =
+    startLocation?.latitude != null && startLocation?.longitude != null
+      ? { latitude: startLocation.latitude, longitude: startLocation.longitude }
+      : null;
+  for (const appointment of todayAppointments) {
+    const coordinate =
+      appointment.locationAddress?.latitude != null && appointment.locationAddress.longitude != null
+        ? {
+            latitude: appointment.locationAddress.latitude,
+            longitude: appointment.locationAddress.longitude,
+          }
+        : null;
+    const travelSeconds =
+      previousCoordinate && coordinate && appointment.routeRelevant
+        ? estimateTravelSeconds(previousCoordinate, coordinate)
+        : null;
+    entries.push({
+      appointmentId: appointment.id,
+      title: appointment.title,
+      customerId: appointment.customer.id,
+      customerName: `${appointment.customer.firstName} ${appointment.customer.lastName}`,
+      customerColor: appointment.customer.color,
+      startAt: appointment.startAt,
+      endAt: appointment.endAt,
+      status: appointment.status,
+      unassigned: appointment.assignedEmployeeId === null,
+      addressLine: appointment.locationAddress
+        ? `${appointment.locationAddress.street} ${appointment.locationAddress.houseNumber}, ${appointment.locationAddress.postalCode} ${appointment.locationAddress.city}`
+        : null,
+      latitude: coordinate?.latitude ?? null,
+      longitude: coordinate?.longitude ?? null,
+      travelSeconds,
+      departureAt: travelSeconds != null ? new Date(appointment.startAt.getTime() - travelSeconds * 1000) : null,
+    });
+    if (coordinate) previousCoordinate = coordinate;
+  }
+
+  // Offene Stunden: Solo = unverplante Kundenstunden; Mitarbeiter = zugewiesen minus verplant.
+  let openMinutes = 0;
+  let openHint: string;
+  if (options.includeUnassigned) {
+    const customers = await db.customer.findMany({
+      where: { organizationId: orgId, deletedAt: null, status: 'ACTIVE' },
+      select: { id: true },
+    });
+    const stats = await getCustomerHourStatsBulk(customers.map((c) => c.id), month);
+    openMinutes = [...stats.values()].reduce(
+      (sum, stat) => sum + Math.max(0, stat.unplannedMinutes),
+      0,
+    );
+    openHint = 'gebuchte Kundenstunden ohne Termin (Monat)';
+  } else {
+    const allocations = ownEmployeeId
+      ? await db.hourAllocation.findMany({
+          where: {
+            organizationId: orgId,
+            allocatedToEmployeeId: ownEmployeeId,
+            status: 'ACTIVE',
+            validFrom: { lt: month.end },
+            validUntil: { gte: month.start },
+          },
+          select: { allocatedMinutes: true },
+        })
+      : [];
+    const received = allocations.reduce((sum, allocation) => sum + allocation.allocatedMinutes, 0);
+    const monthPlanned = await db.appointment.findMany({
+      where: {
+        organizationId: orgId,
+        deletedAt: null,
+        assignedEmployeeId: ownEmployeeId ?? '-',
+        startAt: { gte: month.start, lt: month.end },
+        status: { in: ['PLANNED', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED'] },
+      },
+      select: { durationMinutes: true },
+    });
+    const planned = monthPlanned.reduce((sum, appointment) => sum + appointment.durationMinutes, 0);
+    openMinutes = Math.max(0, received - planned);
+    openHint = 'zugewiesen, aber noch nicht verplant (Monat)';
+  }
+
+  const weekPlannedMinutes = weekAppointments.reduce((sum, a) => sum + a.durationMinutes, 0);
+  const nextAppointment =
+    todayAppointments.find((appointment) => appointment.endAt.getTime() > now.getTime()) ?? null;
+  const todayTravelSeconds = entries.reduce((sum, entry) => sum + (entry.travelSeconds ?? 0), 0);
+
+  return {
+    entries,
+    upcoming: upcoming.map((appointment) => ({
+      id: appointment.id,
+      customerName: `${appointment.customer.firstName} ${appointment.customer.lastName}`,
+      customerColor: appointment.customer.color,
+      startAt: appointment.startAt,
+      title: appointment.title,
+    })),
+    counts: {
+      todayCount: todayAppointments.length,
+      todayMinutes: todayAppointments.reduce((sum, a) => sum + a.durationMinutes, 0),
+      todayTravelSeconds,
+      weekPlannedMinutes,
+      openMinutes,
+      openHint,
+    },
+    nextAppointmentAt: nextAppointment?.startAt ?? null,
+    firstDeparture: entries[0]?.departureAt ?? null,
+  };
+}
+
 export async function getDashboardData(ctx: OrgContext) {
   const orgId = ctx.organization.id;
   const timezone = ctx.organization.timezone;

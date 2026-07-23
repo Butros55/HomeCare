@@ -106,6 +106,7 @@ export async function registerFormAction(
     lastName: field(formData, 'lastName'),
     email: field(formData, 'email'),
     password: field(formData, 'password'),
+    startMode: field(formData, 'startMode') || 'solo',
   };
   const keepValues = {
     organizationName: raw.organizationName,

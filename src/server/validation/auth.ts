@@ -44,6 +44,8 @@ export const registerSchema = z.object({
   lastName: nameSchema,
   email: emailSchema,
   password: passwordSchema,
+  /** 'solo' = organisiert (noch) nur sich selbst; 'team' = hat bereits Mitarbeiter. */
+  startMode: z.enum(['solo', 'team']).default('solo'),
 });
 export type RegisterInput = z.infer<typeof registerSchema>;
 

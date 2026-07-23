@@ -4,7 +4,7 @@ import * as React from 'react';
 
 import { BottomNav } from '@/components/layout/bottom-nav';
 import { CommandPalette, type SearchResultItem } from '@/components/layout/command-palette';
-import type { NavPermissions } from '@/components/layout/nav-items';
+import type { NavPermissions, NavUiMode } from '@/components/layout/nav-items';
 import { Sidebar } from '@/components/layout/sidebar';
 import { Topbar, type TopbarOrganization } from '@/components/layout/topbar';
 import { usePersistedBoolean } from '@/lib/persisted-state';
@@ -22,6 +22,7 @@ export function AppShell({
   activeOrganizationId,
   user,
   permissions,
+  uiMode = 'team',
   canCreate,
   canManageEmployees,
   unreadNotifications,
@@ -34,6 +35,7 @@ export function AppShell({
   activeOrganizationId: string;
   user: { id: string; name: string; email: string };
   permissions: NavPermissions;
+  uiMode?: NavUiMode;
   canCreate: boolean;
   canManageEmployees: boolean;
   unreadNotifications: number;
@@ -49,6 +51,7 @@ export function AppShell({
         appName={appName}
         organizationName={organizationName}
         permissions={permissions}
+        uiMode={uiMode}
         unreadNotifications={unreadNotifications}
         collapsed={collapsed}
         onToggle={() => setCollapsed(!collapsed)}
@@ -70,12 +73,13 @@ export function AppShell({
         </main>
       </div>
 
-      <BottomNav permissions={permissions} unreadNotifications={unreadNotifications} />
+      <BottomNav permissions={permissions} uiMode={uiMode} unreadNotifications={unreadNotifications} />
 
       <CommandPalette
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
         permissions={permissions}
+        uiMode={uiMode}
         canCreate={canCreate}
         onSearch={onSearch}
       />

@@ -23,7 +23,7 @@ import { cn } from '@/lib/utils';
 import { auditActionLabel } from '@/server/audit';
 import { AppError } from '@/server/errors';
 import { db } from '@/server/db';
-import { hasPermission } from '@/server/permissions';
+import { hasPermission, uiModeFor } from '@/server/permissions';
 import { getCustomerDetail } from '@/server/services/customer-service';
 import { getCustomerHourStats } from '@/server/services/hours-service';
 import { ContactActions } from '@/features/customers/contact-actions';
@@ -56,7 +56,7 @@ export default async function CustomerDetailPage({
 }) {
   const { customerId } = await params;
   const { tab: rawTab, monat } = await searchParams;
-  const tab: TabKey = (TABS.some((t) => t.key === rawTab) ? rawTab : 'uebersicht') as TabKey;
+  let tab: TabKey = (TABS.some((t) => t.key === rawTab) ? rawTab : 'uebersicht') as TabKey;
 
   let detail: Awaited<ReturnType<typeof getCustomerDetail>>;
   try {
@@ -65,8 +65,14 @@ export default async function CustomerDetailPage({
     if (error instanceof AppError) notFound();
     throw error;
   }
-  const { ctx, customer, canManage, canAllocate } = detail;
+  const { ctx, customer, canManage, canAllocate: canAllocateRaw } = detail;
   if (!customer) notFound();
+
+  // Solo-Modus: keine Mitarbeiter-/Zuweisungslogik im Kunden-UI.
+  const solo = uiModeFor(ctx) === 'solo';
+  const canAllocate = canAllocateRaw && !solo;
+  const visibleTabs = TABS.filter((t) => !(solo && t.key === 'mitarbeiter'));
+  if (!visibleTabs.some((t) => t.key === tab)) tab = 'uebersicht';
 
   const timezone = ctx.organization.timezone;
   // ?monat=YYYY-MM erlaubt den Blick auf andere Zeiträume (Stunden-Tab).
@@ -112,7 +118,7 @@ export default async function CustomerDetailPage({
         }
       >
         <nav className="mt-4 -mb-px flex max-w-full gap-1 overflow-x-auto scrollbar-none rounded-full bg-[var(--color-panel-sunken)] p-1" aria-label="Kunden-Tabs">
-          {TABS.map((t) => (
+          {visibleTabs.map((t) => (
             <Link
               key={t.key}
               href={tabLink(t.key)}
@@ -142,6 +148,7 @@ export default async function CustomerDetailPage({
             timezone={timezone}
             monthIso={monthIso}
             canAllocate={canAllocate}
+            showAllocation={!solo}
           />
         ) : null}
         {tab === 'termine' ? <AppointmentsTab customerId={customerId} timezone={timezone} /> : null}
@@ -154,6 +161,7 @@ export default async function CustomerDetailPage({
             stats={stats}
             monthIso={monthIso}
             period={period}
+            showAllocation={!solo}
           />
         ) : null}
         {tab === 'mitarbeiter' ? <EmployeesTab customerId={customerId} customer={customer} /> : null}
@@ -179,6 +187,7 @@ async function OverviewTab({
   timezone,
   monthIso,
   canAllocate,
+  showAllocation,
 }: {
   customerId: string;
   name: string;
@@ -189,6 +198,7 @@ async function OverviewTab({
   timezone: string;
   monthIso: string;
   canAllocate: boolean;
+  showAllocation: boolean;
 }) {
   const [nextAppointment, recentActivity] = await Promise.all([
     db.appointment.findFirst({
@@ -216,6 +226,7 @@ async function OverviewTab({
         monthIso={monthIso}
         stats={stats}
         canAllocate={canAllocate}
+        showAllocation={showAllocation}
       />
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -480,6 +491,7 @@ async function HoursTab({
   stats,
   monthIso,
   period,
+  showAllocation,
 }: {
   customerId: string;
   timezone: string;
@@ -488,6 +500,7 @@ async function HoursTab({
   stats: Awaited<ReturnType<typeof getCustomerHourStats>>;
   monthIso: string;
   period: { start: Date; end: Date };
+  showAllocation: boolean;
 }) {
   const budgets = await db.customerHourBudget.findMany({
     where: { customerId },
@@ -538,6 +551,7 @@ async function HoursTab({
         stats={stats}
         canAllocate={canAllocate}
         showFunnel
+        showAllocation={showAllocation}
       />
 
       {canAllocate || canManageBudgets ? (
@@ -633,6 +647,7 @@ async function HoursTab({
                     </ul>
                   </div>
                 ) : null}
+                {!showAllocation ? null : (
                 <div>
                   <h3 className="mb-1 text-[length:var(--text-xs)] font-semibold text-[var(--color-ink-subtle)] uppercase">
                     Zuweisungen
@@ -669,6 +684,7 @@ async function HoursTab({
                     </ul>
                   )}
                 </div>
+                )}
               </PanelBody>
             </Panel>
           );

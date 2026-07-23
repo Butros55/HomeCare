@@ -32,6 +32,7 @@ import { db } from '@/server/db';
 import { AppError } from '@/server/errors';
 import {
   assertSameOrg,
+  canAccessCustomer,
   getManagedEmployeeIds,
   hasPermission,
   requireOrganizationMembership,
@@ -40,6 +41,7 @@ import {
 } from '@/server/permissions';
 import {
   createNotification,
+  createNotificationsForUsers,
   getPlannerUserIds,
 } from '@/server/services/notification-service';
 
@@ -82,6 +84,15 @@ function parseDateInput(value: string): { y: number; m: number; d: number } {
 
 async function requireAppointmentManage(ctx: OrgContext, assignedEmployeeId?: string | null) {
   if (!hasPermission(ctx, 'appointments.manage')) throw new AppError('ACCESS_DENIED');
+  // Mitarbeiter-Konten (mit erteilter Berechtigung) planen ausschließlich für
+  // sich selbst – Fremdzuweisung und „ohne Zuordnung“ bleiben der Leitung.
+  if (ctx.membership.role === 'EMPLOYEE') {
+    if (!ctx.employee || assignedEmployeeId !== ctx.employee.id) {
+      throw new AppError('ACCESS_DENIED', {
+        message: 'Termine können nur für dich selbst geplant werden.',
+      });
+    }
+  }
   if (ctx.membership.role === 'TEAM_MANAGER' && assignedEmployeeId) {
     const scope = await getManagedEmployeeIds(ctx);
     if (!scopeContains(scope, assignedEmployeeId)) {
@@ -90,6 +101,41 @@ async function requireAppointmentManage(ctx: OrgContext, assignedEmployeeId?: st
       });
     }
   }
+}
+
+/**
+ * Leitung informieren, wenn ein Mitarbeiter selbst plant (Anfrage Juli 2026):
+ * Die Verwaltung bleibt bei der Leitung – sie sieht jede Eigenplanung sofort.
+ */
+async function notifyLeadershipAboutEmployeePlanning(
+  ctx: OrgContext,
+  appointmentId: string,
+  customerId: string,
+  startAt: Date,
+  verb: 'angelegt' | 'geändert',
+) {
+  if (ctx.membership.role !== 'EMPLOYEE') return;
+  const [planners, customer] = await Promise.all([
+    getPlannerUserIds(ctx.organization.id),
+    db.customer.findUnique({
+      where: { id: customerId },
+      select: { firstName: true, lastName: true },
+    }),
+  ]);
+  const recipients = planners.filter((userId) => userId !== ctx.user.id);
+  if (recipients.length === 0) return;
+  const when = new Intl.DateTimeFormat('de-DE', {
+    timeZone: ctx.organization.timezone,
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(startAt);
+  await createNotificationsForUsers(recipients, {
+    organizationId: ctx.organization.id,
+    type: 'GENERAL',
+    title: `Termin von Mitarbeiter ${verb}`,
+    message: `${ctx.user.firstName} ${ctx.user.lastName} hat einen Termin für ${customer?.firstName ?? ''} ${customer?.lastName ?? ''} am ${when} ${verb}.`,
+    targetUrl: `/calendar?termin=${appointmentId}`,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +338,12 @@ export async function createAppointment(
     include: { addresses: { take: 1, orderBy: { label: 'asc' } } },
   });
   assertSameOrg(ctx, customer);
+  // Mitarbeiter planen nur für Kunden aus dem eigenen Bereich (Datenminimierung).
+  if (ctx.membership.role === 'EMPLOYEE' && !(await canAccessCustomer(ctx, input.customerId, 'read'))) {
+    throw new AppError('ACCESS_DENIED', {
+      message: 'Termine können nur für eigene Kunden geplant werden.',
+    });
+  }
   if (input.assignedEmployeeId) {
     const employee = await db.employee.findUnique({ where: { id: input.assignedEmployeeId } });
     assertSameOrg(ctx, employee);
@@ -409,6 +461,7 @@ export async function createAppointment(
   });
 
   await notifyAssignment(ctx, input.assignedEmployeeId ?? null, input.customerId, startAt, false);
+  await notifyLeadershipAboutEmployeePlanning(ctx, appointment.id, input.customerId, startAt, 'angelegt');
   return { requiresConfirmation: false, appointmentId: appointment.id };
 }
 
@@ -567,6 +620,12 @@ export async function updateAppointment(
     include: { series: true },
   });
   assertSameOrg(ctx, appointment);
+  // Mitarbeiter bearbeiten ausschließlich Termine, die ihnen zugewiesen sind.
+  if (ctx.membership.role === 'EMPLOYEE' && appointment.assignedEmployeeId !== ctx.employee?.id) {
+    throw new AppError('ACCESS_DENIED', {
+      message: 'Nur eigene Termine können bearbeitet werden.',
+    });
+  }
   await requireAppointmentManage(
     ctx,
     input.assignedEmployeeId !== undefined
@@ -779,6 +838,13 @@ export async function updateAppointment(
       });
     }
   }
+  await notifyLeadershipAboutEmployeePlanning(
+    ctx,
+    appointment.id,
+    appointment.customerId,
+    startAt,
+    'geändert',
+  );
 
   return { requiresConfirmation: false, appointmentId: appointment.id };
 }
@@ -793,6 +859,10 @@ export async function rescheduleAppointment(
   const ctx = await requireOrganizationMembership();
   const appointment = await db.appointment.findUnique({ where: { id: appointmentId } });
   assertSameOrg(ctx, appointment);
+  // Mitarbeiter verschieben nur eigene Termine.
+  if (ctx.membership.role === 'EMPLOYEE' && appointment.assignedEmployeeId !== ctx.employee?.id) {
+    throw new AppError('ACCESS_DENIED', { message: 'Nur eigene Termine können verschoben werden.' });
+  }
   await requireAppointmentManage(ctx, appointment.assignedEmployeeId);
 
   const startAt = new Date(startAtIso);

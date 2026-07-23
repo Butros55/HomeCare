@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import * as React from 'react';
 
-import { NAV_SECTIONS, type NavPermissions } from '@/components/layout/nav-items';
+import { navSectionsFor, type NavPermissions, type NavUiMode } from '@/components/layout/nav-items';
 import { CountBadge } from '@/components/ui/status-pill';
 import { cn } from '@/lib/utils';
 
@@ -13,6 +13,7 @@ export function Sidebar({
   appName,
   organizationName,
   permissions,
+  uiMode = 'team',
   unreadNotifications = 0,
   collapsed,
   onToggle,
@@ -22,6 +23,7 @@ export function Sidebar({
   appName: string;
   organizationName: string;
   permissions: NavPermissions;
+  uiMode?: NavUiMode;
   unreadNotifications?: number;
   collapsed: boolean;
   onToggle: () => void;
@@ -67,7 +69,7 @@ export function Sidebar({
       ) : null}
 
       <nav className="flex-1 scrollbar-none overflow-y-auto px-2 py-3">
-        {NAV_SECTIONS.map((section, sectionIndex) => {
+        {navSectionsFor(uiMode).map((section, sectionIndex) => {
           const visible = section.items.filter(
             (item) => !item.requires || permissions[item.requires],
           );

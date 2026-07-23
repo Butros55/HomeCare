@@ -9,6 +9,7 @@ import {
   bottomNavItems,
   moreNavItems,
   type NavPermissions,
+  type NavUiMode,
 } from '@/components/layout/nav-items';
 import { CountBadge } from '@/components/ui/status-pill';
 import { cn } from '@/lib/utils';
@@ -19,15 +20,17 @@ import { cn } from '@/lib/utils';
  */
 export function BottomNav({
   permissions,
+  uiMode = 'team',
   unreadNotifications = 0,
 }: {
   permissions: NavPermissions;
+  uiMode?: NavUiMode;
   unreadNotifications?: number;
 }) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = React.useState(false);
-  const main = bottomNavItems(permissions);
-  const more = moreNavItems(permissions);
+  const main = bottomNavItems(permissions, uiMode);
+  const more = moreNavItems(permissions, uiMode);
   const moreActive = more.some(
     (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),
   );

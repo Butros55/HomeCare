@@ -180,6 +180,21 @@ export function isLeadershipRole(role: MembershipRole): boolean {
   return role !== 'EMPLOYEE';
 }
 
+/**
+ * UI-Modus (Anfrage Juli 2026 – zwei getrennte Ansichten):
+ *  - 'solo':     Leitung organisiert nur sich selbst → stark reduziertes
+ *                Alltags-UI ohne Mitarbeiter-/Zuweisungslogik.
+ *  - 'employee': Mitarbeiter-Konto → dasselbe reduzierte UI, aber nur mit den
+ *                eigenen (zugewiesenen) Terminen/Routen.
+ *  - 'team':     volles Leitungs-UI (wie bisher).
+ */
+export type UiMode = 'solo' | 'employee' | 'team';
+
+export function uiModeFor(ctx: OrgContext): UiMode {
+  if (ctx.membership.role === 'EMPLOYEE') return 'employee';
+  return ctx.organization.soloMode ? 'solo' : 'team';
+}
+
 /** Individuelle Berechtigungen einer Mitgliedschaft (null = Rollen-Standard). */
 export function membershipPermissions(
   membership: Pick<OrganizationMembership, 'permissions'>,

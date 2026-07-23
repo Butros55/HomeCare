@@ -164,6 +164,8 @@ model Organization {
   defaultLeadershipPermissions Json?
   /// Standard-Berechtigungen für neue Mitarbeiter-Konten (Permission-Strings); null = Rollen-Standard
   defaultEmployeePermissions   Json?
+  /// Solo-Modus: Leitung organisiert (noch) nur sich selbst – reduziertes UI ohne Mitarbeiter-/Zuweisungslogik
+  soloMode             Boolean  @default(false)
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
