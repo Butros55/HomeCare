@@ -23,6 +23,7 @@ export const ERROR_CODES = [
   'APPOINTMENT_CONFLICT',
   'SERIES_INVALID_RULE',
   'ROUTE_NOT_FEASIBLE',
+  'SUGGESTION_STALE',
   'GEOCODING_FAILED',
   'GEOCODING_AMBIGUOUS',
   'ADDRESS_MISSING',
@@ -56,6 +57,8 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   APPOINTMENT_CONFLICT: 'Der Termin kollidiert mit einer bestehenden Planung.',
   SERIES_INVALID_RULE: 'Die Wiederholungsregel ist ungültig.',
   ROUTE_NOT_FEASIBLE: 'Für diese Vorgaben existiert keine zulässige Route.',
+  SUGGESTION_STALE:
+    'Der Vorschlag ist nicht mehr aktuell (Daten haben sich geändert) – bitte Vorschläge neu generieren.',
   GEOCODING_FAILED: 'Die Adresse konnte nicht geokodiert werden.',
   GEOCODING_AMBIGUOUS: 'Die Adresse ist mehrdeutig – bitte einen Treffer auswählen.',
   ADDRESS_MISSING: 'Für diese Aktion wird eine Adresse mit Koordinaten benötigt.',

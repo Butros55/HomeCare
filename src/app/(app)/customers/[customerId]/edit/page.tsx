@@ -19,7 +19,10 @@ export default async function EditCustomerPage({
 
   const customer = await db.customer.findUnique({
     where: { id: customerId },
-    include: { addresses: { take: 1, orderBy: { label: 'asc' } } },
+    include: {
+      addresses: { take: 1, orderBy: { label: 'asc' } },
+      availabilities: { orderBy: [{ weekday: 'asc' }, { startTime: 'asc' }] },
+    },
   });
   if (!customer) notFound();
   assertSameOrg(ctx, customer);
@@ -65,6 +68,12 @@ export default async function EditCustomerPage({
                 ? (customer.privateNotes ?? '')
                 : '',
               routeNotes: customer.routeNotes ?? '',
+              defaultAppointmentDurationMinutes: customer.defaultAppointmentDurationMinutes,
+              availability: customer.availabilities.map((slot) => ({
+                weekday: slot.weekday,
+                startTime: slot.startTime,
+                endTime: slot.endTime,
+              })),
               address: {
                 street: address?.street ?? '',
                 houseNumber: address?.houseNumber ?? '',

@@ -1,9 +1,10 @@
 'use server';
 
+import { Prisma } from '@prisma/client';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { runAction, type ActionResult } from '@/server/errors';
+import { AppError, runAction, type ActionResult } from '@/server/errors';
 import {
   computeRoutePlan,
   discardRoutePlan,
@@ -11,20 +12,33 @@ import {
   saveRoutePlan,
   type ComputedRoute,
 } from '@/server/services/route-service';
+import {
+  acceptRouteSuggestion,
+  generateRouteSuggestions,
+  type AcceptSuggestionResult,
+  type GenerateSuggestionsResult,
+} from '@/server/services/route-suggestion-service';
 
 export async function getRoutePlanningDataAction(employeeId: string, date: string) {
   return runAction(() => getRoutePlanningData(employeeId, date));
 }
 
+const gpsSchema = z
+  .object({
+    latitude: z.number().min(-90).max(90),
+    longitude: z.number().min(-180).max(180),
+    timestamp: z.number().optional(),
+  })
+  .optional();
+
 const computeSchema = z.object({
   employeeId: z.string().min(1),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   appointmentIds: z.array(z.string().min(1)).min(1).max(30),
-  departureTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  originType: z.enum(['office', 'home', 'gps']),
+  gps: gpsSchema,
   bufferMinutes: z.number().int().min(0).max(120),
   returnToStart: z.boolean(),
-  start: z.object({ latitude: z.number(), longitude: z.number(), label: z.string().optional() }),
-  end: z.object({ latitude: z.number(), longitude: z.number(), label: z.string().optional() }),
   manualOrder: z.boolean().optional(),
 });
 export type ComputeRouteActionInput = z.input<typeof computeSchema>;
@@ -59,5 +73,49 @@ export async function discardRouteAction(
     await discardRoutePlan(employeeId, date);
     revalidatePath('/routes');
     return { done: true as const };
+  });
+}
+
+// ------------------------- Terminvorschläge --------------------------------
+
+const generateSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  scope: z.enum(['self', 'team']),
+  bufferMinutes: z.number().int().min(0).max(120),
+  returnToStart: z.boolean(),
+  originType: z.enum(['office', 'home', 'gps']).optional(),
+  gps: gpsSchema,
+  appointmentIds: z.array(z.string().min(1)).max(30).optional(),
+});
+export type GenerateSuggestionsActionInput = z.input<typeof generateSchema>;
+
+export async function generateRouteSuggestionsAction(
+  input: GenerateSuggestionsActionInput,
+): Promise<ActionResult<GenerateSuggestionsResult>> {
+  return runAction(async () => {
+    const data = generateSchema.parse(input);
+    return generateRouteSuggestions(data);
+  });
+}
+
+export async function acceptRouteSuggestionAction(
+  token: string,
+): Promise<ActionResult<AcceptSuggestionResult>> {
+  return runAction(async () => {
+    const parsed = z.string().min(20).max(4096).parse(token);
+    let accepted: AcceptSuggestionResult;
+    try {
+      accepted = await acceptRouteSuggestion(parsed);
+    } catch (error) {
+      // Serialisierungskonflikt (paralleler Schreibzugriff) → als veraltet melden.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
+        throw new AppError('SUGGESTION_STALE');
+      }
+      throw error;
+    }
+    revalidatePath('/routes');
+    revalidatePath('/calendar');
+    revalidatePath('/dashboard');
+    return accepted;
   });
 }

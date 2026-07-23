@@ -423,20 +423,38 @@ model Customer {
   routeNotes           String?
   /// Kundenfarbe für Kalender/Karte (Hex)
   color                String         @default("#6c5ce7")
+  /// Standarddauer neuer (vorgeschlagener) Einsätze in Minuten.
+  defaultAppointmentDurationMinutes Int @default(120)
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
   deletedAt            DateTime?
 
-  addresses    Address[]
-  hourBudgets  CustomerHourBudget[]
-  allocations  HourAllocation[]
-  series       AppointmentSeries[]
-  appointments Appointment[]
+  addresses      Address[]
+  hourBudgets    CustomerHourBudget[]
+  allocations    HourAllocation[]
+  series         AppointmentSeries[]
+  appointments   Appointment[]
+  availabilities CustomerAvailability[]
 
   @@unique([organizationId, customerNumber])
   @@index([organizationId, status])
   @@index([organizationId, deletedAt])
   @@index([organizationId, lastName, firstName])
+}
+
+/// Wochenzeitfenster, in denen der Kunde Termine wahrnehmen kann.
+/// KEINE Einträge bedeuten ausdrücklich „alle Tage und Zeiten möglich".
+model CustomerAvailability {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  /// ISO-Wochentag: 1 = Montag … 7 = Sonntag
+  weekday    Int
+  /// "HH:mm" in der Organisations-Zeitzone
+  startTime  String
+  endTime    String
+
+  @@index([customerId, weekday])
 }
 
 model Address {
@@ -486,8 +504,9 @@ model CustomerHourBudget {
   note           String?
   createdAt      DateTime         @default(now())
 
-  adjustments CustomerHourAdjustment[]
-  allocations HourAllocation[]
+  adjustments  CustomerHourAdjustment[]
+  allocations  HourAllocation[]
+  appointments Appointment[]            @relation("AppointmentBudget")
 
   @@index([organizationId, periodStart, periodEnd])
   @@index([customerId, periodStart])
@@ -585,6 +604,11 @@ model Appointment {
   assignedEmployee           Employee?                  @relation("AppointmentEmployee", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
   /// Solo-Wechsel: ursprünglicher Mitarbeiter (für die Wiederherstellung beim Zurückwechseln zu „Leitung")
   soloReassignedFromEmployeeId String?
+  /// Kontingent-Zuordnung: neue automatische Termine (Routen-Vorschläge) werden
+  /// einem konkreten Budget zugerechnet; Bestandstermine (null) zählen weiter
+  /// über ihr Datum in den Budgetzeitraum.
+  customerHourBudgetId       String?
+  customerHourBudget         CustomerHourBudget?        @relation("AppointmentBudget", fields: [customerHourBudgetId], references: [id], onDelete: SetNull)
   title                      String
   description                String?
   startAt                    DateTime
@@ -618,6 +642,7 @@ model Appointment {
   @@index([customerId, startAt])
   @@index([seriesId, occurrenceDate])
   @@index([organizationId, deletedAt])
+  @@index([customerHourBudgetId])
 }
 
 model AppointmentSeriesException {
@@ -674,10 +699,18 @@ model RoutePlan {
   /// Strukturierte Standorte (JSON: label, street, …, latitude, longitude)
   startAddress        Json
   endAddress          Json
+  /// Startpunkt-Art: office | home | gps
+  originType          String          @default("office")
+  /// Mindestpuffer zwischen Terminen (Minuten)
+  bufferMinutes       Int             @default(10)
+  /// Route endet wieder am Startpunkt
+  returnToStart       Boolean         @default(true)
   provider            String
   totalDistanceMeters Int             @default(0)
   totalTravelSeconds  Int             @default(0)
   totalServiceMinutes Int             @default(0)
+  /// Gesamte Wartezeit zwischen Ankunft und Einsatzbeginn (Sekunden)
+  totalWaitSeconds    Int             @default(0)
   plannedDepartureAt  DateTime?
   plannedReturnAt     DateTime?
   status              RoutePlanStatus @default(DRAFT)

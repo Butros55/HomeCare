@@ -83,30 +83,31 @@ export async function MyDayDashboard({
           />
         </div>
 
-        {/* Große Schnellaktionen – das tägliche Werkzeug */}
-        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4" data-tour="my-day-actions">
+        {/* Große Schnellaktionen – das tägliche Werkzeug. min-w-0 + truncate:
+            das Raster darf nie breiter werden als der Bildschirm. */}
+        <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4" data-tour="my-day-actions">
           {canManage ? (
-            <Button asChild variant="primary" size="lg" className="h-14 justify-start text-[length:var(--text-base)]">
+            <Button asChild variant="primary" size="lg" className="h-14 min-w-0 justify-start text-[length:var(--text-base)]">
               <Link href="/calendar?neu=1">
-                <CalendarPlus aria-hidden /> Termin anlegen
+                <CalendarPlus aria-hidden /> <span className="truncate">Termin anlegen</span>
               </Link>
             </Button>
           ) : null}
-          <Button asChild variant="secondary" size="lg" className="h-14 justify-start text-[length:var(--text-base)]">
+          <Button asChild variant="secondary" size="lg" className="h-14 min-w-0 justify-start text-[length:var(--text-base)]">
             <Link href={`/routes?datum=${todayIso}`}>
-              <RouteIcon aria-hidden /> Route heute
+              <RouteIcon aria-hidden /> <span className="truncate">Route heute</span>
             </Link>
           </Button>
           {canSeeCustomers ? (
-            <Button asChild variant="secondary" size="lg" className="h-14 justify-start text-[length:var(--text-base)]">
+            <Button asChild variant="secondary" size="lg" className="h-14 min-w-0 justify-start text-[length:var(--text-base)]">
               <Link href="/customers">
-                <Contact aria-hidden /> Kunden
+                <Contact aria-hidden /> <span className="truncate">Kunden</span>
               </Link>
             </Button>
           ) : null}
-          <Button asChild variant="secondary" size="lg" className="h-14 justify-start text-[length:var(--text-base)]">
+          <Button asChild variant="secondary" size="lg" className="h-14 min-w-0 justify-start text-[length:var(--text-base)]">
             <Link href="/calendar">
-              <CalendarDays aria-hidden /> Kalender
+              <CalendarDays aria-hidden /> <span className="truncate">Kalender</span>
             </Link>
           </Button>
         </div>

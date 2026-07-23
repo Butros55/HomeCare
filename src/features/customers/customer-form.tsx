@@ -12,8 +12,10 @@ import type { AddressSuggestion } from '@/server/providers/types';
 
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
+import { DurationInput } from '@/components/ui/duration-input';
 import { FieldError, FieldHint, Input, Label, Textarea } from '@/components/ui/input';
 import { Panel, PanelBody, PanelHeader, PanelTitle } from '@/components/ui/panel';
+import { WeeklyWindowsEditor } from '@/components/ui/weekly-windows-editor';
 import {
   Select,
   SelectContent,
@@ -78,6 +80,8 @@ export function CustomerForm({
       cleaningInstructions: '',
       privateNotes: '',
       routeNotes: '',
+      defaultAppointmentDurationMinutes: 120,
+      availability: [],
       address: {
         street: '',
         houseNumber: '',
@@ -380,6 +384,48 @@ export function CustomerForm({
           <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)] sm:col-span-6">
             Die Adresse wird beim Speichern automatisch geokodiert und auf der Karte angezeigt.
           </p>
+        </PanelBody>
+      </Panel>
+
+      <Panel data-tour="customer-form-availability">
+        <PanelHeader>
+          <PanelTitle>Termine & Verfügbarkeit</PanelTitle>
+        </PanelHeader>
+        <PanelBody className="space-y-4">
+          <div className="max-w-xs">
+            <Label htmlFor="cf-duration">Standarddauer pro Einsatz</Label>
+            <Controller
+              control={control}
+              name="defaultAppointmentDurationMinutes"
+              render={({ field }) => (
+                <DurationInput
+                  id="cf-duration"
+                  value={field.value ?? 120}
+                  onChange={(minutes) => field.onChange(minutes ?? 120)}
+                  allowEmpty={false}
+                  invalid={Boolean(errors.defaultAppointmentDurationMinutes)}
+                />
+              )}
+            />
+            <FieldError>{errors.defaultAppointmentDurationMinutes?.message}</FieldError>
+            <FieldHint>Wird für automatische Terminvorschläge in der Routenplanung genutzt.</FieldHint>
+          </div>
+          <div>
+            <Label>Verfügbarkeit (Zeitfenster für Termine)</Label>
+            <Controller
+              control={control}
+              name="availability"
+              render={({ field }) => (
+                <WeeklyWindowsEditor
+                  idPrefix="cf-avail"
+                  value={(field.value ?? []) as { weekday: number; startTime: string; endTime: string }[]}
+                  onChange={field.onChange}
+                  emptyHint="Keine Zeitfenster hinterlegt – der Kunde gilt als an allen Tagen und Zeiten verfügbar."
+                />
+              )}
+            />
+            <FieldError>{errors.availability?.message as string | undefined}</FieldError>
+          </div>
         </PanelBody>
       </Panel>
 

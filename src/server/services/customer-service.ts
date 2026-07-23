@@ -300,8 +300,19 @@ export async function createCustomer(data: CustomerFormData): Promise<{ customer
         cleaningInstructions: data.cleaningInstructions,
         privateNotes: data.privateNotes,
         routeNotes: data.routeNotes,
+        defaultAppointmentDurationMinutes: data.defaultAppointmentDurationMinutes,
       },
     });
+    if (data.availability.length > 0) {
+      await tx.customerAvailability.createMany({
+        data: data.availability.map((slot) => ({
+          customerId: created.id,
+          weekday: slot.weekday,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+        })),
+      });
+    }
     await tx.address.create({
       data: {
         organizationId: orgId,
@@ -398,8 +409,22 @@ export async function updateCustomer(
           ? { privateNotes: data.privateNotes ?? null }
           : {}),
         routeNotes: data.routeNotes ?? null,
+        defaultAppointmentDurationMinutes: data.defaultAppointmentDurationMinutes,
       },
     });
+
+    // Verfügbarkeits-Zeitfenster vollständig ersetzen (leer = uneingeschränkt).
+    await tx.customerAvailability.deleteMany({ where: { customerId } });
+    if (data.availability.length > 0) {
+      await tx.customerAvailability.createMany({
+        data: data.availability.map((slot) => ({
+          customerId,
+          weekday: slot.weekday,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+        })),
+      });
+    }
 
     if (address) {
       await tx.address.update({

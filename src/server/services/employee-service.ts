@@ -2,7 +2,7 @@ import 'server-only';
 
 import { randomBytes } from 'node:crypto';
 
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 import { APP_NAME, APP_URL } from '@/lib/app-config';
 import { utcDate } from '@/lib/dates';
@@ -22,10 +22,12 @@ import {
   scopeContains,
   type OrgContext,
 } from '@/server/permissions';
+import { geocodeAddressCached } from '@/server/providers/geocoding';
 import { sendMail } from '@/server/mail';
 import type {
   AvailabilityFormInput,
   EmployeeFormData,
+  HomeLocationInput,
   InviteEmployeeInput,
 } from '@/server/validation/employee';
 
@@ -45,6 +47,38 @@ async function assertManageScope(ctx: OrgContext, employeeId: string) {
   if (!(await canAccessEmployee(ctx, employeeId, 'manage'))) {
     throw new AppError('ACCESS_DENIED');
   }
+}
+
+/**
+ * Zuhause-Adresse → strukturierter Standort (JSON) mit Geocoding.
+ *  - undefined: Feld nicht anfassen (Formular ohne Adressteil)
+ *  - null:      Zuhause entfernen
+ *  - Adresse:   geokodieren und speichern (ohne Treffer bleiben Koordinaten leer)
+ */
+export async function resolveHomeLocationJson(
+  homeLocation: NonNullable<HomeLocationInput> | null | undefined,
+): Promise<{ set: boolean; value: Prisma.InputJsonValue | null; geocoded: boolean }> {
+  if (homeLocation === undefined) return { set: false, value: null, geocoded: false };
+  if (homeLocation === null) return { set: true, value: null, geocoded: false };
+  const candidates = await geocodeAddressCached({
+    street: homeLocation.street,
+    houseNumber: homeLocation.houseNumber,
+    postalCode: homeLocation.postalCode,
+    city: homeLocation.city,
+    countryCode: 'DE',
+  });
+  const best = candidates[0];
+  return {
+    set: true,
+    geocoded: Boolean(best),
+    value: {
+      label: 'Zuhause',
+      ...homeLocation,
+      countryCode: 'DE',
+      latitude: best?.latitude ?? null,
+      longitude: best?.longitude ?? null,
+    },
+  };
 }
 
 /** Vorgesetzten-Wechsel validieren: gleiche Org, kein Zyklus, keine Selbstreferenz. */
@@ -96,6 +130,8 @@ export async function createEmployee(data: EmployeeFormData): Promise<{ employee
     }
   }
 
+  const home = await resolveHomeLocationJson(data.homeLocation);
+
   const employee = await db.$transaction(async (tx) => {
     const created = await tx.employee.create({
       data: {
@@ -114,6 +150,7 @@ export async function createEmployee(data: EmployeeFormData): Promise<{ employee
         canRecruitEmployees: data.canRecruitEmployees,
         canReceiveHours: data.canReceiveHours,
         notes: data.notes,
+        ...(home.set ? { startLocation: home.value ?? Prisma.DbNull } : {}),
       },
     });
     await writeAuditLog(
@@ -140,6 +177,7 @@ export async function updateEmployee(employeeId: string, data: EmployeeFormData)
 
   const managerEmployeeId = await validateManagerChange(ctx, employeeId, data.managerEmployeeId);
   const managerChanged = (employee.managerEmployeeId ?? null) !== (managerEmployeeId ?? null);
+  const home = await resolveHomeLocationJson(data.homeLocation);
 
   await db.$transaction(async (tx) => {
     await tx.employee.update({
@@ -159,6 +197,7 @@ export async function updateEmployee(employeeId: string, data: EmployeeFormData)
         canRecruitEmployees: data.canRecruitEmployees,
         canReceiveHours: data.canReceiveHours,
         notes: data.notes ?? null,
+        ...(home.set ? { startLocation: home.value ?? Prisma.DbNull } : {}),
       },
     });
     await writeAuditLog(
@@ -197,6 +236,40 @@ export async function setEmployeeStatus(
       tx,
     );
   });
+}
+
+/**
+ * Eigene Zuhause-Adresse pflegen (Einstellungen → Profil). Dient als
+ * Startpunkt „Zuhause" in der Routenplanung; unabhängig von employees.manage.
+ */
+export async function updateOwnHomeLocation(
+  homeLocation: NonNullable<HomeLocationInput> | null,
+): Promise<{ geocoded: boolean }> {
+  const ctx = await requireOrganizationMembership();
+  if (!ctx.employee) {
+    throw new AppError('EMPLOYEE_NOT_FOUND', {
+      message: 'Für dieses Konto existiert kein Mitarbeiterprofil.',
+    });
+  }
+  const home = await resolveHomeLocationJson(homeLocation);
+  await db.$transaction(async (tx) => {
+    await tx.employee.update({
+      where: { id: ctx.employee!.id },
+      data: { startLocation: home.value ?? Prisma.DbNull },
+    });
+    await writeAuditLog(
+      {
+        organizationId: ctx.organization.id,
+        actorUserId: ctx.user.id,
+        action: 'employee.homeLocationChanged',
+        entityType: 'Employee',
+        entityId: ctx.employee!.id,
+        metadata: { removed: home.value === null },
+      },
+      tx,
+    );
+  });
+  return { geocoded: home.geocoded };
 }
 
 // ---------------------------------------------------------------------------

@@ -56,31 +56,36 @@ export function AppShell({
 
   return (
     <TourProvider permissions={permissions} uiMode={uiMode} initialProgress={tourProgress}>
-    <div className="flex h-dvh overflow-hidden bg-[var(--color-canvas)]">
-      <Sidebar
+    {/* Topbar liegt in voller Breite ÜBER Sidebar + Inhalt: die ein-/ausklappbare
+        Navigation beeinflusst den Header damit nie (kein Abschneiden rechts). */}
+    <div className="flex h-dvh flex-col overflow-hidden bg-[var(--color-canvas)]">
+      <Topbar
         appName={appName}
-        organizationName={organizationName}
-        permissions={permissions}
-        uiMode={uiMode}
+        user={user}
+        organizations={organizations}
+        activeOrganizationId={activeOrganizationId}
         unreadNotifications={unreadNotifications}
-        collapsed={collapsed}
-        onToggle={() => setCollapsed(!collapsed)}
-        className="hidden md:flex"
+        recentNotifications={recentNotifications}
+        canCreate={canCreate}
+        canManageEmployees={canManageEmployees}
+        personalViewToggle={personalViewToggle}
+        onOpenSearch={() => setPaletteOpen(true)}
       />
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <Topbar
-          user={user}
-          organizations={organizations}
-          activeOrganizationId={activeOrganizationId}
+      <div className="flex min-h-0 flex-1">
+        <Sidebar
+          organizationName={organizationName}
+          permissions={permissions}
+          uiMode={uiMode}
           unreadNotifications={unreadNotifications}
-          recentNotifications={recentNotifications}
-          canCreate={canCreate}
-          canManageEmployees={canManageEmployees}
-          personalViewToggle={personalViewToggle}
-          onOpenSearch={() => setPaletteOpen(true)}
+          collapsed={collapsed}
+          onToggle={() => setCollapsed(!collapsed)}
+          className="hidden md:flex"
         />
-        <main className="flex-1 overflow-y-auto pb-[calc(var(--spacing-bottom-nav)+env(safe-area-inset-bottom))] md:pb-0">
+
+        {/* overflow-x-hidden: Seiten scrollen nie horizontal – breite Inhalte
+            (Tabellen, Tab-Leisten) scrollen in ihren eigenen Containern. */}
+        <main className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto pb-[calc(var(--spacing-bottom-nav)+env(safe-area-inset-bottom))] md:pb-0">
           {children}
         </main>
       </div>

@@ -211,7 +211,12 @@ export async function collectConflicts(
         select: { startAt: true, endAt: true },
       }),
       db.employeeAvailability.findMany({
-        where: { employeeId: candidate.assignedEmployeeId },
+        where: {
+          employeeId: candidate.assignedEmployeeId,
+          // Nur am Termintag gültige Zeitfenster berücksichtigen.
+          validFrom: { lt: day.end },
+          OR: [{ validUntil: null }, { validUntil: { gte: day.start } }],
+        },
         select: { weekday: true, startTime: true, endTime: true },
       }),
     ]);

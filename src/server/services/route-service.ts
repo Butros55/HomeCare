@@ -1,8 +1,11 @@
 import 'server-only';
 
+import type { Employee } from '@prisma/client';
+
 import { dayPeriodInZone, fromDateInputValue } from '@/lib/dates';
 import type { StructuredLocation } from '@/lib/geo';
-import { optimizeRoute, type RouteStopInput } from '@/lib/route-optimizer';
+import type { RouteStopInput } from '@/lib/route-optimizer';
+import { planRouteWithAutoDeparture } from '@/lib/route-suggestions';
 import { writeAuditLog } from '@/server/audit';
 import { db } from '@/server/db';
 import { AppError } from '@/server/errors';
@@ -11,6 +14,7 @@ import {
   canAccessEmployee,
   hasPermission,
   requireOrganizationMembership,
+  type OrgContext,
 } from '@/server/permissions';
 import { computeRouteMatrixCached, getRoutingProvider } from '@/server/providers/routing';
 import { createNotification } from '@/server/services/notification-service';
@@ -21,7 +25,92 @@ import { createNotification } from '@/server/services/notification-service';
  * Wichtig: Die Planung weist Termine NIEMALS automatisch zu – nicht zugewiesene
  * Termine erscheinen nur als Vorschläge und werden erst nach ausdrücklicher
  * Auswahl in die Route aufgenommen (ohne dabei die Zuweisung zu ändern).
+ *
+ * Abfahrtszeit: Es gibt keine manuelle Eingabe mehr – die Engine berechnet die
+ * späteste empfohlene Abfahrt, mit der der erste Termin inklusive Puffer
+ * erreichbar ist (siehe src/lib/route-suggestions.ts).
  */
+
+// ------------------------- Startpunkt-Auflösung -----------------------------
+
+export type RouteOriginType = 'office' | 'home' | 'gps';
+
+export interface GpsCoordinate {
+  latitude: number;
+  longitude: number;
+  /** Client-Zeitstempel der Ortung (Aktualitätsprüfung). */
+  timestamp?: number;
+}
+
+export const ORIGIN_LABELS: Record<RouteOriginType, string> = {
+  office: 'Büro',
+  home: 'Zuhause',
+  gps: 'Aktueller Standort',
+};
+
+function locationFromJson(value: unknown): StructuredLocation | null {
+  if (!value || typeof value !== 'object') return null;
+  const loc = value as Partial<StructuredLocation>;
+  if (typeof loc.latitude !== 'number' || typeof loc.longitude !== 'number') return null;
+  return loc as StructuredLocation;
+}
+
+const GPS_MAX_AGE_MS = 10 * 60 * 1000;
+
+/**
+ * Startpunkt einer Route serverseitig auflösen. GPS-Koordinaten sind nur für
+ * die eigene Route erlaubt und werden auf Wertebereich und Aktualität geprüft.
+ */
+export function resolveRouteOrigin(
+  ctx: OrgContext,
+  employee: Pick<Employee, 'id' | 'startLocation'>,
+  originType: RouteOriginType,
+  gps?: GpsCoordinate,
+): { latitude: number; longitude: number; label: string } {
+  if (originType === 'gps') {
+    if (ctx.employee?.id !== employee.id) {
+      throw new AppError('ACCESS_DENIED', {
+        message: 'Der aktuelle Standort kann nur für die eigene Route verwendet werden.',
+      });
+    }
+    if (!gps) {
+      throw new AppError('VALIDATION_FAILED', { message: 'Keine GPS-Koordinate übermittelt.' });
+    }
+    if (
+      !Number.isFinite(gps.latitude) ||
+      !Number.isFinite(gps.longitude) ||
+      Math.abs(gps.latitude) > 90 ||
+      Math.abs(gps.longitude) > 180
+    ) {
+      throw new AppError('VALIDATION_FAILED', { message: 'Ungültige GPS-Koordinate.' });
+    }
+    if (gps.timestamp && Math.abs(Date.now() - gps.timestamp) > GPS_MAX_AGE_MS) {
+      throw new AppError('VALIDATION_FAILED', {
+        message: 'Die Standortbestimmung ist veraltet – bitte erneut berechnen.',
+      });
+    }
+    return { latitude: gps.latitude, longitude: gps.longitude, label: ORIGIN_LABELS.gps };
+  }
+
+  if (originType === 'home') {
+    const home = locationFromJson(employee.startLocation);
+    if (!home) {
+      throw new AppError('ADDRESS_MISSING', {
+        message:
+          'Keine Zuhause-Adresse mit Koordinaten hinterlegt (Einstellungen → Profil bzw. Mitarbeiterprofil).',
+      });
+    }
+    return { latitude: home.latitude, longitude: home.longitude, label: home.label ?? ORIGIN_LABELS.home };
+  }
+
+  const office = locationFromJson(ctx.organization.defaultStartLocation);
+  if (!office) {
+    throw new AppError('ADDRESS_MISSING', {
+      message: 'Kein Büro-Standort konfiguriert (Einstellungen → Leitung → Organisation).',
+    });
+  }
+  return { latitude: office.latitude, longitude: office.longitude, label: office.label ?? ORIGIN_LABELS.office };
+}
 
 export interface RouteCandidate {
   appointmentId: string;
@@ -39,13 +128,6 @@ export interface RouteCandidate {
   longitude: number | null;
   assigned: boolean;
   routeNotes: string | null;
-}
-
-function locationFromJson(value: unknown): StructuredLocation | null {
-  if (!value || typeof value !== 'object') return null;
-  const loc = value as Partial<StructuredLocation>;
-  if (typeof loc.latitude !== 'number' || typeof loc.longitude !== 'number') return null;
-  return loc as StructuredLocation;
 }
 
 export async function getRoutePlanningData(employeeId: string, dateInput: string) {
@@ -125,20 +207,19 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
     routeNotes: appointment.customer.routeNotes,
   });
 
-  const defaultStart =
-    locationFromJson(employee.startLocation) ??
-    locationFromJson(ctx.organization.defaultStartLocation);
-  const defaultEnd =
-    locationFromJson(employee.endLocation) ??
-    locationFromJson(ctx.organization.defaultEndLocation) ??
-    defaultStart;
+  const home = locationFromJson(employee.startLocation);
+  const office = locationFromJson(ctx.organization.defaultStartLocation);
 
   return {
     employeeName: `${employee.firstName} ${employee.lastName}`,
+    isOwn,
     assigned: assignedAppointments.map((a) => toCandidate(a, true)),
     suggestions: unassignedAppointments.map((a) => toCandidate(a, false)),
-    defaultStart,
-    defaultEnd,
+    /** Verfügbare Startpunkte (GPS entscheidet der Client bei eigener Route). */
+    origins: {
+      office: office ? { label: office.label ?? 'Büro' } : null,
+      home: home ? { label: home.label ?? 'Zuhause' } : null,
+    },
     canManage: hasPermission(ctx, 'routes.manage'),
     existingPlan: existingPlan
       ? {
@@ -147,6 +228,9 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
           generatedAt: existingPlan.generatedAt,
           totalTravelSeconds: existingPlan.totalTravelSeconds,
           totalDistanceMeters: existingPlan.totalDistanceMeters,
+          originType: existingPlan.originType as RouteOriginType,
+          bufferMinutes: existingPlan.bufferMinutes,
+          returnToStart: existingPlan.returnToStart,
           stopAppointmentIds: existingPlan.stops.map((s) => s.appointmentId),
         }
       : null,
@@ -159,11 +243,11 @@ export interface ComputeRouteInput {
   employeeId: string;
   date: string;
   appointmentIds: string[];
-  departureTime: string; // "HH:mm" – Wandzeit? Wir nutzen UTC-Zeit des Tagesbeginns + Offset unten.
+  /** Startpunkt: Büro, Zuhause oder (nur eigene Route) aktueller Standort. */
+  originType: RouteOriginType;
+  gps?: GpsCoordinate;
   bufferMinutes: number;
   returnToStart: boolean;
-  start: { latitude: number; longitude: number; label?: string };
-  end: { latitude: number; longitude: number; label?: string };
   /** Manuelle Reihenfolge (keine Optimierung, nur Zeitplan). */
   manualOrder?: boolean;
 }
@@ -175,6 +259,13 @@ export async function computeRoutePlan(input: ComputeRouteInput) {
 
   const date = fromDateInputValue(input.date);
   if (!date) throw new AppError('VALIDATION_FAILED');
+
+  const employee = await db.employee.findUnique({ where: { id: input.employeeId } });
+  assertSameOrg(ctx, employee);
+
+  const origin = resolveRouteOrigin(ctx, employee, input.originType, input.gps);
+  // Bei aktivierter Rückkehr ist das Ziel derselbe Startpunkt.
+  const end = origin;
 
   const appointments = await db.appointment.findMany({
     where: {
@@ -215,9 +306,9 @@ export async function computeRoutePlan(input: ComputeRouteInput) {
   }));
 
   const points = [
-    { latitude: input.start.latitude, longitude: input.start.longitude },
+    { latitude: origin.latitude, longitude: origin.longitude },
     ...stops.map((s) => ({ latitude: s.latitude, longitude: s.longitude })),
-    { latitude: input.end.latitude, longitude: input.end.longitude },
+    { latitude: end.latitude, longitude: end.longitude },
   ];
   const legs = await computeRouteMatrixCached(points);
   const matrix = {
@@ -225,44 +316,68 @@ export async function computeRoutePlan(input: ComputeRouteInput) {
     distanceMeters: legs.map((row) => row.map((leg) => leg.distanceMeters)),
   };
 
-  const [h, m] = input.departureTime.split(':').map(Number);
-  const { zonedWallTimeToUtc, calendarDayInZone } = await import('@/lib/dates');
-  const dayParts = calendarDayInZone(date, ctx.organization.timezone);
-  const departureAt = zonedWallTimeToUtc(
-    dayParts.year,
-    dayParts.month,
-    dayParts.day,
-    `${(h ?? 8).toString().padStart(2, '0')}:${(m ?? 0).toString().padStart(2, '0')}`,
-    ctx.organization.timezone,
-  );
+  // Simulationsbeginn: 00:00 des Planungstags (Org-Wandzeit) – die Engine
+  // verschiebt die Abfahrt anschließend so spät wie möglich.
+  const day = dayPeriodInZone(date, ctx.organization.timezone);
 
   const timeFormatter = new Intl.DateTimeFormat('de-DE', {
     timeZone: ctx.organization.timezone,
     hour: '2-digit',
     minute: '2-digit',
   });
-  const optimizeInput = {
+
+  const planInput = {
     stops,
     matrix,
-    departureAt,
     bufferMinutes: input.bufferMinutes,
     returnToEnd: input.returnToStart,
-    formatTime: (date: Date) => timeFormatter.format(date),
+    earliestDepartureAt: day.start,
+    formatTime: (value: Date) => timeFormatter.format(value),
   };
 
-  const result = input.manualOrder
-    ? { ...(await import('@/lib/route-optimizer')).computeSchedule(stops.map((_, i) => i), optimizeInput), order: stops.map((_, i) => i) }
-    : optimizeRoute(optimizeInput);
+  let result;
+  if (input.manualOrder) {
+    const { computeSchedule } = await import('@/lib/route-optimizer');
+    const order = stops.map((_, i) => i);
+    const probe = computeSchedule(order, { ...planInput, departureAt: day.start });
+    const first = probe.stops[0];
+    const shiftSeconds = first ? Math.max(0, first.waitSeconds - input.bufferMinutes * 60) : 0;
+    const latestDepartureAt = new Date(day.start.getTime() + shiftSeconds * 1000);
+    const schedule =
+      shiftSeconds > 0
+        ? computeSchedule(order, { ...planInput, departureAt: latestDepartureAt })
+        : probe;
+    const lastEnd =
+      schedule.returnArrivalAt ??
+      schedule.stops[schedule.stops.length - 1]?.serviceEndAt ??
+      latestDepartureAt;
+    result = {
+      ...schedule,
+      order,
+      latestDepartureAt,
+      workdaySeconds: Math.max(
+        0,
+        Math.round((lastEnd.getTime() - latestDepartureAt.getTime()) / 1000),
+      ),
+    };
+  } else {
+    result = planRouteWithAutoDeparture(planInput);
+  }
 
   const byId = new Map(ordered.map((a) => [a.id, a] as const));
   return {
     provider: getRoutingProvider().name,
-    departureAt: result.departureAt.toISOString(),
+    originType: input.originType,
+    originLabel: origin.label,
+    origin: { latitude: origin.latitude, longitude: origin.longitude, label: origin.label },
+    /** Späteste empfohlene Abfahrt. */
+    departureAt: result.latestDepartureAt.toISOString(),
     returnArrivalAt: result.returnArrivalAt?.toISOString() ?? null,
     totalTravelSeconds: result.totalTravelSeconds,
     totalDistanceMeters: result.totalDistanceMeters,
     totalServiceMinutes: result.totalServiceMinutes,
     totalWaitSeconds: result.totalWaitSeconds,
+    workdaySeconds: result.workdaySeconds,
     warnings: result.warnings,
     feasible: result.feasible,
     stops: result.stops.map((stop) => {
@@ -302,6 +417,15 @@ export async function saveRoutePlan(
   assertSameOrg(ctx, employee);
 
   const computed = await computeRoutePlan(input);
+  // Unzulässige Routen (verletzte feste Zeiten/Fenster) können nicht
+  // gespeichert oder veröffentlicht werden.
+  if (!computed.feasible) {
+    throw new AppError('ROUTE_NOT_FEASIBLE', {
+      message:
+        'Die Route verletzt feste Zeiten oder Zeitfenster und kann nicht gespeichert werden.',
+      details: { warnings: computed.warnings },
+    });
+  }
   const date = fromDateInputValue(input.date)!;
 
   const plan = await db.$transaction(async (tx) => {
@@ -314,12 +438,16 @@ export async function saveRoutePlan(
         organizationId: ctx.organization.id,
         employeeId: input.employeeId,
         routeDate: date,
-        startAddress: { ...input.start },
-        endAddress: { ...input.end },
+        startAddress: { ...computed.origin },
+        endAddress: { ...computed.origin },
+        originType: computed.originType,
+        bufferMinutes: input.bufferMinutes,
+        returnToStart: input.returnToStart,
         provider: computed.provider,
         totalDistanceMeters: computed.totalDistanceMeters,
         totalTravelSeconds: computed.totalTravelSeconds,
         totalServiceMinutes: computed.totalServiceMinutes,
+        totalWaitSeconds: computed.totalWaitSeconds,
         plannedDepartureAt: new Date(computed.departureAt),
         plannedReturnAt: computed.returnArrivalAt ? new Date(computed.returnArrivalAt) : null,
         status: input.publish ? 'PUBLISHED' : 'DRAFT',

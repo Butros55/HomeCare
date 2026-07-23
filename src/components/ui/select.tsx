@@ -20,7 +20,7 @@ export function SelectTrigger({
     <SelectPrimitive.Trigger
       aria-invalid={invalid || undefined}
       className={cn(
-        'flex h-9 w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border bg-[var(--color-panel-sunken)] px-3 text-left text-[length:var(--text-sm)] text-[var(--color-ink)]',
+        'flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-[var(--radius-md)] border bg-[var(--color-panel-sunken)] px-3 text-left text-[length:var(--text-sm)] text-[var(--color-ink)]',
         'pointer-coarse:h-11 pointer-coarse:text-[16px]',
         'transition-[border-color,box-shadow,background-color] focus:border-[var(--color-brand)] focus:bg-[var(--color-panel)] focus:shadow-[0_0_0_3px_var(--color-brand-ring)] focus:outline-none',
         'disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-[var(--color-ink-subtle)]',
@@ -31,7 +31,7 @@ export function SelectTrigger({
       )}
       {...props}
     >
-      <span className="truncate">{children}</span>
+      <span className="min-w-0 truncate">{children}</span>
       <SelectPrimitive.Icon asChild>
         <ChevronDown className="size-4 shrink-0 text-[var(--color-ink-subtle)]" aria-hidden />
       </SelectPrimitive.Icon>

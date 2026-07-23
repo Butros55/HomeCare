@@ -89,9 +89,9 @@ export function AvailabilityEditor({
   return (
     <div className="space-y-3">
       {sorted.length === 0 ? (
-        <p className="rounded-[var(--radius-md)] bg-[var(--color-warning-soft)] px-3 py-2 text-[length:var(--text-sm)] text-[var(--color-warning)]">
-          Keine Verfügbarkeit hinterlegt – Termine außerhalb der Verfügbarkeit werden als Konflikt
-          markiert.
+        <p className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-3 py-2 text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+          Keine Verfügbarkeit hinterlegt – der Mitarbeiter gilt als uneingeschränkt verfügbar
+          (alle Tage und Zeiten). Zeitfenster begrenzen Planung und Terminvorschläge.
         </p>
       ) : null}
 

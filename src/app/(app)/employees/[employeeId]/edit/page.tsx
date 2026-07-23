@@ -42,6 +42,19 @@ export default async function EditEmployeePage({
 
   const name = `${employee.firstName} ${employee.lastName}`;
 
+  const homeRaw = employee.startLocation as
+    | { street?: string; houseNumber?: string; postalCode?: string; city?: string }
+    | null;
+  const homeLocation =
+    homeRaw && homeRaw.street && homeRaw.city
+      ? {
+          street: homeRaw.street,
+          houseNumber: homeRaw.houseNumber ?? '',
+          postalCode: homeRaw.postalCode ?? '',
+          city: homeRaw.city,
+        }
+      : null;
+
   return (
     <>
       <PageHeader
@@ -71,6 +84,7 @@ export default async function EditEmployeePage({
               canRecruitEmployees: employee.canRecruitEmployees,
               canReceiveHours: employee.canReceiveHours,
               notes: employee.notes ?? '',
+              homeLocation,
             },
           }}
           managerOptions={managers.map((m) => ({ id: m.id, name: `${m.firstName} ${m.lastName}` }))}

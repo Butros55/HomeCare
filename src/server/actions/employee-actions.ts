@@ -11,15 +11,18 @@ import {
   replaceAvailability,
   setEmployeeStatus,
   updateEmployee,
+  updateOwnHomeLocation,
 } from '@/server/services/employee-service';
 import {
   absenceFormSchema,
   availabilityFormSchema,
   employeeFormSchema,
+  homeLocationSchema,
   inviteEmployeeSchema,
   type AbsenceFormInput,
   type AvailabilityFormInput,
   type EmployeeFormInput,
+  type HomeLocationInput,
   type InviteEmployeeInput,
 } from '@/server/validation/employee';
 
@@ -67,6 +70,18 @@ export async function replaceAvailabilityAction(
     await replaceAvailability(data);
     revalidatePath(`/employees/${data.employeeId}`);
     return { done: true as const };
+  });
+}
+
+export async function updateOwnHomeLocationAction(
+  input: HomeLocationInput,
+): Promise<ActionResult<{ geocoded: boolean }>> {
+  return runAction(async () => {
+    const data = homeLocationSchema.parse(input);
+    const result = await updateOwnHomeLocation(data ?? null);
+    revalidatePath('/settings');
+    revalidatePath('/routes');
+    return result;
   });
 }
 

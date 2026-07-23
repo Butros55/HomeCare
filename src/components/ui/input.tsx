@@ -17,7 +17,9 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(function Inp
       ref={ref}
       aria-invalid={invalid || undefined}
       className={cn(
-        'flex h-9 w-full rounded-[var(--radius-md)] border bg-[var(--color-panel-sunken)] px-3 text-[length:var(--text-sm)] text-[var(--color-ink)]',
+        // min-w-0: native Datums-/Zeitfelder (iPadOS) haben intrinsische
+        // Mindestbreiten – in Grids/Flex dürfen sie trotzdem schrumpfen.
+        'flex h-9 w-full min-w-0 rounded-[var(--radius-md)] border bg-[var(--color-panel-sunken)] px-3 text-[length:var(--text-sm)] text-[var(--color-ink)]',
         // Touch: 44px Ziel + 16px Schrift (verhindert Auto-Zoom von iOS/iPadOS).
         'pointer-coarse:h-11 pointer-coarse:text-[16px]',
         'placeholder:text-[var(--color-ink-subtle)]',

@@ -19,6 +19,18 @@ const minutesField = z
   .optional()
   .transform((value) => (value ? value : null));
 
+/** Zuhause-Adresse (Routenstart); null/leer = kein Zuhause hinterlegt. */
+export const homeLocationSchema = z
+  .object({
+    street: z.string().trim().min(1, 'Straße ist erforderlich.').max(150),
+    houseNumber: z.string().trim().min(1, 'Hausnummer ist erforderlich.').max(20),
+    postalCode: z.string().trim().regex(/^\d{4,5}$/, 'Gültige PLZ eingeben.'),
+    city: z.string().trim().min(1, 'Ort ist erforderlich.').max(100),
+  })
+  .nullable()
+  .optional();
+export type HomeLocationInput = z.input<typeof homeLocationSchema>;
+
 export const employeeFormSchema = z.object({
   firstName: z.string().trim().min(1, 'Vorname ist erforderlich.').max(100),
   lastName: z.string().trim().min(1, 'Nachname ist erforderlich.').max(100),
@@ -42,6 +54,8 @@ export const employeeFormSchema = z.object({
   canRecruitEmployees: z.boolean().default(false),
   canReceiveHours: z.boolean().default(true),
   notes: optionalTrimmed(2000),
+  /** Zuhause-Adresse für den Routenstart „Zuhause"; undefined = unverändert lassen. */
+  homeLocation: homeLocationSchema,
 });
 export type EmployeeFormInput = z.input<typeof employeeFormSchema>;
 export type EmployeeFormData = z.output<typeof employeeFormSchema>;

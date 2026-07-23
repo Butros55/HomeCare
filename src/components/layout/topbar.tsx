@@ -46,6 +46,7 @@ export interface TopbarOrganization {
 }
 
 export function Topbar({
+  appName,
   user,
   organizations,
   activeOrganizationId,
@@ -56,6 +57,7 @@ export function Topbar({
   personalViewToggle,
   onOpenSearch,
 }: {
+  appName: string;
   user: { id: string; name: string; email: string };
   organizations: TopbarOrganization[];
   activeOrganizationId: string;
@@ -80,23 +82,37 @@ export function Topbar({
 
   return (
     <header className="flex h-[var(--spacing-topbar)] shrink-0 items-center gap-2 border-b border-[var(--color-line-subtle)] bg-[var(--color-surface)] px-3">
-      {/* Eine Sucheinstiegsstelle: öffnet die Befehls-/Suchpalette (Strg+K). */}
+      {/* Marke (ab md – auf dem Smartphone zählt jeder Pixel für die Suche). */}
+      <div className="mr-1 hidden shrink-0 items-center gap-2.5 md:flex">
+        <div
+          className="bg-brand-gradient flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[length:var(--text-sm)] font-bold text-white shadow-[0_4px_12px_var(--color-brand-ring)]"
+          aria-hidden
+        >
+          {appName.charAt(0)}
+        </div>
+        <span className="max-w-44 truncate text-[length:var(--text-lg)] font-semibold tracking-tight">
+          {appName}
+        </span>
+      </div>
+
+      {/* Eine Sucheinstiegsstelle: öffnet die Befehls-/Suchpalette (Strg+K).
+          min-w-0 + shrink: darf beliebig schrumpfen, damit rechts nie etwas abgeschnitten wird. */}
       <button
         type="button"
         onClick={onOpenSearch}
         className={cn(
-          'flex h-9 w-full max-w-md items-center gap-2.5 rounded-full border pointer-coarse:h-11 border-[var(--color-line)] bg-[var(--color-panel-sunken)] px-3.5 text-left text-[length:var(--text-sm)] text-[var(--color-ink-subtle)]',
+          'flex h-9 w-full min-w-0 max-w-md shrink items-center gap-2.5 rounded-full border pointer-coarse:h-11 border-[var(--color-line)] bg-[var(--color-panel-sunken)] px-3.5 text-left text-[length:var(--text-sm)] text-[var(--color-ink-subtle)]',
           'transition-[border-color,box-shadow,background-color] hover:border-[var(--color-line-strong)] hover:bg-[var(--color-panel)] hover:shadow-[var(--shadow-panel)]',
         )}
       >
         <Search className="size-3.5 shrink-0" aria-hidden />
-        <span className="flex-1 truncate">Suchen…</span>
+        <span className="min-w-0 flex-1 truncate">Suchen…</span>
         <kbd className="hidden shrink-0 rounded-full border border-[var(--color-line)] bg-[var(--color-panel)] px-2 py-0.5 text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)] sm:inline-block">
           Ctrl K
         </kbd>
       </button>
 
-      <div className="flex-1" />
+      <div className="min-w-0 flex-1" />
 
       {personalViewToggle ? (
         // Schneller Ansichtswechsel: Verwaltung ↔ persönliche Kompakt-Ansicht.

@@ -13,6 +13,7 @@ import { Switch } from '@/components/ui/misc';
 import { Panel, PanelBody, PanelHeader, PanelTitle } from '@/components/ui/panel';
 import { cn } from '@/lib/utils';
 import { changePasswordAction, updateProfileAction } from '@/server/auth/actions';
+import { updateOwnHomeLocationAction } from '@/server/actions/employee-actions';
 import { saveNotificationPrefsAction } from '@/server/actions/preference-actions';
 import { updateOrganizationAction } from '@/server/actions/settings-actions';
 import { AddressAutocomplete } from '@/features/geo/address-autocomplete';
@@ -88,6 +89,111 @@ export function ProfileSettings({
           </div>
           <Button type="submit" variant="primary" loading={pending}>
             Profil speichern
+          </Button>
+        </form>
+      </PanelBody>
+    </Panel>
+  );
+}
+
+/** Zuhause-Adresse des eigenen Mitarbeiterprofils (Startpunkt „Zuhause" für Routen). */
+export function HomeAddressSettings({
+  initial,
+}: {
+  initial: { street: string; houseNumber: string; postalCode: string; city: string } | null;
+}) {
+  const router = useRouter();
+  const [location, setLocation] = React.useState(
+    initial ?? { street: '', houseNumber: '', postalCode: '', city: '' },
+  );
+  const [error, setError] = React.useState<string | null>(null);
+  const [pending, startTransition] = React.useTransition();
+
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    startTransition(async () => {
+      const hasLocation = location.street.trim() && location.city.trim();
+      const result = await updateOwnHomeLocationAction(hasLocation ? location : null);
+      if (result.ok) {
+        setError(null);
+        toast.success(
+          !hasLocation
+            ? 'Zuhause-Adresse entfernt.'
+            : result.data.geocoded
+              ? 'Zuhause-Adresse gespeichert und geokodiert.'
+              : 'Zuhause-Adresse gespeichert – Koordinaten wurden nicht gefunden.',
+        );
+        router.refresh();
+      } else {
+        setError(result.message);
+      }
+    });
+  };
+
+  return (
+    <Panel>
+      <PanelHeader>
+        <PanelTitle>Zuhause-Adresse</PanelTitle>
+      </PanelHeader>
+      <PanelBody>
+        <form onSubmit={submit} method="post" className="max-w-xl space-y-4">
+          <FormAlert>{error}</FormAlert>
+          <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+            Startpunkt „Zuhause“ für deine Tagesroute und die Teamplanung. Felder leeren und
+            speichern entfernt die Adresse.
+          </p>
+          <div>
+            <Label htmlFor="home-search">Adresse suchen</Label>
+            <AddressAutocomplete
+              id="home-search"
+              onSelect={(suggestion) =>
+                setLocation({
+                  street: suggestion.street,
+                  houseNumber: suggestion.houseNumber,
+                  postalCode: suggestion.postalCode,
+                  city: suggestion.city,
+                })
+              }
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-6">
+            <div className="sm:col-span-4">
+              <Label htmlFor="home-street">Straße</Label>
+              <Input
+                id="home-street"
+                value={location.street}
+                onChange={(e) => setLocation({ ...location, street: e.target.value })}
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <Label htmlFor="home-no">Nr.</Label>
+              <Input
+                id="home-no"
+                value={location.houseNumber}
+                onChange={(e) => setLocation({ ...location, houseNumber: e.target.value })}
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <Label htmlFor="home-plz">PLZ</Label>
+              <Input
+                id="home-plz"
+                inputMode="numeric"
+                value={location.postalCode}
+                onChange={(e) => setLocation({ ...location, postalCode: e.target.value })}
+              />
+            </div>
+            <div className="sm:col-span-4">
+              <Label htmlFor="home-city">Ort</Label>
+              <Input
+                id="home-city"
+                value={location.city}
+                onChange={(e) => setLocation({ ...location, city: e.target.value })}
+              />
+            </div>
+          </div>
+          <FieldHint>Wird beim Speichern automatisch geokodiert (für die Routenplanung).</FieldHint>
+          <Button type="submit" variant="primary" loading={pending}>
+            Zuhause-Adresse speichern
           </Button>
         </form>
       </PanelBody>

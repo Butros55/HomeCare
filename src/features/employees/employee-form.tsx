@@ -3,7 +3,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
-import { Controller, useForm } from 'react-hook-form';
+import { Controller, useForm, useWatch } from 'react-hook-form';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -11,6 +11,7 @@ import { DurationInput } from '@/components/ui/duration-input';
 import { FieldError, FieldHint, Input, Label, Textarea } from '@/components/ui/input';
 import { Switch } from '@/components/ui/misc';
 import { Panel, PanelBody, PanelHeader, PanelTitle } from '@/components/ui/panel';
+import { AddressAutocomplete } from '@/features/geo/address-autocomplete';
 import {
   Select,
   SelectContent,
@@ -40,6 +41,7 @@ export function EmployeeForm({
     register,
     handleSubmit,
     control,
+    setValue,
     formState: { errors, isDirty },
   } = useForm<EmployeeFormInput>({
     resolver: zodResolver(employeeFormSchema),
@@ -58,9 +60,12 @@ export function EmployeeForm({
       canRecruitEmployees: false,
       canReceiveHours: true,
       notes: '',
+      homeLocation: null,
       ...initial.values,
     },
   });
+
+  const homeLocation = useWatch({ control, name: 'homeLocation' });
 
   React.useEffect(() => {
     if (!isDirty) return;
@@ -264,6 +269,102 @@ export function EmployeeForm({
               render={({ field }) => <Switch checked={field.value ?? false} onCheckedChange={field.onChange} />}
             />
           </label>
+        </PanelBody>
+      </Panel>
+
+      <Panel data-tour="employee-form-home">
+        <PanelHeader>
+          <PanelTitle>Zuhause (Routenstart)</PanelTitle>
+          {homeLocation ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-[var(--color-danger)]"
+              onClick={() => setValue('homeLocation', null, { shouldDirty: true })}
+            >
+              Entfernen
+            </Button>
+          ) : null}
+        </PanelHeader>
+        <PanelBody className="space-y-3">
+          <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+            Optional: Startpunkt „Zuhause“ für die Tagesroute und die Teamplanung. Ohne Adresse
+            startet die Route am Büro (Organisations-Standort).
+          </p>
+          <div>
+            <Label htmlFor="ef-home-search">Adresse suchen</Label>
+            <AddressAutocomplete
+              id="ef-home-search"
+              onSelect={(suggestion) =>
+                setValue(
+                  'homeLocation',
+                  {
+                    street: suggestion.street,
+                    houseNumber: suggestion.houseNumber,
+                    postalCode: suggestion.postalCode,
+                    city: suggestion.city,
+                  },
+                  { shouldDirty: true, shouldValidate: true },
+                )
+              }
+            />
+          </div>
+          {homeLocation ? (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-6">
+              <div className="sm:col-span-3">
+                <Label htmlFor="ef-home-street">Straße</Label>
+                <Input
+                  id="ef-home-street"
+                  value={homeLocation.street}
+                  onChange={(e) =>
+                    setValue('homeLocation', { ...homeLocation, street: e.target.value }, { shouldDirty: true })
+                  }
+                />
+              </div>
+              <div className="sm:col-span-1">
+                <Label htmlFor="ef-home-no">Nr.</Label>
+                <Input
+                  id="ef-home-no"
+                  value={homeLocation.houseNumber}
+                  onChange={(e) =>
+                    setValue('homeLocation', { ...homeLocation, houseNumber: e.target.value }, { shouldDirty: true })
+                  }
+                />
+              </div>
+              <div className="sm:col-span-1">
+                <Label htmlFor="ef-home-plz">PLZ</Label>
+                <Input
+                  id="ef-home-plz"
+                  inputMode="numeric"
+                  value={homeLocation.postalCode}
+                  onChange={(e) =>
+                    setValue('homeLocation', { ...homeLocation, postalCode: e.target.value }, { shouldDirty: true })
+                  }
+                />
+              </div>
+              <div className="sm:col-span-1">
+                <Label htmlFor="ef-home-city">Ort</Label>
+                <Input
+                  id="ef-home-city"
+                  value={homeLocation.city}
+                  onChange={(e) =>
+                    setValue('homeLocation', { ...homeLocation, city: e.target.value }, { shouldDirty: true })
+                  }
+                />
+              </div>
+              <div className="sm:col-span-6">
+                <FieldHint>Wird beim Speichern automatisch geokodiert.</FieldHint>
+              </div>
+            </div>
+          ) : null}
+          <FieldError>
+            {errors.homeLocation
+              ? ((errors.homeLocation as { message?: string }).message ??
+                (errors.homeLocation as { street?: { message?: string } }).street?.message ??
+                'Bitte die Zuhause-Adresse vervollständigen.')
+              : null}
+          </FieldError>
         </PanelBody>
       </Panel>
 

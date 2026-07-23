@@ -45,8 +45,9 @@ export function DialogContent({
           if (tourActive()) event.preventDefault();
         }}
         className={cn(
-          // Mobil: Bottom-Sheet
-          'animate-sheet-in fixed inset-x-0 bottom-0 z-50 max-h-[92dvh] w-full overflow-y-auto rounded-t-[var(--radius-xl)]',
+          // Mobil: Bottom-Sheet. overflow-x-hidden: Dialoge scrollen nie seitlich –
+          // Felder müssen sich der Dialogbreite anpassen (Inputs sind min-w-0).
+          'animate-sheet-in fixed inset-x-0 bottom-0 z-50 max-h-[92dvh] w-full overflow-x-hidden overflow-y-auto rounded-t-[var(--radius-xl)]',
           // Desktop: zentriert
           'sm:animate-pop-in sm:inset-x-auto sm:bottom-auto sm:top-1/2 sm:left-1/2 sm:max-h-[85dvh] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[var(--radius-xl)]',
           wide ? 'sm:max-w-2xl' : 'sm:max-w-md',

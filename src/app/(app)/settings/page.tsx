@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { hasPermission, requireOrganizationMembership } from '@/server/permissions';
 import {
   AppearanceSettings,
+  HomeAddressSettings,
   NotificationPrefsSettings,
   OrganizationSettings,
   PasswordSettings,
@@ -70,6 +71,21 @@ export default async function SettingsPage({
     city?: string;
   } | null;
 
+  const ownHomeRaw = (ctx.employee?.startLocation ?? null) as {
+    street?: string;
+    houseNumber?: string;
+    postalCode?: string;
+    city?: string;
+  } | null;
+  const ownHome = ownHomeRaw?.street
+    ? {
+        street: ownHomeRaw.street ?? '',
+        houseNumber: ownHomeRaw.houseNumber ?? '',
+        postalCode: ownHomeRaw.postalCode ?? '',
+        city: ownHomeRaw.city ?? '',
+      }
+    : null;
+
   return (
     <>
       <PageHeader title="Einstellungen" description={ctx.organization.name}>
@@ -107,6 +123,7 @@ export default async function SettingsPage({
                 email: ctx.user.email,
               }}
             />
+            {ctx.employee ? <HomeAddressSettings initial={ownHome} /> : null}
             <PasswordSettings />
           </>
         ) : null}

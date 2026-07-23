@@ -10,7 +10,6 @@ import { CountBadge } from '@/components/ui/status-pill';
 import { cn } from '@/lib/utils';
 
 export function Sidebar({
-  appName,
   organizationName,
   permissions,
   uiMode = 'team',
@@ -20,7 +19,6 @@ export function Sidebar({
   onNavigate,
   className,
 }: {
-  appName: string;
   organizationName: string;
   permissions: NavPermissions;
   uiMode?: NavUiMode;
@@ -46,22 +44,9 @@ export function Sidebar({
       )}
       aria-label="Hauptnavigation"
     >
-      <div className="flex h-[var(--spacing-topbar)] shrink-0 items-center gap-2.5 px-3">
-        <div
-          className="bg-brand-gradient flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[length:var(--text-sm)] font-bold text-white shadow-[0_4px_12px_var(--color-brand-ring)]"
-          aria-hidden
-        >
-          {appName.charAt(0)}
-        </div>
-        {!collapsed ? (
-          <span className="truncate text-[length:var(--text-lg)] font-semibold tracking-tight">
-            {appName}
-          </span>
-        ) : null}
-      </div>
-
+      {/* Die Marke sitzt in der Topbar – hier nur der Organisations-Chip. */}
       {!collapsed ? (
-        <div className="px-3 pb-2">
+        <div className="px-3 pt-3 pb-2">
           <div className="truncate rounded-[var(--radius-md)] bg-[var(--color-panel-raised)] px-2.5 py-1.5 text-[length:var(--text-xs)] font-medium text-[var(--color-ink-muted)]">
             {organizationName}
           </div>
