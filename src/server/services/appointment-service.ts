@@ -653,6 +653,13 @@ export async function updateAppointment(
   }
   await requireAppointmentManage(ctx, assignedEmployeeId);
 
+  // Abgesagte Termine sind erst nach Wiederherstellung wieder bearbeitbar.
+  if (appointment.status === 'CANCELLED' || appointment.status === 'NO_SHOW') {
+    throw new AppError('VALIDATION_FAILED', {
+      message: 'Abgesagte Termine müssen zuerst wiederhergestellt werden, bevor sie bearbeitet werden können.',
+    });
+  }
+
   const timezone = ctx.organization.timezone;
 
   // Zielzeiten berechnen.
@@ -1134,6 +1141,9 @@ export async function deleteAppointment(
       where: {
         seriesId: appointment.seriesId!,
         deletedAt: null,
+        // Abgeschlossene Einsätze bleiben als Historie erhalten – gelöscht werden
+        // die geplanten UND die bereits abgesagten Vorkommen der Serie.
+        status: { not: 'COMPLETED' },
         ...(fromDate ? { occurrenceDate: { gte: fromDate } } : {}),
       },
       select: { id: true },
@@ -1157,6 +1167,61 @@ export async function deleteAppointment(
         entityType: 'AppointmentSeries',
         entityId: appointment.seriesId!,
         metadata: { scope: options.scope, deletedCount: targets.length },
+      },
+      tx,
+    );
+  });
+}
+
+/**
+ * Abgesagten Termin wieder aktivieren (Status → geplant). Erst danach ist er
+ * wieder bearbeitbar. Für Serien-Vorkommen wird die „abgesagt"-Ausnahme
+ * entfernt, damit es als reguläres Vorkommen weiterläuft.
+ */
+export async function restoreAppointment(appointmentId: string): Promise<void> {
+  const ctx = await requireOrganizationMembership();
+  const appointment = await db.appointment.findUnique({
+    where: { id: appointmentId },
+    include: { series: true },
+  });
+  assertSameOrg(ctx, appointment);
+  await requireAppointmentManage(ctx, appointment.assignedEmployeeId);
+  if (appointment.deletedAt) {
+    throw new AppError('VALIDATION_FAILED', {
+      message: 'Gelöschte Termine können nicht wiederhergestellt werden.',
+    });
+  }
+  if (appointment.status !== 'CANCELLED' && appointment.status !== 'NO_SHOW') return;
+
+  await db.$transaction(async (tx) => {
+    await tx.appointment.update({
+      where: { id: appointmentId },
+      data: {
+        status: 'PLANNED',
+        cancellationReason: null,
+        assignmentStatus: appointment.assignedEmployeeId
+          ? ctx.organization.soloMode
+            ? 'ACCEPTED'
+            : 'ASSIGNED'
+          : 'UNASSIGNED',
+      },
+    });
+    if (appointment.seriesId && appointment.occurrenceDate) {
+      await tx.appointmentSeriesException.deleteMany({
+        where: {
+          seriesId: appointment.seriesId,
+          occurrenceDate: appointment.occurrenceDate,
+          exceptionType: 'CANCELLED',
+        },
+      });
+    }
+    await writeAuditLog(
+      {
+        organizationId: ctx.organization.id,
+        actorUserId: ctx.user.id,
+        action: 'appointment.restored',
+        entityType: 'Appointment',
+        entityId: appointmentId,
       },
       tx,
     );

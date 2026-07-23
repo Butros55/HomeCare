@@ -10,7 +10,9 @@ import {
   Pencil,
   Phone,
   Repeat,
+  RotateCcw,
   Sparkles,
+  Trash2,
   X,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -50,6 +52,7 @@ import {
   duplicateAppointmentAction,
   getAppointmentDetailAction,
   respondToAssignmentAction,
+  restoreAppointmentAction,
   updateAppointmentStatusAction,
 } from '@/server/actions/appointment-actions';
 import {
@@ -253,6 +256,24 @@ export function AppointmentDrawer({
       } else toast.error(result.message);
     });
   };
+
+  const restore = () => {
+    startTransition(async () => {
+      const result = await restoreAppointmentAction(appointmentId);
+      if (result.ok) {
+        toast.success('Termin wiederhergestellt – jetzt wieder bearbeitbar.');
+        refresh();
+      } else toast.error(result.message);
+    });
+  };
+
+  // Absagen-/Löschen-Dialog im passenden Modus öffnen.
+  const openCancelDialog = (mode: 'cancel' | 'delete') => {
+    setCancelMode(mode);
+    setCancelOpen(true);
+  };
+
+  const isCancelled = detail?.status === 'CANCELLED' || detail?.status === 'NO_SHOW';
 
   const parsedRecurrence = detail?.series ? parseRuleToForm(detail.series.rule) : null;
   const editTarget: AppointmentEditTarget | null = detail
@@ -576,7 +597,7 @@ export function AppointmentDrawer({
                       <Button
                         variant="danger"
                         size="md"
-                        onClick={() => setCancelOpen(true)}
+                        onClick={() => openCancelDialog('cancel')}
                         disabled={pending}
                       >
                         <Ban aria-hidden /> Absagen
@@ -663,24 +684,42 @@ export function AppointmentDrawer({
             {canManage ? (
               <footer className="space-y-2 border-t border-[var(--color-line-subtle)] p-4">
                 <div className="flex flex-wrap gap-2">
-                  <Button variant="secondary" size="sm" onClick={() => setEditOpen(true)}>
-                    <Pencil aria-hidden /> Bearbeiten
-                  </Button>
-                  {!soloMode ? (
+                  {isCancelled ? (
                     <>
-                      <Button variant="secondary" size="sm" onClick={duplicate} disabled={pending}>
-                        <Copy aria-hidden /> Duplizieren
+                      {/* Abgesagt: erst wiederherstellen, dann bearbeiten; oder löschen. */}
+                      <Button variant="primary" size="sm" onClick={restore} disabled={pending}>
+                        <RotateCcw aria-hidden /> Wiederherstellen
                       </Button>
                       <Button
                         variant="danger"
                         size="sm"
-                        onClick={() => setCancelOpen(true)}
-                        disabled={detail.status === 'CANCELLED'}
+                        onClick={() => openCancelDialog('delete')}
+                        disabled={pending}
                       >
-                        <Ban aria-hidden /> Absagen
+                        <Trash2 aria-hidden /> Löschen
                       </Button>
                     </>
-                  ) : null}
+                  ) : (
+                    <>
+                      <Button variant="secondary" size="sm" onClick={() => setEditOpen(true)}>
+                        <Pencil aria-hidden /> Bearbeiten
+                      </Button>
+                      {!soloMode ? (
+                        <>
+                          <Button variant="secondary" size="sm" onClick={duplicate} disabled={pending}>
+                            <Copy aria-hidden /> Duplizieren
+                          </Button>
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            onClick={() => openCancelDialog('cancel')}
+                          >
+                            <Ban aria-hidden /> Absagen
+                          </Button>
+                        </>
+                      ) : null}
+                    </>
+                  )}
                 </div>
               </footer>
             ) : null}
@@ -756,7 +795,9 @@ export function AppointmentDrawer({
         }}
       >
         <div className="mt-3 space-y-3">
-          {/* Absagen (bleibt sichtbar) vs. Löschen (ganz entfernen). */}
+          {/* Absagen (bleibt sichtbar) vs. Löschen (ganz entfernen). Bereits
+              abgesagte Termine kann man nur noch löschen. */}
+          {!isCancelled ? (
           <div role="radiogroup" aria-label="Aktion" className="grid grid-cols-2 gap-1.5">
             {(
               [
@@ -784,6 +825,7 @@ export function AppointmentDrawer({
               </button>
             ))}
           </div>
+          ) : null}
 
           {detail?.series ? (
             <div role="radiogroup" aria-label="Umfang" className="space-y-1.5">

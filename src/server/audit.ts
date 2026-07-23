@@ -80,6 +80,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   'appointment.statusChanged': 'Terminstatus geändert',
   'appointment.cancelled': 'Termin abgesagt',
   'appointment.deleted': 'Termin gelöscht',
+  'appointment.restored': 'Termin wiederhergestellt',
   'series.created': 'Serientermin angelegt',
   'series.updated': 'Serienregel geändert',
   'series.ended': 'Serie beendet',

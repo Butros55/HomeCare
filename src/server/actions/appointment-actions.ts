@@ -13,6 +13,7 @@ import {
   createAppointment,
   deleteAppointment,
   rescheduleAppointment,
+  restoreAppointment,
   respondToAssignment,
   updateAppointment,
   updateAppointmentStatus,
@@ -227,6 +228,16 @@ export async function deleteAppointmentAction(
 ): Promise<ActionResult<{ done: true }>> {
   return runAction(async () => {
     await deleteAppointment(appointmentId, { scope });
+    revalidateCalendarPaths();
+    return { done: true as const };
+  });
+}
+
+export async function restoreAppointmentAction(
+  appointmentId: string,
+): Promise<ActionResult<{ done: true }>> {
+  return runAction(async () => {
+    await restoreAppointment(appointmentId);
     revalidateCalendarPaths();
     return { done: true as const };
   });
