@@ -72,6 +72,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       uiMode={uiModeFor(ctx)}
       canCreate={hasPermission(ctx, 'appointments.manage')}
       canManageEmployees={hasPermission(ctx, 'employees.manage')}
+      soloMode={ctx.organization.soloMode}
       personalViewToggle={canTogglePersonalView(ctx) ? { personalView: ctx.personalView } : null}
       unreadNotifications={unreadNotifications}
       recentNotifications={recentNotifications.map((notification) => ({

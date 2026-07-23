@@ -28,6 +28,7 @@ export function AppShell({
   uiMode = 'team',
   canCreate,
   canManageEmployees,
+  soloMode,
   personalViewToggle = null,
   unreadNotifications,
   recentNotifications,
@@ -44,6 +45,7 @@ export function AppShell({
   uiMode?: NavUiMode;
   canCreate: boolean;
   canManageEmployees: boolean;
+  soloMode: boolean;
   personalViewToggle?: { personalView: boolean } | null;
   unreadNotifications: number;
   recentNotifications: NotificationPreviewItem[];
@@ -68,6 +70,7 @@ export function AppShell({
         recentNotifications={recentNotifications}
         canCreate={canCreate}
         canManageEmployees={canManageEmployees}
+        soloMode={soloMode}
         personalViewToggle={personalViewToggle}
         onOpenSearch={() => setPaletteOpen(true)}
       />

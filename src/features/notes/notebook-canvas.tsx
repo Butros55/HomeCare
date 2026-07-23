@@ -133,6 +133,15 @@ export function NotebookCanvas({
 
   const resetView = React.useCallback(() => applyView(DEFAULT_VIEW), [applyView]);
 
+  /** Zoom über die Werkzeugleiste – immer um die Mitte der sichtbaren Fläche. */
+  const zoomByFactor = React.useCallback(
+    (factor: number) => {
+      const canvas = canvasRef.current;
+      zoomAt(factor, (canvas?.clientWidth ?? 0) / 2, (canvas?.clientHeight ?? 0) / 2);
+    },
+    [zoomAt],
+  );
+
   const clientToCanvas = React.useCallback((clientX: number, clientY: number): NotebookPoint => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
@@ -190,6 +199,7 @@ export function NotebookCanvas({
         point,
         penColor: preferences.penColor,
         penWidth: preferences.penWidth,
+        penStyle: preferences.penStyle,
         highlighterColor: preferences.highlighterColor,
         highlighterWidth: preferences.highlighterWidth,
         highlighterOpacity: preferences.highlighterOpacity,
@@ -534,9 +544,12 @@ export function NotebookCanvas({
         onContextMenu={(event) => event.preventDefault()}
       />
 
-      <div className="pointer-events-none absolute top-3 left-3 rounded-full border border-black/5 bg-white/75 px-2.5 py-1 text-[11px] text-slate-500 shadow-sm backdrop-blur">
-        {Math.round(view.scale * 100)} %
-      </div>
+      {/* Zoomstand nur einblenden, wenn er vom Original abweicht – sonst Papier. */}
+      {Math.abs(view.scale - 1) > 0.005 ? (
+        <div className="pointer-events-none absolute top-3 left-3 rounded-full border border-black/5 bg-white/75 px-2.5 py-1 text-[11px] text-slate-500 shadow-sm backdrop-blur">
+          {Math.round(view.scale * 100)} %
+        </div>
+      ) : null}
 
       {drawing.limitReached ? (
         <div className="absolute top-3 right-3 z-20 flex max-w-sm items-start gap-2 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-panel)] px-3 py-2 text-[length:var(--text-xs)] text-[var(--color-ink-muted)] shadow-[var(--shadow-popover)]">
@@ -566,6 +579,9 @@ export function NotebookCanvas({
         onRedo={drawing.redo}
         onClear={drawing.clear}
         onResetView={resetView}
+        onZoomIn={() => zoomByFactor(1.25)}
+        onZoomOut={() => zoomByFactor(1 / 1.25)}
+        scale={view.scale}
       />
     </div>
   );

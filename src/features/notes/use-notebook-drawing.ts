@@ -10,6 +10,7 @@ import {
   normalizeNotebookDocument,
   type NotebookBackgroundType,
   type NotebookDocumentV1,
+  type NotebookPenStyle,
   type NotebookPoint,
   type NotebookStroke,
   type NotebookTool,
@@ -22,6 +23,7 @@ interface BeginStrokeSettings {
   point: NotebookPoint;
   penColor: string;
   penWidth: number;
+  penStyle: NotebookPenStyle;
   highlighterColor: string;
   highlighterWidth: number;
   highlighterOpacity: number;
@@ -118,7 +120,7 @@ export function useNotebookDrawing({
         tool: 'pen',
         source: isHighlighter ? 'highlighter' : 'handwriting',
         opacity: isHighlighter ? settings.highlighterOpacity : 1,
-        penStyle: isHighlighter ? 'ballpoint' : 'fountain',
+        penStyle: isHighlighter ? 'ballpoint' : settings.penStyle,
         pressureSensitivity: isHighlighter ? 0 : settings.pressureSensitivity,
       };
       const next = {

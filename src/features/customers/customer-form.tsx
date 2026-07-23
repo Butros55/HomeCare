@@ -46,10 +46,17 @@ export function CustomerForm({
   initial,
   employees,
   canEditPrivateNotes,
+  onSuccess,
 }: {
   initial: CustomerFormInitial;
   employees: { id: string; name: string }[];
   canEditPrivateNotes: boolean;
+  /**
+   * Wird nach erfolgreichem Anlegen/Speichern aufgerufen (z. B. im Schnell-
+   * Anlegen-Popup). Ist er gesetzt, entfällt die sonst übliche Navigation zum
+   * Datensatz – der Aufrufer entscheidet selbst (Popup schließen + refresh).
+   */
+  onSuccess?: () => void;
 }) {
   const router = useRouter();
   const isEdit = Boolean(initial.customerId);
@@ -157,6 +164,10 @@ export function CustomerForm({
 
         if (result.ok) {
           toast.success(isEdit ? 'Kunde gespeichert.' : 'Kunde angelegt.');
+          if (onSuccess) {
+            onSuccess();
+            return;
+          }
           const id = initial.customerId ?? (result.data as { customerId: string }).customerId;
           router.push(`/customers/${id}`);
           router.refresh();
@@ -170,7 +181,7 @@ export function CustomerForm({
         toast.error(result.message);
       });
     },
-    [initial.customerId, isEdit, router, pickedCoordinate],
+    [initial.customerId, isEdit, router, pickedCoordinate, onSuccess],
   );
 
   const onSubmit = handleSubmit((values) => submit(values));

@@ -5,6 +5,7 @@ import * as React from 'react';
 import {
   DEFAULT_NOTEBOOK_PREFERENCES,
   type NotebookDrawingPreferences,
+  type NotebookPenStyle,
   type NotebookTool,
 } from './drawing-model';
 
@@ -23,11 +24,16 @@ export function normalizeNotebookPreferences(value: unknown): NotebookDrawingPre
   const stored =
     value && typeof value === 'object' ? (value as Partial<NotebookDrawingPreferences>) : {};
   const validTools = new Set<NotebookTool>(['pen', 'highlighter', 'eraser']);
+  const validPenStyles = new Set<NotebookPenStyle>(['fountain', 'ballpoint', 'brush']);
   return {
     lastTool:
       typeof stored.lastTool === 'string' && validTools.has(stored.lastTool as NotebookTool)
         ? (stored.lastTool as NotebookTool)
         : DEFAULT_NOTEBOOK_PREFERENCES.lastTool,
+    penStyle:
+      typeof stored.penStyle === 'string' && validPenStyles.has(stored.penStyle as NotebookPenStyle)
+        ? (stored.penStyle as NotebookPenStyle)
+        : DEFAULT_NOTEBOOK_PREFERENCES.penStyle,
     penColor: hexColor(stored.penColor, DEFAULT_NOTEBOOK_PREFERENCES.penColor),
     penWidth: numberInRange(stored.penWidth, DEFAULT_NOTEBOOK_PREFERENCES.penWidth, 1, 18),
     highlighterColor: hexColor(

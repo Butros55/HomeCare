@@ -2,19 +2,14 @@
 
 import {
   Building2,
-  CalendarPlus,
   Check,
   CircleUserRound,
-  Clock,
   KeyRound,
   LogOut,
   Monitor,
   Moon,
-  Plus,
-  Route,
   Search,
   Sun,
-  UserPlus,
   UsersRound,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -35,6 +30,7 @@ import {
   type NotificationPreviewItem,
 } from '@/components/layout/notification-popover';
 import { EntityAvatar } from '@/components/ui/misc';
+import { QuickCreateMenu } from '@/features/quick-create/quick-create-menu';
 import { TourHelpButton } from '@/features/tours/tour-provider';
 import { togglePersonalViewAction } from '@/server/actions/preference-actions';
 import { logoutAction, switchOrganizationAction } from '@/server/auth/actions';
@@ -54,6 +50,7 @@ export function Topbar({
   recentNotifications,
   canCreate,
   canManageEmployees,
+  soloMode,
   personalViewToggle,
   onOpenSearch,
 }: {
@@ -65,6 +62,8 @@ export function Topbar({
   recentNotifications: NotificationPreviewItem[];
   canCreate: boolean;
   canManageEmployees: boolean;
+  /** Alleine-Modus: „Mitarbeiter anlegen" entfällt im Schnell-Menü. */
+  soloMode: boolean;
   /** null = Umschalter ausblenden (Alleine-Modus/Mitarbeiter); sonst aktueller Zustand. */
   personalViewToggle: { personalView: boolean } | null;
   onOpenSearch: () => void;
@@ -158,47 +157,7 @@ export function Topbar({
       ) : null}
 
       {canCreate ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              aria-label="Schnell anlegen"
-              className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand)] pointer-coarse:size-11 text-white shadow-[0_6px_16px_var(--color-brand-ring)] transition-colors hover:bg-[var(--color-brand-hover)]"
-            >
-              <Plus className="size-4" aria-hidden />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuLabel>Neu anlegen</DropdownMenuLabel>
-            <DropdownMenuItem asChild>
-              <Link href="/customers/new">
-                <UserPlus aria-hidden /> Kunde
-              </Link>
-            </DropdownMenuItem>
-            {canManageEmployees ? (
-              <DropdownMenuItem asChild>
-                <Link href="/employees/new">
-                  <UsersRound aria-hidden /> Mitarbeiter
-                </Link>
-              </DropdownMenuItem>
-            ) : null}
-            <DropdownMenuItem asChild>
-              <Link href="/calendar?neu=1">
-                <CalendarPlus aria-hidden /> Termin
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href="/customers?openHours=1">
-                <Clock aria-hidden /> Stunden verteilen
-              </Link>
-            </DropdownMenuItem>
-            <DropdownMenuItem asChild>
-              <Link href="/routes">
-                <Route aria-hidden /> Route planen
-              </Link>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <QuickCreateMenu soloMode={soloMode} canManageEmployees={canManageEmployees} />
       ) : null}
 
       <TourHelpButton />

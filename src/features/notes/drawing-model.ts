@@ -57,6 +57,8 @@ export interface HandwrittenNoteClient {
 
 export interface NotebookDrawingPreferences {
   lastTool: NotebookTool;
+  /** Schreibgefühl des Stifts (Strichbreite/Druckverhalten). */
+  penStyle: NotebookPenStyle;
   penColor: string;
   penWidth: number;
   highlighterColor: string;
@@ -70,6 +72,7 @@ export interface NotebookDrawingPreferences {
 
 export const DEFAULT_NOTEBOOK_PREFERENCES: NotebookDrawingPreferences = {
   lastTool: 'pen',
+  penStyle: 'fountain',
   penColor: '#1b1f36',
   penWidth: 3,
   highlighterColor: '#facc15',
@@ -79,6 +82,46 @@ export const DEFAULT_NOTEBOOK_PREFERENCES: NotebookDrawingPreferences = {
   stabilization: 0.2,
   pressureSensitivity: 0.65,
   touchDrawEnabled: false,
+};
+
+/** Schnellzugriff-Paletten der Werkzeugleiste (freie Farbwahl bleibt möglich). */
+export const PEN_COLOR_PRESETS = [
+  '#1b1f36',
+  '#5b6178',
+  '#2563eb',
+  '#0891b2',
+  '#059669',
+  '#ca8a04',
+  '#ea580c',
+  '#dc2626',
+  '#be185d',
+  '#7c3aed',
+] as const;
+
+export const HIGHLIGHTER_COLOR_PRESETS = [
+  '#facc15',
+  '#a3e635',
+  '#34d399',
+  '#38bdf8',
+  '#c084fc',
+  '#fb7185',
+] as const;
+
+/** Breiten-Voreinstellungen je Werkzeug (dünn → dick). */
+export const PEN_WIDTH_PRESETS = [1.5, 3, 5, 9] as const;
+export const HIGHLIGHTER_WIDTH_PRESETS = [12, 18, 28, 40] as const;
+export const ERASER_WIDTH_PRESETS = [12, 24, 40, 60] as const;
+
+export const PEN_STYLE_LABELS: Record<NotebookPenStyle, string> = {
+  fountain: 'Füller',
+  ballpoint: 'Kugelschreiber',
+  brush: 'Pinsel',
+};
+
+export const PEN_STYLE_HINTS: Record<NotebookPenStyle, string> = {
+  fountain: 'Druckabhängig, feine Linien',
+  ballpoint: 'Gleichmäßig, ohne Druck',
+  brush: 'Kräftig, stark druckabhängig',
 };
 
 export const notebookPointSchema = z

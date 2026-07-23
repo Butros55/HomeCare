@@ -28,10 +28,17 @@ import { employeeFormSchema, type EmployeeFormInput } from '@/server/validation/
 export function EmployeeForm({
   initial,
   managerOptions,
+  onSuccess,
 }: {
   initial: { employeeId?: string; values?: Partial<EmployeeFormInput> };
   /** Mögliche Vorgesetzte (bereits serverseitig gefiltert, ohne den Mitarbeiter selbst). */
   managerOptions: { id: string; name: string }[];
+  /**
+   * Wird nach erfolgreichem Anlegen/Speichern aufgerufen (z. B. im Schnell-
+   * Anlegen-Popup). Ist er gesetzt, entfällt die Navigation zum Datensatz –
+   * der Aufrufer schließt das Popup selbst.
+   */
+  onSuccess?: () => void;
 }) {
   const router = useRouter();
   const isEdit = Boolean(initial.employeeId);
@@ -83,6 +90,10 @@ export function EmployeeForm({
         : await createEmployeeAction(values);
       if (result.ok) {
         toast.success(isEdit ? 'Mitarbeiter gespeichert.' : 'Mitarbeiter angelegt.');
+        if (onSuccess) {
+          onSuccess();
+          return;
+        }
         const id = initial.employeeId ?? (result.data as { employeeId: string }).employeeId;
         router.push(`/employees/${id}`);
         router.refresh();

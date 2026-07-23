@@ -1,6 +1,5 @@
 import type { Metadata } from 'next';
 
-import { PageHeader } from '@/components/layout/page-header';
 import {
   normalizeNotebookDocument,
   type HandwrittenNoteClient,
@@ -47,16 +46,11 @@ export default async function NotesPage() {
     updatedAt: note.updatedAt.toISOString(),
   }));
 
+  // Bewusst ohne PageHeader: die Seite ist „Papier zuerst" und nutzt die volle
+  // Höhe – Titel und Aktionen stehen in der schmalen Kopfzeile des Notizbuchs.
   return (
-    <>
-      <PageHeader
-        title="Notizbuch"
-        description="Handschriftliche Notizen mit Stift, Marker und Radierer."
-      />
-      <NotesWorkspace
-        initialNotes={initialNotes}
-        timezone={ctx.organization.timezone}
-      />
-    </>
+    <div className="flex h-full min-h-0 flex-col">
+      <NotesWorkspace initialNotes={initialNotes} timezone={ctx.organization.timezone} />
+    </div>
   );
 }
