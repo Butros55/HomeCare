@@ -8,6 +8,8 @@ import type { NavPermissions, NavUiMode } from '@/components/layout/nav-items';
 import { Sidebar } from '@/components/layout/sidebar';
 import type { NotificationPreviewItem } from '@/components/layout/notification-popover';
 import { Topbar, type TopbarOrganization } from '@/components/layout/topbar';
+import { TourProvider } from '@/features/tours/tour-provider';
+import type { TourProgressSnapshot } from '@/server/actions/tour-actions';
 import { usePersistedBoolean } from '@/lib/persisted-state';
 
 const COLLAPSE_STORAGE_KEY = 'hcp.sidebar.collapsed';
@@ -29,6 +31,7 @@ export function AppShell({
   personalViewToggle = null,
   unreadNotifications,
   recentNotifications,
+  tourProgress = [],
   onSearch,
   children,
 }: {
@@ -44,6 +47,7 @@ export function AppShell({
   personalViewToggle?: { personalView: boolean } | null;
   unreadNotifications: number;
   recentNotifications: NotificationPreviewItem[];
+  tourProgress?: TourProgressSnapshot[];
   onSearch?: (query: string) => Promise<SearchResultItem[]>;
   children: React.ReactNode;
 }) {
@@ -51,6 +55,7 @@ export function AppShell({
   const [paletteOpen, setPaletteOpen] = React.useState(false);
 
   return (
+    <TourProvider permissions={permissions} uiMode={uiMode} initialProgress={tourProgress}>
     <div className="flex h-dvh overflow-hidden bg-[var(--color-canvas)]">
       <Sidebar
         appName={appName}
@@ -91,5 +96,6 @@ export function AppShell({
         onSearch={onSearch}
       />
     </div>
+    </TourProvider>
   );
 }

@@ -76,6 +76,7 @@ export default async function SettingsPage({
         <nav
           className="mt-4 flex max-w-full gap-1 overflow-x-auto scrollbar-none rounded-full bg-[var(--color-panel-sunken)] p-1"
           aria-label="Einstellungs-Tabs"
+          data-tour="settings-tabs"
         >
           {tabs.map((t) => (
             <Link

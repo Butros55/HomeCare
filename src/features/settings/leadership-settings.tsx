@@ -67,7 +67,7 @@ export async function LeadershipSettings() {
     <>
       <ModeSettings soloMode={ctx.organization.soloMode} />
 
-      <Panel>
+      <Panel data-tour="leadership-table">
         <PanelHeader>
           <PanelTitle>Leitung ({leaders.length})</PanelTitle>
           <AddLeadershipButton />

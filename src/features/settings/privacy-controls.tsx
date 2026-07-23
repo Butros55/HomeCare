@@ -40,7 +40,7 @@ export function PrivacyControls({
 
   return (
     <>
-      <Panel>
+      <Panel data-tour="privacy-export">
         <PanelHeader>
           <PanelTitle>Datenexport (Art. 15/20 DSGVO)</PanelTitle>
         </PanelHeader>
@@ -92,7 +92,7 @@ export function PrivacyControls({
         </PanelBody>
       </Panel>
 
-      <Panel>
+      <Panel data-tour="privacy-anonymize">
         <PanelHeader>
           <PanelTitle>Anonymisierung (Art. 17 DSGVO)</PanelTitle>
         </PanelHeader>
@@ -191,7 +191,7 @@ export function RetentionForm({ initial }: { initial: Required<RetentionInput> }
   );
 
   return (
-    <Panel>
+    <Panel data-tour="privacy-retention">
       <PanelHeader>
         <PanelTitle>Aufbewahrungsfristen</PanelTitle>
       </PanelHeader>

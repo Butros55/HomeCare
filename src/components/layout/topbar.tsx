@@ -18,7 +18,7 @@ import {
   UsersRound,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useTheme } from 'next-themes';
+import { useTheme } from '@/components/layout/theme-provider';
 import * as React from 'react';
 import { toast } from 'sonner';
 
@@ -35,6 +35,7 @@ import {
   type NotificationPreviewItem,
 } from '@/components/layout/notification-popover';
 import { EntityAvatar } from '@/components/ui/misc';
+import { TourHelpButton } from '@/features/tours/tour-provider';
 import { togglePersonalViewAction } from '@/server/actions/preference-actions';
 import { logoutAction, switchOrganizationAction } from '@/server/auth/actions';
 import { cn } from '@/lib/utils';
@@ -183,6 +184,8 @@ export function Topbar({
           </DropdownMenuContent>
         </DropdownMenu>
       ) : null}
+
+      <TourHelpButton />
 
       <NotificationPopover items={recentNotifications} unreadCount={unreadNotifications} />
 

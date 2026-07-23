@@ -267,7 +267,7 @@ export function RoutesShell({
       />
       <div className="space-y-4 p-4 sm:p-5">
         {/* Parameter */}
-        <Panel>
+        <Panel data-tour="routes-params">
           <PanelBody className="grid grid-cols-2 gap-3 lg:grid-cols-6">
             <div className="col-span-2">
               <Label htmlFor="route-employee">Mitarbeiter</Label>
@@ -334,7 +334,13 @@ export function RoutesShell({
                   {' · '}Verkehrsmittel: Auto
                 </p>
               )}
-              <Button variant="primary" onClick={() => compute()} loading={pending} disabled={!data}>
+              <Button
+                variant="primary"
+                onClick={() => compute()}
+                loading={pending}
+                disabled={!data}
+                data-tour="routes-compute-button"
+              >
                 <RouteIcon aria-hidden /> Route berechnen
               </Button>
             </div>
@@ -346,7 +352,7 @@ export function RoutesShell({
         ) : (
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
           {/* Terminauswahl */}
-          <Panel className="xl:col-span-2">
+          <Panel className="xl:col-span-2" data-tour="routes-candidates">
             <PanelHeader>
               <PanelTitle>
                 Termine {data ? `(${selectedIds.length}/${allCandidates.length} gewählt)` : ''}

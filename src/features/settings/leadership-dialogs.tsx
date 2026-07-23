@@ -56,7 +56,7 @@ export function ModeSettings({ soloMode }: { soloMode: boolean }) {
     );
 
   return (
-    <Panel>
+    <Panel data-tour="leadership-mode">
       <PanelHeader>
         <PanelTitle>Ansicht & Modus</PanelTitle>
       </PanelHeader>
@@ -117,7 +117,7 @@ export function AddLeadershipButton() {
 
   return (
     <>
-      <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
+      <Button variant="primary" size="sm" onClick={() => setOpen(true)} data-tour="leadership-add-button">
         <UserPlus aria-hidden /> Leitungs-Konto hinzufügen
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
@@ -184,7 +184,7 @@ export function DefaultPermissionsSettings({
   };
 
   return (
-    <Panel>
+    <Panel data-tour="leadership-defaults">
       <PanelHeader>
         <PanelTitle>Standard-Berechtigungen</PanelTitle>
         <span className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">

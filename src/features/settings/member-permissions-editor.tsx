@@ -114,7 +114,7 @@ export function MemberPermissionsEditor({
 
   return (
     <>
-      <Button variant="outline" size="sm" onClick={openDialog}>
+      <Button variant="outline" size="sm" onClick={openDialog} data-tour="member-permissions-button">
         <ShieldCheck aria-hidden />
         {isCustom
           ? `Berechtigungen (${effectivePermissions.length})`

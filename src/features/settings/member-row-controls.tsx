@@ -52,7 +52,7 @@ export function MemberRowControls({
         }}
         disabled={pending}
       >
-        <SelectTrigger className="h-8 w-44" aria-label="Konto-Art ändern">
+        <SelectTrigger className="h-8 w-44" aria-label="Konto-Art ändern" data-tour="member-role-select">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -65,6 +65,7 @@ export function MemberRowControls({
       <Button
         variant={status === 'ACTIVE' ? 'outline' : 'secondary'}
         size="sm"
+        data-tour="member-status-button"
         disabled={pending}
         onClick={() => {
           startTransition(async () => {

@@ -75,7 +75,7 @@ export default async function CustomersPage({
         description={`${result.total} ${result.total === 1 ? 'Kunde' : 'Kunden'} · Stundenwerte für den aktuellen Monat`}
         actions={
           result.canManage ? (
-            <Button asChild variant="primary">
+            <Button asChild variant="primary" data-tour="customers-create-button">
               <Link href="/customers/new">
                 <Plus aria-hidden /> Kunde anlegen
               </Link>
@@ -83,7 +83,7 @@ export default async function CustomersPage({
           ) : undefined
         }
       >
-        <div className="mt-4">
+        <div className="mt-4" data-tour="customers-filters">
           <CustomerFilters
             cities={cities}
             employees={employees.map((e) => ({ id: e.id, name: employeeDisplayName(e, ctx.user.id) }))}
@@ -92,7 +92,7 @@ export default async function CustomersPage({
         </div>
       </PageHeader>
 
-      <div className="p-4 sm:p-5">
+      <div className="p-4 sm:p-5" data-tour="customers-list">
         {result.rows.length === 0 ? (
           <EmptyState
             icon={<Contact />}

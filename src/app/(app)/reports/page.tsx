@@ -84,14 +84,14 @@ export default async function ReportsPage({
         title="Auswertungen"
         description={`Zeitraum ${filters.from} bis ${filters.to}`}
         actions={
-          <Button asChild variant="secondary">
+          <Button asChild variant="secondary" data-tour="reports-export-button">
             <Link href={`/api/reports/export?${exportParams.toString()}`} prefetch={false}>
               <Download aria-hidden /> CSV-Export
             </Link>
           </Button>
         }
       >
-        <div className="mt-4">
+        <div className="mt-4" data-tour="reports-filters">
           <ReportFilterBar
             defaultFrom={defaultFrom}
             defaultTo={defaultTo}
@@ -102,7 +102,7 @@ export default async function ReportsPage({
         </div>
       </PageHeader>
 
-      <div className="space-y-4 p-4 sm:p-5">
+      <div className="space-y-4 p-4 sm:p-5" data-tour="reports-stats">
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           <StatTile label="Kundenstunden (Budget)" value={formatMinutesAsHours(data.totals.budgetMinutes)} />
           <StatTile label="Zugewiesen" value={formatMinutesAsHours(data.totals.allocatedMinutes)} />

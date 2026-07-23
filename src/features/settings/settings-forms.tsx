@@ -2,7 +2,7 @@
 
 import { Monitor, Moon, Sun } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useTheme } from 'next-themes';
+import { useTheme } from '@/components/layout/theme-provider';
 import * as React from 'react';
 import { toast } from 'sonner';
 
@@ -263,7 +263,7 @@ export function OrganizationSettings({
   };
 
   return (
-    <Panel>
+    <Panel data-tour="leadership-organisation">
       <PanelHeader>
         <PanelTitle>Organisation</PanelTitle>
       </PanelHeader>

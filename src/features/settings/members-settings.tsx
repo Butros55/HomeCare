@@ -29,7 +29,7 @@ export async function MembersSettings() {
 
   return (
     <>
-      <Panel>
+      <Panel data-tour="members-table">
         <PanelHeader>
           <PanelTitle>Mitglieder ({members.length})</PanelTitle>
           <span className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">

@@ -1,10 +1,10 @@
 'use client';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ThemeProvider } from 'next-themes';
 import * as React from 'react';
 import { Toaster } from 'sonner';
 
+import { ThemeProvider } from '@/components/layout/theme-provider';
 import { TooltipProvider } from '@/components/ui/misc';
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -22,7 +22,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <ThemeProvider attribute="data-theme" defaultTheme="system" enableSystem disableTransitionOnChange>
+    <ThemeProvider>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider delayDuration={250}>
           {children}

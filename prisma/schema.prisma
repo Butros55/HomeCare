@@ -182,6 +182,7 @@ model Organization {
   routePlans    RoutePlan[]
   notifications Notification[]
   auditLogs     AuditLog[]
+  tourProgress  UserTourProgress[]
 }
 
 // ============================ Benutzer & Auth ===============================
@@ -210,6 +211,33 @@ model User {
   approvedTimeEntries TimeEntry[]              @relation("TimeEntryApprover")
   hourAdjustments     CustomerHourAdjustment[] @relation("AdjustmentCreator")
   preference          UserPreference?
+  tourProgress        UserTourProgress[]
+}
+
+enum TourStatus {
+  IN_PROGRESS
+  COMPLETED
+  SKIPPED
+}
+
+/// Fortschritt der kontextbezogenen Hinweis-Touren (pro Konto und Organisation).
+model UserTourProgress {
+  id             String       @id @default(cuid())
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tourId         String
+  /// Tour-Version: höhere Versionen dürfen nach UI-Umbauten erneut starten.
+  version        Int          @default(1)
+  status         TourStatus   @default(IN_PROGRESS)
+  currentStepId  String?
+  startedAt      DateTime     @default(now())
+  completedAt    DateTime?
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([userId, organizationId, tourId])
+  @@index([organizationId])
 }
 
 model UserPreference {

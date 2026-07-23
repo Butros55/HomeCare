@@ -1351,6 +1351,7 @@ export function ProMonthCalendar({
                           {showViewTabs && (
                             <button
                               type="button"
+                              data-tour="calendar-side-panel-button"
                               onClick={() => onOpenPanel('calendars')}
                               aria-label="Kalender-Seitenleiste öffnen"
                               className="-ml-1.5 flex size-9 shrink-0 items-center justify-center rounded-xl text-primary transition-colors hover:bg-primary/10"
@@ -1385,11 +1386,14 @@ export function ProMonthCalendar({
                       </div>
                       <div className="flex shrink-0 items-center gap-1.5">
                         {showViewTabs && (
-                          <CalendarViewTabs value={viewMode} onChange={handleViewModeChange} className="mr-1" />
+                          <span data-tour="calendar-view-tabs">
+                            <CalendarViewTabs value={viewMode} onChange={handleViewModeChange} className="mr-1" />
+                          </span>
                         )}
                         {densityToggle}
                         <button
                           type="button"
+                          data-tour="calendar-create-button"
                           onClick={() => onCreate(selectedKey)}
                           aria-label="Neuen Termin anlegen"
                           className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm"

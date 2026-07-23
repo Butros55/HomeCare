@@ -26,7 +26,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const ctx = await getOrgContext();
   if (!ctx) redirect('/login');
 
-  const [memberships, unreadNotifications, recentNotifications] = await Promise.all([
+  const [memberships, unreadNotifications, recentNotifications, tourProgress] = await Promise.all([
     db.organizationMembership.findMany({
       where: { userId: ctx.user.id, status: 'ACTIVE' },
       include: { organization: { select: { id: true, name: true } } },
@@ -47,6 +47,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         readAt: true,
         createdAt: true,
       },
+    }),
+    db.userTourProgress.findMany({
+      where: { userId: ctx.user.id, organizationId: ctx.organization.id },
+      select: { tourId: true, version: true, status: true, currentStepId: true },
     }),
   ]);
 
@@ -78,6 +82,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         readAt: notification.readAt?.toISOString() ?? null,
         createdAtLabel: formatDateTime(notification.createdAt, ctx.organization.timezone),
       }))}
+      tourProgress={tourProgress}
       onSearch={globalSearchAction}
     >
       {children}

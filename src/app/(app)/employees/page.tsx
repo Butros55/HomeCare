@@ -94,7 +94,7 @@ export default async function EmployeesPage({
         description={`${rows.length} ${rows.length === 1 ? 'Mitarbeiter' : 'Mitarbeiter'} · Stundenwerte für die aktuelle Woche`}
         actions={
           canManage ? (
-            <Button asChild variant="primary">
+            <Button asChild variant="primary" data-tour="employees-create-button">
               <Link href="/employees/new">
                 <Plus aria-hidden /> Mitarbeiter anlegen
               </Link>
@@ -107,7 +107,7 @@ export default async function EmployeesPage({
         </div>
       </PageHeader>
 
-      <div className="p-4 sm:p-5">
+      <div className="p-4 sm:p-5" data-tour="employees-list">
         {rows.length === 0 ? (
           <EmptyState
             icon={<UsersRound />}
