@@ -16,10 +16,11 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DrawerContentSkeleton } from '@/components/layout/page-loading-skeleton';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Label, Textarea } from '@/components/ui/input';
-import { EntityAvatar, Spinner } from '@/components/ui/misc';
+import { EntityAvatar } from '@/components/ui/misc';
 import {
   Select,
   SelectContent,
@@ -205,9 +206,7 @@ export function AppointmentDrawer({
           aria-hidden
         />
         {!detail ? (
-          <div className="flex flex-1 items-center justify-center">
-            <Spinner />
-          </div>
+          <DrawerContentSkeleton />
         ) : (
           <>
             <header className="flex items-start justify-between gap-3 border-b border-[var(--color-line-subtle)] p-4">

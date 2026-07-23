@@ -19,9 +19,10 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { PageHeader } from '@/components/layout/page-header';
+import { RoutePlanningDataSkeleton } from '@/components/layout/page-loading-skeleton';
 import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
-import { Checkbox, Skeleton, Spinner } from '@/components/ui/misc';
+import { Checkbox, Skeleton } from '@/components/ui/misc';
 import { EmptyState, Panel, PanelBody, PanelHeader, PanelTitle, StatTile } from '@/components/ui/panel';
 import {
   Select,
@@ -73,7 +74,7 @@ export function RoutesShell({
   const [returnToStart, setReturnToStart] = React.useState(true);
 
   const [data, setData] = React.useState<PlanningData | null>(null);
-  const [loading, setLoading] = React.useState(false);
+  const [loading, setLoading] = React.useState(Boolean(initialEmployeeId && initialDate));
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
   const [route, setRoute] = React.useState<ComputedRoute | null>(null);
   const [manualOrder, setManualOrder] = React.useState<string[] | null>(null);
@@ -84,29 +85,31 @@ export function RoutesShell({
     if (!employeeId || !date) return;
     let cancelled = false;
     startTransition(async () => {
-      const result = await getRoutePlanningDataAction(employeeId, date);
-      if (cancelled) return;
-      if (result.ok) {
-        setData(result.data);
-        setSelectedIds(
-          result.data.existingPlan?.stopAppointmentIds ??
-            result.data.assigned.map((a) => a.appointmentId),
-        );
-        setRoute(null);
-        setManualOrder(null);
-      } else {
-        toast.error(result.message);
-        setData(null);
+      setData(null);
+      setLoading(true);
+      try {
+        const result = await getRoutePlanningDataAction(employeeId, date);
+        if (cancelled) return;
+        if (result.ok) {
+          setData(result.data);
+          setSelectedIds(
+            result.data.existingPlan?.stopAppointmentIds ??
+              result.data.assigned.map((a) => a.appointmentId),
+          );
+          setRoute(null);
+          setManualOrder(null);
+        } else {
+          toast.error(result.message);
+          setData(null);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     });
     return () => {
       cancelled = true;
     };
-     
   }, [employeeId, date]);
-
-  void loading;
-  void setLoading;
 
   const buildInput = React.useCallback(
     (order?: string[]): ComputeRouteActionInput | null => {
@@ -320,13 +323,17 @@ export function RoutesShell({
               </label>
             </div>
             <div className="col-span-2 flex items-end gap-2 lg:col-span-6">
-              <p className="min-w-0 flex-1 truncate text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                Start/Ziel: {data?.defaultStart?.label ?? 'Büro'}
-                {data?.defaultStart
-                  ? ''
-                  : ' – kein Startpunkt konfiguriert (Einstellungen → Organisation)'}
-                {' · '}Verkehrsmittel: Auto
-              </p>
+              {loading ? (
+                <Skeleton className="h-3 min-w-0 flex-1 rounded-full" />
+              ) : (
+                <p className="min-w-0 flex-1 truncate text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                  Start/Ziel: {data?.defaultStart?.label ?? 'Büro'}
+                  {data?.defaultStart
+                    ? ''
+                    : ' – kein Startpunkt konfiguriert (Einstellungen → Organisation)'}
+                  {' · '}Verkehrsmittel: Auto
+                </p>
+              )}
               <Button variant="primary" onClick={() => compute()} loading={pending} disabled={!data}>
                 <RouteIcon aria-hidden /> Route berechnen
               </Button>
@@ -334,7 +341,10 @@ export function RoutesShell({
           </PanelBody>
         </Panel>
 
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
+        {loading ? (
+          <RoutePlanningDataSkeleton />
+        ) : (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
           {/* Terminauswahl */}
           <Panel className="xl:col-span-2">
             <PanelHeader>
@@ -349,9 +359,12 @@ export function RoutesShell({
             </PanelHeader>
             <PanelBody className="max-h-[420px] space-y-1.5 overflow-y-auto p-3">
               {!data ? (
-                <div className="flex h-24 items-center justify-center">
-                  <Spinner />
-                </div>
+                <EmptyState
+                  className="border-0"
+                  icon={<Car />}
+                  title="Keine Routendaten"
+                  description="Die Planungsdaten konnten nicht geladen werden."
+                />
               ) : allCandidates.length === 0 ? (
                 <EmptyState
                   className="border-0"
@@ -427,7 +440,8 @@ export function RoutesShell({
               </div>
             </PanelBody>
           </Panel>
-        </div>
+          </div>
+        )}
 
         {/* Ergebnis */}
         {route ? (

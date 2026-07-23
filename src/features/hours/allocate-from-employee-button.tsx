@@ -4,10 +4,10 @@ import { Clock } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DialogDataSkeleton } from '@/components/layout/page-loading-skeleton';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/input';
-import { Spinner } from '@/components/ui/misc';
 import {
   Select,
   SelectContent,
@@ -63,9 +63,7 @@ export function AllocateFromEmployeeButton({ employeeId }: { employeeId: string 
           description="Aus welchem Kundenbudget sollen Stunden übertragen werden?"
         >
           {customers === null ? (
-            <div className="flex h-24 items-center justify-center">
-              <Spinner />
-            </div>
+            <DialogDataSkeleton />
           ) : customers.length === 0 ? (
             <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
               Keine Kunden mit Stundenbudget im aktuellen Monat gefunden.

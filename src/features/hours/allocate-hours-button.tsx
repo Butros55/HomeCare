@@ -5,10 +5,10 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { DialogDataSkeleton } from '@/components/layout/page-loading-skeleton';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
 import { FieldError, FieldHint, Input, Label, Textarea } from '@/components/ui/input';
-import { Spinner } from '@/components/ui/misc';
 import {
   Select,
   SelectContent,
@@ -146,9 +146,7 @@ export function AllocateHoursDialog({
         wide
       >
         {loading || !context ? (
-          <div className="flex h-40 items-center justify-center">
-            <Spinner />
-          </div>
+          <DialogDataSkeleton />
         ) : context.budgets.length === 0 ? (
           <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
             Für diesen Kunden gibt es noch kein Stundenbudget im aktuellen Zeitraum. Lege zuerst

@@ -12,6 +12,7 @@
 import { addMonths, startOfMonth } from 'date-fns';
 import * as React from 'react';
 
+import { CalendarSurfaceSkeleton } from '@/components/layout/page-loading-skeleton';
 import type { CalendarEventDto } from '@/server/services/calendar-service';
 import { AppointmentDrawer } from '@/features/calendar/appointment-drawer';
 import { AppointmentFormDialog } from '@/features/calendar/appointment-form-dialog';
@@ -49,6 +50,7 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
   const [month, setMonth] = React.useState(() => startOfMonth(today));
 
   const [events, setEvents] = React.useState<CalendarEventDto[]>([]);
+  const [eventsLoading, setEventsLoading] = React.useState(true);
   const loadedRangeRef = React.useRef<{ start: Date; end: Date } | null>(null);
   const [reloadToken, setReloadToken] = React.useState(0);
 
@@ -83,6 +85,7 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
     if (covered) return;
 
     let cancelled = false;
+    setEventsLoading(true);
     const params = new URLSearchParams({
       start: desiredStart.toISOString(),
       end: desiredEnd.toISOString(),
@@ -96,6 +99,9 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
       })
       .catch(() => {
         if (!cancelled) setEvents((current) => current);
+      })
+      .finally(() => {
+        if (!cancelled) setEventsLoading(false);
       });
     return () => {
       cancelled = true;
@@ -191,20 +197,24 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col">
-      <ProMonthCalendar
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
-        selectedKey={selectedKey}
-        onSelectedKeyChange={setSelectedKey}
-        onMonthChange={setMonth}
-        eventsByDay={eventsByDay}
-        conflictDays={conflictDays}
-        today={today}
-        onOpenEvent={openEvent}
-        onOpenPanel={openPanel}
-        onCreate={startCreate}
-        sidePanel={sidePanel}
-      />
+      {eventsLoading ? (
+        <CalendarSurfaceSkeleton />
+      ) : (
+        <ProMonthCalendar
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+          selectedKey={selectedKey}
+          onSelectedKeyChange={setSelectedKey}
+          onMonthChange={setMonth}
+          eventsByDay={eventsByDay}
+          conflictDays={conflictDays}
+          today={today}
+          onOpenEvent={openEvent}
+          onOpenPanel={openPanel}
+          onCreate={startCreate}
+          sidePanel={sidePanel}
+        />
+      )}
 
       {createOpen ? (
         <AppointmentFormDialog

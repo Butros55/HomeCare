@@ -3,6 +3,8 @@
 import { CloudOff, MapPin, Phone, RefreshCcw } from 'lucide-react';
 import * as React from 'react';
 
+import { DataRowsSkeleton } from '@/components/layout/page-loading-skeleton';
+import { Skeleton } from '@/components/ui/misc';
 import { Button } from '@/components/ui/button';
 import { Panel, PanelBody, PanelHeader, PanelTitle } from '@/components/ui/panel';
 
@@ -75,7 +77,14 @@ export function OfflineToday() {
       </div>
 
       {state === 'loading' ? (
-        <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">Lade Cache…</p>
+        <Panel className="overflow-hidden" role="status" aria-busy="true">
+          <span className="sr-only">Gespeicherte Termine werden geladen</span>
+          <PanelHeader>
+            <Skeleton className="h-4 w-36 rounded-full" />
+            <Skeleton className="h-3 w-20 rounded-full" />
+          </PanelHeader>
+          <DataRowsSkeleton rows={4} />
+        </Panel>
       ) : null}
 
       {state === 'empty' ? (

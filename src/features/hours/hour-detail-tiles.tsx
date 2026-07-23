@@ -4,8 +4,8 @@ import { ArrowRight, CalendarDays, CheckCircle2, Clock, Users } from 'lucide-rea
 import Link from 'next/link';
 import * as React from 'react';
 
+import { DialogDataSkeleton } from '@/components/layout/page-loading-skeleton';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
-import { Spinner } from '@/components/ui/misc';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinutesAsHours } from '@/lib/duration';
 import { APPOINTMENT_STATUS, statusOf } from '@/lib/status-maps';
@@ -270,9 +270,7 @@ export function CustomerHourTiles({
           {error ? (
             <p className="py-6 text-center text-[length:var(--text-sm)] text-[var(--color-danger)]">{error}</p>
           ) : !detail || !metric ? (
-            <div className="flex justify-center py-8">
-              <Spinner />
-            </div>
+            <DialogDataSkeleton />
           ) : (
             <div className="max-h-[55dvh] space-y-3 overflow-y-auto pr-1">
               <CustomerMetricDetail metric={metric} detail={detail} stats={stats} />
@@ -563,9 +561,7 @@ export function EmployeeHourTiles({
           {error ? (
             <p className="py-6 text-center text-[length:var(--text-sm)] text-[var(--color-danger)]">{error}</p>
           ) : !detail || !metric ? (
-            <div className="flex justify-center py-8">
-              <Spinner />
-            </div>
+            <DialogDataSkeleton />
           ) : (
             <div className="max-h-[55dvh] space-y-3 overflow-y-auto pr-1">
               <EmployeeMetricDetail metric={metric} detail={detail} stats={stats} />
