@@ -46,17 +46,27 @@ export function CommandPalette({
   const [results, setResults] = React.useState<SearchResultItem[]>([]);
   const [searching, setSearching] = React.useState(false);
 
-  // Ctrl/Cmd+K öffnet die Palette.
+  // Schließen setzt die lokale Suche zurück – sonst zeigt die nächste Öffnung
+  // alte Treffer. Kein Effekt nötig: alle Schließpfade laufen hier zusammen.
+  const close = React.useCallback(() => {
+    setQuery('');
+    setResults([]);
+    setSearching(false);
+    onOpenChange(false);
+  }, [onOpenChange]);
+
+  // Ctrl/Cmd+K öffnet bzw. schließt die Palette.
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
-        onOpenChange(!open);
+        if (open) close();
+        else onOpenChange(true);
       }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [open, onOpenChange]);
+  }, [open, onOpenChange, close]);
 
   // Debounced Suche – State-Änderungen nur im asynchronen Callback.
   React.useEffect(() => {
@@ -89,20 +99,11 @@ export function CommandPalette({
 
   const go = React.useCallback(
     (href: string) => {
-      onOpenChange(false);
+      close();
       router.push(href);
     },
-    [onOpenChange, router],
+    [close, router],
   );
-
-  // Beim Schließen zurücksetzen – sonst zeigt die nächste Öffnung alte Treffer.
-  React.useEffect(() => {
-    if (!open) {
-      setQuery('');
-      setResults([]);
-      setSearching(false);
-    }
-  }, [open]);
 
   if (!open) return null;
 
@@ -114,7 +115,7 @@ export function CommandPalette({
     ? [
         { label: 'Neuen Kunden anlegen', href: '/customers/new', icon: UserPlus },
         { label: 'Neuen Termin anlegen', href: '/calendar?neu=1', icon: CalendarPlus },
-        { label: 'Stunden verteilen', href: '/customers?stunden=1', icon: Clock },
+        { label: 'Stunden verteilen', href: '/customers?openHours=1', icon: Clock },
       ]
     : [];
 
@@ -147,11 +148,17 @@ export function CommandPalette({
         type="button"
         aria-label="Suche schließen"
         className="animate-overlay-in absolute inset-0 bg-black/30 backdrop-blur-sm"
-        onClick={() => onOpenChange(false)}
+        onClick={close}
       />
       <div className="animate-pop-in absolute inset-x-3 top-[10dvh] mx-auto max-w-xl">
         <Command
           shouldFilter={false}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              close();
+            }
+          }}
           className="overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-line-subtle)] bg-[var(--color-panel)] shadow-[var(--shadow-popover)]"
         >
           <div className="flex items-center gap-2.5 border-b border-[var(--color-line-subtle)] px-4">

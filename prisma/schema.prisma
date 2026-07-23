@@ -160,6 +160,10 @@ model Organization {
   defaultEndLocation   Json?
   /// Org-Einstellungen (Aufbewahrungsfristen etc.), zod-validiert in src/server/validation
   settings             Json?
+  /// Standard-Berechtigungen für neue Leitungs-Konten (Permission-Strings); null = Rollen-Standard
+  defaultLeadershipPermissions Json?
+  /// Standard-Berechtigungen für neue Mitarbeiter-Konten (Permission-Strings); null = Rollen-Standard
+  defaultEmployeePermissions   Json?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
@@ -253,6 +257,9 @@ model OrganizationMembership {
   user            User             @relation("MembershipUser", fields: [userId], references: [id], onDelete: Cascade)
   role            MembershipRole
   status          MembershipStatus @default(ACTIVE)
+  /// Individuelle Berechtigungen (Permission-Strings); null = Rollen-Standard.
+  /// Der Inhaber (ORGANIZATION_OWNER) hat unabhängig davon immer Vollzugriff.
+  permissions     Json?
   invitedByUserId String?
   invitedBy       User?            @relation("MembershipInviter", fields: [invitedByUserId], references: [id], onDelete: SetNull)
   joinedAt        DateTime         @default(now())

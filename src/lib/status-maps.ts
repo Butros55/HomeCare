@@ -75,10 +75,10 @@ export const ROUTE_PLAN_STATUS: Record<string, { label: string; tone: StatusTone
 };
 
 export const MEMBERSHIP_ROLE_LABELS: Record<string, string> = {
-  ORGANIZATION_OWNER: 'Inhaber',
-  ADMIN: 'Administrator',
-  DISPATCHER: 'Disponent',
-  TEAM_MANAGER: 'Team-Manager',
+  ORGANIZATION_OWNER: 'Admin (Inhaber)',
+  ADMIN: 'Leitung',
+  DISPATCHER: 'Leitung (Disposition)',
+  TEAM_MANAGER: 'Leitung (Team)',
   EMPLOYEE: 'Mitarbeiter',
 };
 

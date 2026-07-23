@@ -28,7 +28,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { StatusPill } from '@/components/ui/status-pill';
-import { formatDateTime, formatTime } from '@/lib/dates';
+import { formatDateTime, formatTime, toDateInputValue } from '@/lib/dates';
 import { formatMinutesVerbose } from '@/lib/duration';
 import { googleMapsDirectionsUrl } from '@/lib/geo';
 import { describeRecurrenceRule } from '@/lib/recurrence';
@@ -164,7 +164,9 @@ export function AppointmentDrawer({
           title: detail.title,
           description: detail.description ?? '',
           assignedEmployeeId: detail.employee?.id ?? '',
-          date: detail.startAt.slice(0, 10),
+          // Datum in derselben Zeitzone wie die Uhrzeit ableiten – der rohe
+          // UTC-Slice wäre für Termine kurz nach Mitternacht der Vortag.
+          date: toDateInputValue(new Date(detail.startAt)),
           startTime: formatTime(new Date(detail.startAt)),
           durationMinutes: detail.durationMinutes,
           status: (['DRAFT', 'PLANNED', 'CONFIRMED'].includes(detail.status)

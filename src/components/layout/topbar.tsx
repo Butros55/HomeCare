@@ -109,7 +109,7 @@ export function Topbar({
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
-              <Link href="/customers?stunden=1">
+              <Link href="/customers?openHours=1">
                 <Clock aria-hidden /> Stunden verteilen
               </Link>
             </DropdownMenuItem>

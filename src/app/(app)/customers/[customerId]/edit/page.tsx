@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 
 import { PageHeader } from '@/components/layout/page-header';
+import { employeeDisplayName } from '@/lib/utils';
 import { db } from '@/server/db';
 import { assertSameOrg, hasPermission, requirePermission } from '@/server/permissions';
 import { CustomerForm } from '@/features/customers/customer-form';
@@ -25,7 +26,7 @@ export default async function EditCustomerPage({
 
   const employees = await db.employee.findMany({
     where: { organizationId: ctx.organization.id, deletedAt: null, status: 'ACTIVE' },
-    select: { id: true, firstName: true, lastName: true },
+    select: { id: true, firstName: true, lastName: true, userId: true },
     orderBy: [{ lastName: 'asc' }],
   });
 
@@ -74,7 +75,7 @@ export default async function EditCustomerPage({
               },
             },
           }}
-          employees={employees.map((e) => ({ id: e.id, name: `${e.firstName} ${e.lastName}` }))}
+          employees={employees.map((e) => ({ id: e.id, name: employeeDisplayName(e, ctx.user.id) }))}
           canEditPrivateNotes={hasPermission(ctx, 'customers.privateNotes')}
         />
       </div>

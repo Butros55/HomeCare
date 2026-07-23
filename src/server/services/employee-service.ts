@@ -2,9 +2,12 @@ import 'server-only';
 
 import { randomBytes } from 'node:crypto';
 
+import type { Prisma } from '@prisma/client';
+
 import { APP_NAME, APP_URL } from '@/lib/app-config';
 import { utcDate } from '@/lib/dates';
 import { wouldCreateCycle } from '@/lib/hierarchy';
+import { sanitizePermissions } from '@/lib/permission-catalog';
 import { writeAuditLog } from '@/server/audit';
 import { hashToken } from '@/server/auth/session';
 import { db } from '@/server/db';
@@ -317,6 +320,54 @@ export async function deleteAbsence(absenceId: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Leitung: eigene Zuweisbarkeit
+// ---------------------------------------------------------------------------
+
+/**
+ * Leitungs-Konten sollen selbst Termine/Routen übernehmen können ("Ich" in den
+ * Mitarbeiter-Dropdowns). Dafür braucht jedes aktive Leitungs-Mitglied ein
+ * Mitarbeiterprofil. Idempotent – ergänzt nur fehlende Profile (heilt auch
+ * Organisationen, die vor dieser Funktion angelegt wurden).
+ */
+export async function ensureLeadershipEmployeeProfiles(ctx: OrgContext): Promise<void> {
+  const leaders = await db.organizationMembership.findMany({
+    where: {
+      organizationId: ctx.organization.id,
+      status: 'ACTIVE',
+      role: { not: 'EMPLOYEE' },
+    },
+    include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } },
+  });
+  if (leaders.length === 0) return;
+
+  const existing = await db.employee.findMany({
+    where: {
+      organizationId: ctx.organization.id,
+      deletedAt: null,
+      userId: { in: leaders.map((leader) => leader.userId) },
+    },
+    select: { userId: true },
+  });
+  const linked = new Set(existing.map((employee) => employee.userId));
+
+  for (const leader of leaders) {
+    if (linked.has(leader.userId)) continue;
+    await db.employee.create({
+      data: {
+        organizationId: ctx.organization.id,
+        userId: leader.userId,
+        firstName: leader.user.firstName,
+        lastName: leader.user.lastName,
+        email: leader.user.email,
+        employmentType: 'FULL_TIME',
+        canReceiveHours: true,
+        canRecruitEmployees: leader.role === 'ORGANIZATION_OWNER' || leader.role === 'ADMIN',
+      },
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Einladungen
 // ---------------------------------------------------------------------------
 
@@ -401,6 +452,69 @@ export async function inviteEmployee(input: InviteEmployeeInput & { email: strin
   });
 }
 
+/**
+ * Leitungs-Konto einladen (Einstellungen → Leitung): Einladung mit Rolle ADMIN
+ * ohne vorab angelegtes Mitarbeiterprofil – das Profil entsteht bei der
+ * Annahme automatisch, damit die Person sofort selbst zuweisbar ist.
+ */
+export async function inviteLeadershipAccount(input: { email: string }): Promise<void> {
+  const ctx = await requirePermission('members.manage');
+
+  const existingUser = await db.user.findUnique({ where: { email: input.email } });
+  if (existingUser) {
+    const existingMembership = await db.organizationMembership.findFirst({
+      where: { userId: existingUser.id, organizationId: ctx.organization.id },
+    });
+    if (existingMembership) {
+      throw new AppError('CONFLICT', {
+        message: 'Diese E-Mail-Adresse gehört bereits zu einem Mitglied.',
+      });
+    }
+  }
+
+  const token = randomBytes(24).toString('base64url');
+  await db.$transaction(async (tx) => {
+    await tx.invitation.deleteMany({
+      where: { organizationId: ctx.organization.id, email: input.email, acceptedAt: null },
+    });
+    await tx.invitation.create({
+      data: {
+        organizationId: ctx.organization.id,
+        email: input.email,
+        role: 'ADMIN',
+        tokenHash: hashToken(token),
+        invitedByUserId: ctx.user.id,
+        expiresAt: new Date(Date.now() + INVITATION_LIFETIME_MS),
+      },
+    });
+    await writeAuditLog(
+      {
+        organizationId: ctx.organization.id,
+        actorUserId: ctx.user.id,
+        action: 'member.invited',
+        entityType: 'Organization',
+        entityId: ctx.organization.id,
+        metadata: { role: 'ADMIN', leadership: true, email: input.email },
+      },
+      tx,
+    );
+  });
+
+  const link = `${APP_URL}/invite/${token}`;
+  await sendMail({
+    to: input.email,
+    subject: `${APP_NAME}: Einladung in die Leitung von ${ctx.organization.name}`,
+    text: [
+      'Hallo,',
+      '',
+      `${ctx.user.firstName} ${ctx.user.lastName} lädt dich in die Leitung von "${ctx.organization.name}" ein.`,
+      'Über den folgenden Link legst du dein Konto an (7 Tage gültig):',
+      '',
+      link,
+    ].join('\n'),
+  });
+}
+
 /** Einladung einlösen: Benutzer anlegen, Mitgliedschaft aktivieren, Profil verknüpfen. */
 export async function acceptInvitation(input: {
   token: string;
@@ -416,6 +530,37 @@ export async function acceptInvitation(input: {
     throw new AppError('INVITATION_INVALID');
   }
 
+  // Standard-Berechtigungen der Organisation für die jeweilige Konto-Art.
+  const defaultPermissions =
+    invitation.role === 'EMPLOYEE'
+      ? sanitizePermissions(invitation.organization.defaultEmployeePermissions)
+      : sanitizePermissions(invitation.organization.defaultLeadershipPermissions);
+
+  /** Leitungs-Konten ohne verknüpftes Profil werden selbst zuweisbar. */
+  const ensureLeaderProfile = async (
+    tx: Prisma.TransactionClient,
+    user: { id: string; firstName: string; lastName: string; email: string },
+  ) => {
+    if (invitation.role === 'EMPLOYEE' || invitation.employeeId) return;
+    const profile = await tx.employee.findFirst({
+      where: { organizationId: invitation.organizationId, userId: user.id, deletedAt: null },
+      select: { id: true },
+    });
+    if (profile) return;
+    await tx.employee.create({
+      data: {
+        organizationId: invitation.organizationId,
+        userId: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        employmentType: 'FULL_TIME',
+        canReceiveHours: true,
+        canRecruitEmployees: invitation.role === 'ADMIN',
+      },
+    });
+  };
+
   const existingUser = await db.user.findUnique({ where: { email: invitation.email } });
   if (existingUser) {
     // Bestehender Benutzer (andere Organisation): nur Mitgliedschaft ergänzen.
@@ -426,6 +571,7 @@ export async function acceptInvitation(input: {
           userId: existingUser.id,
           role: invitation.role,
           status: 'ACTIVE',
+          permissions: defaultPermissions ?? undefined,
           invitedByUserId: invitation.invitedByUserId,
         },
       });
@@ -435,6 +581,7 @@ export async function acceptInvitation(input: {
           data: { userId: existingUser.id },
         });
       }
+      await ensureLeaderProfile(tx, existingUser);
       await tx.invitation.update({
         where: { id: invitation.id },
         data: { acceptedAt: new Date() },
@@ -469,6 +616,7 @@ export async function acceptInvitation(input: {
         userId: created.id,
         role: invitation.role,
         status: 'ACTIVE',
+        permissions: defaultPermissions ?? undefined,
         invitedByUserId: invitation.invitedByUserId,
       },
     });
@@ -478,6 +626,7 @@ export async function acceptInvitation(input: {
         data: { userId: created.id, firstName: input.firstName, lastName: input.lastName },
       });
     }
+    await ensureLeaderProfile(tx, created);
     await tx.invitation.update({ where: { id: invitation.id }, data: { acceptedAt: new Date() } });
     await writeAuditLog(
       {

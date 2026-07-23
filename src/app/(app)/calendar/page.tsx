@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 
+import { employeeDisplayName } from '@/lib/utils';
 import { db } from '@/server/db';
 import {
   employeeScopeFilter,
@@ -28,7 +29,7 @@ export default async function CalendarPage({
         status: 'ACTIVE',
         ...employeeScopeFilter(scope),
       },
-      select: { id: true, firstName: true, lastName: true },
+      select: { id: true, firstName: true, lastName: true, userId: true },
       orderBy: [{ lastName: 'asc' }],
     }),
     hasPermission(ctx, 'customers.read')
@@ -46,7 +47,7 @@ export default async function CalendarPage({
             deletedAt: null,
             subordinates: { some: { deletedAt: null } },
           },
-          select: { id: true, firstName: true, lastName: true },
+          select: { id: true, firstName: true, lastName: true, userId: true },
           orderBy: [{ lastName: 'asc' }],
         })
       : Promise.resolve([]),
@@ -62,9 +63,9 @@ export default async function CalendarPage({
       ownEmployeeId={ctx.employee?.id ?? null}
       initialView={preference?.calendarView ?? 'timeGridWeek'}
       initialColorBy={(preference?.calendarColorBy as 'customer' | 'employee' | 'status' | 'team') ?? 'customer'}
-      employees={employees.map((e) => ({ id: e.id, name: `${e.firstName} ${e.lastName}` }))}
+      employees={employees.map((e) => ({ id: e.id, name: employeeDisplayName(e, ctx.user.id) }))}
       customers={customers.map((c) => ({ id: c.id, name: `${c.firstName} ${c.lastName}`, color: c.color }))}
-      teamManagers={teamManagers.map((t) => ({ id: t.id, name: `${t.firstName} ${t.lastName}` }))}
+      teamManagers={teamManagers.map((t) => ({ id: t.id, name: employeeDisplayName(t, ctx.user.id) }))}
       urlParams={{
         neu: params.neu === '1',
         kunde: params.kunde,

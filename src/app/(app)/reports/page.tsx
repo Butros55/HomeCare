@@ -10,6 +10,7 @@ import { monthPeriodInZone, toDateInputValue } from '@/lib/dates';
 import { formatMinutesAsHours } from '@/lib/duration';
 import { formatDistance, formatTravelSeconds } from '@/lib/geo';
 import { APPOINTMENT_STATUS, statusOf } from '@/lib/status-maps';
+import { employeeDisplayName } from '@/lib/utils';
 import { db } from '@/server/db';
 import {
   employeeScopeFilter,
@@ -52,7 +53,7 @@ export default async function ReportsPage({
         deletedAt: null,
         ...employeeScopeFilter(scope),
       },
-      select: { id: true, firstName: true, lastName: true },
+      select: { id: true, firstName: true, lastName: true, userId: true },
       orderBy: [{ lastName: 'asc' }],
     }),
     db.customer.findMany({
@@ -68,7 +69,7 @@ export default async function ReportsPage({
         subordinates: { some: { deletedAt: null } },
         ...employeeScopeFilter(scope),
       },
-      select: { id: true, firstName: true, lastName: true },
+      select: { id: true, firstName: true, lastName: true, userId: true },
     }),
   ]);
 
@@ -94,9 +95,9 @@ export default async function ReportsPage({
           <ReportFilterBar
             defaultFrom={defaultFrom}
             defaultTo={defaultTo}
-            employees={employees.map((e) => ({ id: e.id, name: `${e.firstName} ${e.lastName}` }))}
+            employees={employees.map((e) => ({ id: e.id, name: employeeDisplayName(e, ctx.user.id) }))}
             customers={customers.map((c) => ({ id: c.id, name: `${c.firstName} ${c.lastName}` }))}
-            teamManagers={teamManagers.map((t) => ({ id: t.id, name: `${t.firstName} ${t.lastName}` }))}
+            teamManagers={teamManagers.map((t) => ({ id: t.id, name: employeeDisplayName(t, ctx.user.id) }))}
           />
         </div>
       </PageHeader>

@@ -77,16 +77,16 @@ export function InviteEmployeeDialog({
           </div>
           {allowRoleSelection ? (
             <div>
-              <Label htmlFor="invite-role">Rolle</Label>
+              <Label htmlFor="invite-role">Konto-Art</Label>
               <Select value={role} onValueChange={(v) => setRole(v as typeof role)}>
                 <SelectTrigger id="invite-role">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="EMPLOYEE">Mitarbeiter</SelectItem>
-                  <SelectItem value="TEAM_MANAGER">Team-Manager</SelectItem>
-                  <SelectItem value="DISPATCHER">Disponent</SelectItem>
-                  <SelectItem value="ADMIN">Administrator</SelectItem>
+                  <SelectItem value="TEAM_MANAGER">Leitung (Team)</SelectItem>
+                  <SelectItem value="DISPATCHER">Leitung (Disposition)</SelectItem>
+                  <SelectItem value="ADMIN">Leitung</SelectItem>
                 </SelectContent>
               </Select>
             </div>

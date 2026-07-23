@@ -12,6 +12,7 @@ import { cache } from 'react';
 
 import type { NavPermissions } from '@/components/layout/nav-items';
 import { collectSubtree } from '@/lib/hierarchy';
+import { sanitizePermissions, type Permission } from '@/lib/permission-catalog';
 import { getCurrentSession } from '@/server/auth/session';
 import { db } from '@/server/db';
 import { AppError } from '@/server/errors';
@@ -19,33 +20,13 @@ import { AppError } from '@/server/errors';
 /**
  * Serverseitige Berechtigungslogik. Jede geschützte Operation läuft über:
  *   1. requireAuthenticatedUser / requireOrgContext (Session + Mitgliedschaft)
- *   2. requirePermission (Rolle → Fähigkeit)
+ *   2. requirePermission (Rolle bzw. individuelle Berechtigungen → Fähigkeit)
  *   3. canAccessEmployee / canAccessCustomer (Datensatz-Scope)
  *   4. assertSameOrg für alle referenzierten Datensätze
  * Matrix und Begründungen: docs/permissions.md
  */
 
-export type Permission =
-  | 'customers.read'
-  | 'customers.manage'
-  | 'customers.privateNotes'
-  | 'employees.read'
-  | 'employees.manage'
-  | 'employees.invite'
-  | 'hours.allocateOrg'
-  | 'hours.allocateOwnPool'
-  | 'budgets.manage'
-  | 'appointments.viewAll'
-  | 'appointments.manage'
-  | 'timeEntries.approve'
-  | 'routes.manage'
-  | 'reports.view'
-  | 'notifications.broadcast'
-  | 'settings.manage'
-  | 'members.manage'
-  | 'organization.transferOwnership'
-  | 'audit.view'
-  | 'privacy.export';
+export type { Permission };
 
 const ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {
   ORGANIZATION_OWNER: [
@@ -194,7 +175,26 @@ export async function requireOrganizationMembership(): Promise<OrgContext> {
   return ctx;
 }
 
+/** Leitungs-Rollen dürfen verwalten; EMPLOYEE ist das reine Mitarbeiter-Konto. */
+export function isLeadershipRole(role: MembershipRole): boolean {
+  return role !== 'EMPLOYEE';
+}
+
+/** Individuelle Berechtigungen einer Mitgliedschaft (null = Rollen-Standard). */
+export function membershipPermissions(
+  membership: Pick<OrganizationMembership, 'permissions'>,
+): Permission[] | null {
+  return sanitizePermissions(membership.permissions);
+}
+
+/**
+ * Effektive Berechtigung: Der Inhaber hat immer Vollzugriff; sonst gelten die
+ * individuellen Berechtigungen der Mitgliedschaft, andernfalls der Rollen-Standard.
+ */
 export function hasPermission(ctx: OrgContext, permission: Permission): boolean {
+  if (ctx.membership.role === 'ORGANIZATION_OWNER') return true;
+  const custom = membershipPermissions(ctx.membership);
+  if (custom) return custom.includes(permission);
   return ROLE_PERMISSIONS[ctx.membership.role].includes(permission);
 }
 

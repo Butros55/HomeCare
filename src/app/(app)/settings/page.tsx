@@ -11,6 +11,7 @@ import {
   PasswordSettings,
   ProfileSettings,
 } from '@/features/settings/settings-forms';
+import { LeadershipSettings } from '@/features/settings/leadership-settings';
 import { MembersSettings } from '@/features/settings/members-settings';
 import { PrivacySettings } from '@/features/settings/privacy-settings';
 import { AuditLogView } from '@/features/settings/audit-log-view';
@@ -24,7 +25,7 @@ const BASE_TABS = [
   { key: 'benachrichtigungen', label: 'Benachrichtigungen' },
 ] as const;
 const ADMIN_TABS = [
-  { key: 'organisation', label: 'Organisation' },
+  { key: 'leitung', label: 'Leitung' },
   { key: 'mitglieder', label: 'Mitglieder' },
   { key: 'datenschutz', label: 'Datenschutz' },
   { key: 'aktivitaet', label: 'Aktivität' },
@@ -43,14 +44,18 @@ export default async function SettingsPage({
 
   const tabs = [
     ...BASE_TABS,
-    ...(canManageSettings ? ADMIN_TABS.filter((t) => t.key === 'organisation') : []),
+    ...(canManageSettings || canManageMembers
+      ? ADMIN_TABS.filter((t) => t.key === 'leitung')
+      : []),
     ...(canManageMembers ? ADMIN_TABS.filter((t) => t.key === 'mitglieder') : []),
     ...(canExport ? ADMIN_TABS.filter((t) => t.key === 'datenschutz') : []),
     ...(canViewAudit ? ADMIN_TABS.filter((t) => t.key === 'aktivitaet') : []),
   ];
 
   const { tab: rawTab } = await searchParams;
-  const tab = tabs.some((t) => t.key === rawTab) ? rawTab! : 'profil';
+  // Alte Links auf ?tab=organisation weiterhin unterstützen.
+  const normalizedTab = rawTab === 'organisation' ? 'leitung' : rawTab;
+  const tab = tabs.some((t) => t.key === normalizedTab) ? normalizedTab! : 'profil';
 
   const preference = await db.userPreference.findUnique({
     where: { userId: ctx.user.id },
@@ -110,22 +115,27 @@ export default async function SettingsPage({
             initial={(preference?.notificationPrefs as Record<string, boolean> | null) ?? {}}
           />
         ) : null}
-        {tab === 'organisation' && canManageSettings ? (
-          <OrganizationSettings
-            initial={{
-              name: ctx.organization.name,
-              timezone: ctx.organization.timezone,
-              startLocation: startLocation?.street
-                ? {
-                    label: startLocation.label ?? 'Büro',
-                    street: startLocation.street ?? '',
-                    houseNumber: startLocation.houseNumber ?? '',
-                    postalCode: startLocation.postalCode ?? '',
-                    city: startLocation.city ?? '',
-                  }
-                : null,
-            }}
-          />
+        {tab === 'leitung' ? (
+          <>
+            {canManageMembers ? <LeadershipSettings /> : null}
+            {canManageSettings ? (
+              <OrganizationSettings
+                initial={{
+                  name: ctx.organization.name,
+                  timezone: ctx.organization.timezone,
+                  startLocation: startLocation?.street
+                    ? {
+                        label: startLocation.label ?? 'Büro',
+                        street: startLocation.street ?? '',
+                        houseNumber: startLocation.houseNumber ?? '',
+                        postalCode: startLocation.postalCode ?? '',
+                        city: startLocation.city ?? '',
+                      }
+                    : null,
+                }}
+              />
+            ) : null}
+          </>
         ) : null}
         {tab === 'mitglieder' && canManageMembers ? <MembersSettings /> : null}
         {tab === 'datenschutz' && canExport ? <PrivacySettings /> : null}

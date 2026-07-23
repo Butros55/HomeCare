@@ -361,6 +361,25 @@ export function RoutesShell({
                 />
               ) : (
                 <>
+                  {data.suggestions.length > 0 ? (
+                    <div className="flex items-start gap-2 rounded-[var(--radius-md)] bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)] px-2.5 py-2 text-[length:var(--text-xs)]">
+                      <AlertTriangle
+                        className="mt-0.5 size-3.5 shrink-0 text-[var(--color-warning)]"
+                        aria-hidden
+                      />
+                      <span>
+                        {data.suggestions.length === 1
+                          ? 'Ein Termin an diesem Tag hat noch keine Zuordnung.'
+                          : `${data.suggestions.length} Termine an diesem Tag haben noch keine Zuordnung.`}{' '}
+                        <a
+                          href="/calendar?zuweisung=offen"
+                          className="font-medium text-[var(--color-brand)] hover:underline"
+                        >
+                          Im Kalender zuweisen
+                        </a>
+                      </span>
+                    </div>
+                  ) : null}
                   {data.assigned.map((candidate) => (
                     <CandidateRow
                       key={candidate.appointmentId}

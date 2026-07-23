@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/ui/panel';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Table, TableWrapper, TBody, Td, Th, THead, Tr } from '@/components/ui/table';
 import { formatDateShort, formatDateTime } from '@/lib/dates';
+import { employeeDisplayName } from '@/lib/utils';
 import { formatMinutesAsHours } from '@/lib/duration';
 import { formatLocationLine } from '@/lib/geo';
 import { CUSTOMER_STATUS, statusOf } from '@/lib/status-maps';
@@ -51,7 +52,7 @@ export default async function CustomersPage({
         status: 'ACTIVE',
         ...employeeScopeFilter(scope),
       },
-      select: { id: true, firstName: true, lastName: true },
+      select: { id: true, firstName: true, lastName: true, userId: true },
       orderBy: [{ lastName: 'asc' }],
     }),
   ]);
@@ -85,7 +86,7 @@ export default async function CustomersPage({
         <div className="mt-4">
           <CustomerFilters
             cities={cities}
-            employees={employees.map((e) => ({ id: e.id, name: `${e.firstName} ${e.lastName}` }))}
+            employees={employees.map((e) => ({ id: e.id, name: employeeDisplayName(e, ctx.user.id) }))}
             view={params.view}
           />
         </div>

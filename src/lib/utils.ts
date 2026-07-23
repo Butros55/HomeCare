@@ -6,6 +6,18 @@ export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
 }
 
+/**
+ * Anzeigename für Mitarbeiter-Auswahlfelder: Das eigene Profil (Leitung, die
+ * sich selbst zuweist) wird als „Name (Ich)“ markiert.
+ */
+export function employeeDisplayName(
+  employee: { firstName: string; lastName: string; userId?: string | null },
+  currentUserId?: string | null,
+): string {
+  const base = `${employee.firstName} ${employee.lastName}`;
+  return currentUserId && employee.userId === currentUserId ? `${base} (Ich)` : base;
+}
+
 /** Initialen aus einem Namen ("Anna Berg" → "AB"). */
 export function initialsOf(name: string | null | undefined, fallback = '··'): string {
   if (!name?.trim()) return fallback;

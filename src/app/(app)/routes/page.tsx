@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 
 import { toDateInputValue } from '@/lib/dates';
+import { employeeDisplayName } from '@/lib/utils';
 import { db } from '@/server/db';
 import {
   employeeScopeFilter,
@@ -28,7 +29,7 @@ export default async function RoutesPage({
       status: 'ACTIVE',
       ...employeeScopeFilter(scope),
     },
-    select: { id: true, firstName: true, lastName: true },
+    select: { id: true, firstName: true, lastName: true, userId: true },
     orderBy: [{ lastName: 'asc' }],
   });
 
@@ -39,7 +40,7 @@ export default async function RoutesPage({
 
   return (
     <RoutesShell
-      employees={employees.map((e) => ({ id: e.id, name: `${e.firstName} ${e.lastName}` }))}
+      employees={employees.map((e) => ({ id: e.id, name: employeeDisplayName(e, ctx.user.id) }))}
       initialEmployeeId={initialEmployeeId}
       initialDate={params.datum ?? toDateInputValue(new Date(), ctx.organization.timezone)}
       canManage={hasPermission(ctx, 'routes.manage')}

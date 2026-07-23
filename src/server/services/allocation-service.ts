@@ -2,6 +2,7 @@ import 'server-only';
 
 import { monthPeriodInZone } from '@/lib/dates';
 import { collectSubtree, managerChain } from '@/lib/hierarchy';
+import { employeeDisplayName } from '@/lib/utils';
 import {
   getEmployeeAllocatedMinutes,
   getEmployeeMissingTargetMinutes,
@@ -112,6 +113,7 @@ export async function getAllocationContext(customerId: string): Promise<Allocati
       id: true,
       firstName: true,
       lastName: true,
+      userId: true,
       status: true,
       canReceiveHours: true,
       managerEmployeeId: true,
@@ -148,7 +150,8 @@ export async function getAllocationContext(customerId: string): Promise<Allocati
       const received = getEmployeeAllocatedMinutes(monthAllocations, id);
       return {
         id,
-        name: `${employee.firstName} ${employee.lastName}`,
+        // Eigenes Profil markieren – die Leitung kann sich selbst Stunden zuweisen.
+        name: employeeDisplayName(employee, ctx.user.id),
         depth: managerChain(nodes, id).length,
         targetMonthMinutes: target,
         receivedMonthMinutes: received,

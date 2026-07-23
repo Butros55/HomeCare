@@ -52,13 +52,13 @@ export function MemberRowControls({
         }}
         disabled={pending}
       >
-        <SelectTrigger className="h-8 w-40" aria-label="Rolle ändern">
+        <SelectTrigger className="h-8 w-44" aria-label="Konto-Art ändern">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="ADMIN">Administrator</SelectItem>
-          <SelectItem value="DISPATCHER">Disponent</SelectItem>
-          <SelectItem value="TEAM_MANAGER">Team-Manager</SelectItem>
+          <SelectItem value="ADMIN">Leitung</SelectItem>
+          <SelectItem value="DISPATCHER">Leitung (Disposition)</SelectItem>
+          <SelectItem value="TEAM_MANAGER">Leitung (Team)</SelectItem>
           <SelectItem value="EMPLOYEE">Mitarbeiter</SelectItem>
         </SelectContent>
       </Select>
