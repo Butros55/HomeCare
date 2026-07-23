@@ -336,7 +336,10 @@ export function TourProvider({
     const el = popRef.current;
     if (!el) return;
     const measureHeight = () => {
-      const h = el.getBoundingClientRect().height;
+      // offsetHeight statt getBoundingClientRect: ignoriert die Scale-Animation
+      // beim Einblenden – sonst wird zu klein gemessen und das Popover ragt
+      // unten aus dem Viewport (abgeschnittener „Weiter“-Button).
+      const h = el.offsetHeight;
       setPopH((current) => (h > 0 && Math.abs(h - current) > 2 ? h : current));
     };
     const raf = window.requestAnimationFrame(measureHeight);
@@ -515,26 +518,7 @@ export function TourProvider({
                   className="pointer-events-auto absolute z-10 outline-none"
                   style={{ width: Math.min(POPOVER_WIDTH, window.innerWidth - 24) }}
                 >
-                  <div className="relative max-h-[calc(100dvh-24px)] overflow-y-auto rounded-[var(--radius-xl)] border border-[var(--color-line-subtle)] bg-[var(--color-panel)] p-4 shadow-[var(--shadow-popover)]">
-                    {/* Pfeil (entfällt bei zentrierter Platzierung über großen Zielen) */}
-                    {spot && pop.placement !== 'center' && pop.arrowOffset >= 0 ? (
-                      <span
-                        aria-hidden
-                        className={cn(
-                          'absolute size-3 rotate-45 border-[var(--color-line-subtle)] bg-[var(--color-panel)]',
-                          pop.placement === 'bottom' && '-top-1.5 border-t border-l',
-                          pop.placement === 'top' && '-bottom-1.5 border-b border-r',
-                          pop.placement === 'right' && '-left-1.5 border-b border-l',
-                          pop.placement === 'left' && '-right-1.5 border-t border-r',
-                        )}
-                        style={
-                          pop.placement === 'bottom' || pop.placement === 'top'
-                            ? { left: pop.arrowOffset - 6 }
-                            : { top: pop.arrowOffset - 6 }
-                        }
-                      />
-                    ) : null}
-
+                  <div className="relative rounded-[var(--radius-xl)] border border-[var(--color-line-subtle)] bg-[var(--color-panel)] p-4 shadow-[var(--shadow-popover)]">
                     <p className="text-[length:var(--text-2xs)] font-semibold tracking-wider text-[var(--color-brand)] uppercase">
                       Schritt {stepNumber} von {stepCount}
                     </p>
@@ -555,9 +539,12 @@ export function TourProvider({
                       </p>
                     ) : null}
 
-                    <div className="mt-4 flex items-center gap-2">
+                    {/* flex-wrap + min-w-0: die Zeile darf NIE über die Karte
+                        hinauslaufen – wird es eng (Touch-Größen, viele Punkte),
+                        brechen die Buttons in eine zweite Zeile um. */}
+                    <div className="mt-4 flex flex-wrap items-center justify-end gap-x-2 gap-y-2">
                       {/* Fortschrittspunkte */}
-                      <div className="flex flex-1 items-center gap-1">
+                      <div className="mr-auto flex min-w-0 flex-wrap items-center gap-1">
                         {Array.from({ length: stepCount }, (_, index) => (
                           <span
                             key={index}
@@ -573,7 +560,7 @@ export function TourProvider({
                       <button
                         type="button"
                         onClick={() => endTour('SKIPPED')}
-                        className="rounded-full px-2.5 py-1.5 text-[length:var(--text-xs)] font-medium text-[var(--color-ink-subtle)] transition-colors hover:text-[var(--color-ink)]"
+                        className="shrink-0 rounded-full px-2 py-1.5 text-[length:var(--text-xs)] font-medium whitespace-nowrap text-[var(--color-ink-subtle)] transition-colors hover:text-[var(--color-ink)]"
                       >
                         Überspringen
                       </button>
@@ -583,7 +570,7 @@ export function TourProvider({
                             <button
                               type="button"
                               onClick={() => goToStep(active!.stepIndex - 1)}
-                              className="rounded-full border border-[var(--color-line)] px-3 py-1.5 text-[length:var(--text-xs)] font-medium text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-panel-raised)]"
+                              className="shrink-0 rounded-full border border-[var(--color-line)] px-3 py-1.5 text-[length:var(--text-xs)] font-medium whitespace-nowrap text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-panel-raised)]"
                             >
                               Zurück
                             </button>
@@ -591,7 +578,7 @@ export function TourProvider({
                           <button
                             type="button"
                             onClick={() => goToStep(active!.stepIndex + 1)}
-                            className="rounded-full bg-[var(--color-brand)] px-3.5 py-1.5 text-[length:var(--text-xs)] font-semibold text-white shadow-[0_4px_12px_var(--color-brand-ring)] transition-colors hover:bg-[var(--color-brand-hover)]"
+                            className="shrink-0 rounded-full bg-[var(--color-brand)] px-3.5 py-1.5 text-[length:var(--text-xs)] font-semibold whitespace-nowrap text-white shadow-[0_4px_12px_var(--color-brand-ring)] transition-colors hover:bg-[var(--color-brand-hover)]"
                           >
                             {stepNumber === stepCount ? 'Fertig' : 'Weiter'}
                           </button>
@@ -599,6 +586,27 @@ export function TourProvider({
                       ) : null}
                     </div>
                   </div>
+
+                  {/* Pfeil – bewusst AUSSERHALB der Karte (Geschwister-Element),
+                      damit sein Überstand nie Scroll-Overflow in der Karte
+                      erzeugt. Entfällt bei zentrierter Platzierung. */}
+                  {spot && pop.placement !== 'center' && pop.arrowOffset >= 0 ? (
+                    <span
+                      aria-hidden
+                      className={cn(
+                        'absolute size-3 rotate-45 border-[var(--color-line-subtle)] bg-[var(--color-panel)]',
+                        pop.placement === 'bottom' && '-top-1.5 border-t border-l',
+                        pop.placement === 'top' && '-bottom-1.5 border-b border-r',
+                        pop.placement === 'right' && '-left-1.5 border-b border-l',
+                        pop.placement === 'left' && '-right-1.5 border-t border-r',
+                      )}
+                      style={
+                        pop.placement === 'bottom' || pop.placement === 'top'
+                          ? { left: pop.arrowOffset - 6 }
+                          : { top: pop.arrowOffset - 6 }
+                      }
+                    />
+                  ) : null}
                 </motion.div>
               ) : null}
             </AnimatePresence>
