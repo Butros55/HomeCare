@@ -219,7 +219,15 @@ export function AppointmentDrawer({
           : 'Keine Termine mussten verschoben werden.',
       );
       setResolution(null);
-      refresh();
+      load();
+      loadConflicts();
+      if (appliedCount > 0) {
+        // Die Auflösung verschiebt mehrere (fremde) Termine → kompletter Refetch.
+        if (onChanged) onChanged();
+        else router.refresh();
+      } else {
+        updateCalendar([appointmentId]);
+      }
     });
   };
 
