@@ -13,6 +13,7 @@ import { employeeDisplayName } from '@/lib/utils';
 import { formatMinutesAsHours } from '@/lib/duration';
 import { formatLocationLine } from '@/lib/geo';
 import { CUSTOMER_STATUS, statusOf } from '@/lib/status-maps';
+import { CustomerCsvActions } from '@/features/customers/customer-csv';
 import { db } from '@/server/db';
 import { employeeScopeFilter, getManagedEmployeeIds, requirePermission } from '@/server/permissions';
 import { listCustomerCities, listCustomers } from '@/server/services/customer-service';
@@ -74,13 +75,16 @@ export default async function CustomersPage({
         title="Kunden"
         description={`${result.total} ${result.total === 1 ? 'Kunde' : 'Kunden'} · Stundenwerte für den aktuellen Monat`}
         actions={
-          result.canManage ? (
-            <Button asChild variant="primary" data-tour="customers-create-button">
-              <Link href="/customers/new">
-                <Plus aria-hidden /> Kunde anlegen
-              </Link>
-            </Button>
-          ) : undefined
+          <>
+            <CustomerCsvActions canManage={result.canManage} />
+            {result.canManage ? (
+              <Button asChild variant="primary" data-tour="customers-create-button">
+                <Link href="/customers/new">
+                  <Plus aria-hidden /> Kunde anlegen
+                </Link>
+              </Button>
+            ) : null}
+          </>
         }
       >
         <div className="mt-4" data-tour="customers-filters">
