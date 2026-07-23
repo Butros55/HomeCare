@@ -1,10 +1,9 @@
 'use client';
 
+import { CalendarRange } from 'lucide-react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
-import { Input, Label } from '@/components/ui/input';
-
-/** Schlanker Zeitraumfilter für die persönliche Solo-/Kompakt-Auswertung. */
+/** Kompakter Zeitraumfilter (eine Zeile) für die persönliche Auswertung. */
 export function ReportPeriodFilter({
   defaultFrom,
   defaultTo,
@@ -26,29 +25,23 @@ export function ReportPeriodFilter({
   };
 
   return (
-    <div className="flex flex-wrap items-end gap-2">
-      <div>
-        <Label htmlFor="rpf-from">Von</Label>
-        <Input
-          id="rpf-from"
-          type="date"
-          defaultValue={searchParams.get('from') ?? defaultFrom}
-          onChange={(event) =>
-            setParam('from', event.target.value || null)
-          }
-          className="w-36"
-        />
-      </div>
-      <div>
-        <Label htmlFor="rpf-to">Bis</Label>
-        <Input
-          id="rpf-to"
-          type="date"
-          defaultValue={searchParams.get('to') ?? defaultTo}
-          onChange={(event) => setParam('to', event.target.value || null)}
-          className="w-36"
-        />
-      </div>
+    <div className="flex items-center gap-1.5 rounded-[var(--radius-lg)] border border-[var(--color-line)] bg-[var(--color-panel)] px-2.5 py-1.5 shadow-[var(--shadow-panel)]">
+      <CalendarRange className="size-4 shrink-0 text-[var(--color-ink-subtle)]" aria-hidden />
+      <input
+        aria-label="Zeitraum von"
+        type="date"
+        defaultValue={searchParams.get('from') ?? defaultFrom}
+        onChange={(event) => setParam('from', event.target.value || null)}
+        className="w-[7.5rem] bg-transparent text-[length:var(--text-sm)] text-[var(--color-ink)] outline-none [color-scheme:light] dark:[color-scheme:dark]"
+      />
+      <span className="text-[var(--color-ink-subtle)]">–</span>
+      <input
+        aria-label="Zeitraum bis"
+        type="date"
+        defaultValue={searchParams.get('to') ?? defaultTo}
+        onChange={(event) => setParam('to', event.target.value || null)}
+        className="w-[7.5rem] bg-transparent text-[length:var(--text-sm)] text-[var(--color-ink)] outline-none [color-scheme:light] dark:[color-scheme:dark]"
+      />
     </div>
   );
 }

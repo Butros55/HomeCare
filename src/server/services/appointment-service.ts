@@ -623,6 +623,8 @@ export interface UpdateAppointmentInput {
   latestTime?: string | null;
   routeRelevant?: boolean;
   internalNotes?: string | null;
+  /** Nur bei scope 'all': geänderter Wiederholungs-Rhythmus der Serie. */
+  recurrence?: RecurrenceOptions | null;
 }
 
 export type EditScope = 'single' | 'following' | 'all';
@@ -785,6 +787,15 @@ export async function updateAppointment(
         ? toUtcDateOnly(new Date())
         : (appointment.occurrenceDate ?? toUtcDateOnly(appointment.startAt));
 
+    // Rhythmus bei „Ganze Serie“ und „Dieser und folgende“ änderbar (beide
+    // planen künftige Termine); rebuild der RRULE ab dem Serienstart.
+    const recurrenceRule = input.recurrence
+      ? buildRecurrenceRule(input.recurrence, series.startDate)
+      : series.recurrenceRule;
+    const recurrenceEndDate = input.recurrence
+      ? (input.recurrence.endDate ?? null)
+      : series.endDate;
+
     await db.$transaction(async (tx) => {
       await tx.appointmentSeries.update({
         where: { id: series.id },
@@ -794,6 +805,8 @@ export async function updateAppointment(
           defaultEmployeeId: assignedEmployeeId,
           defaultStartTime: startTime,
           defaultDurationMinutes: durationMinutes,
+          recurrenceRule,
+          endDate: recurrenceEndDate,
           materializedUntil: null,
         },
       });

@@ -79,6 +79,54 @@ export function parseRecurrenceRule(rule: string, startDate: Date): RRule {
   return new RRule(options);
 }
 
+export interface ParsedRecurrenceForm {
+  frequency: RecurrenceFrequency;
+  /** ISO-Wochentage 1=Mo…7=So (nur WEEKLY/BIWEEKLY). */
+  weekdays: number[];
+  endMode: 'never' | 'date' | 'count';
+  endDate: string | null; // YYYY-MM-DD
+  count: number | null;
+}
+
+/**
+ * Zerlegt einen gespeicherten RRULE-String zurück in Formularwerte, damit die
+ * Serie beim Bearbeiten mit ihren aktuellen Werten vorbelegt werden kann.
+ * Gibt null zurück, wenn die Regel nicht editierbar interpretiert werden kann.
+ */
+export function parseRuleToForm(rule: string): ParsedRecurrenceForm | null {
+  let parsed: ReturnType<typeof RRule.parseString>;
+  try {
+    parsed = RRule.parseString(rule);
+  } catch {
+    return null;
+  }
+  const interval = parsed.interval ?? 1;
+  let frequency: RecurrenceFrequency;
+  if (parsed.freq === RRule.DAILY) frequency = 'DAILY';
+  else if (parsed.freq === RRule.WEEKLY) frequency = interval === 2 ? 'BIWEEKLY' : 'WEEKLY';
+  else if (parsed.freq === RRule.MONTHLY) frequency = parsed.bymonthday ? 'MONTHLY_DATE' : 'MONTHLY_WEEKDAY';
+  else return null;
+
+  const weekdays = Array.isArray(parsed.byweekday)
+    ? parsed.byweekday
+        .map((d) => (typeof d === 'number' ? d : (d as Weekday).weekday) + 1) // rrule 0=MO → ISO 1=Mo
+        .sort((a, b) => a - b)
+    : [];
+
+  let endMode: 'never' | 'date' | 'count' = 'never';
+  let endDate: string | null = null;
+  let count: number | null = null;
+  if (parsed.count) {
+    endMode = 'count';
+    count = parsed.count;
+  } else if (parsed.until) {
+    endMode = 'date';
+    const u = parsed.until;
+    endDate = `${u.getUTCFullYear()}-${String(u.getUTCMonth() + 1).padStart(2, '0')}-${String(u.getUTCDate()).padStart(2, '0')}`;
+  }
+  return { frequency, weekdays, endMode, endDate, count };
+}
+
 export function isValidRecurrenceRule(rule: string): boolean {
   try {
     const parsed = RRule.parseString(rule);

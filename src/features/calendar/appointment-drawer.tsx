@@ -10,6 +10,7 @@ import {
   Pencil,
   Phone,
   Repeat,
+  Sparkles,
   X,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -33,7 +34,7 @@ import { QuickCompleteButton } from '@/features/appointments/quick-complete-butt
 import { formatDateTime, formatTime, toDateInputValue } from '@/lib/dates';
 import { formatMinutesVerbose } from '@/lib/duration';
 import { googleMapsDirectionsUrl } from '@/lib/geo';
-import { describeRecurrenceRule } from '@/lib/recurrence';
+import { describeRecurrenceRule, parseRuleToForm } from '@/lib/recurrence';
 import {
   APPOINTMENT_STATUS,
   ASSIGNMENT_STATUS,
@@ -50,6 +51,11 @@ import {
   respondToAssignmentAction,
   updateAppointmentStatusAction,
 } from '@/server/actions/appointment-actions';
+import {
+  applyResolutionForAppointmentAction,
+  getAppointmentConflictsAction,
+  suggestResolutionForAppointmentAction,
+} from '@/server/actions/conflict-actions';
 import {
   AppointmentFormDialog,
   type AppointmentEditTarget,
@@ -104,6 +110,25 @@ export function AppointmentDrawer({
     employeeId: string | null;
     conflicts: { message: string }[];
   } | null>(null);
+  const [conflictInfo, setConflictInfo] = React.useState<{
+    conflicts: { type: string; severity: string; message: string }[];
+    canResolve: boolean;
+  } | null>(null);
+  const [resolution, setResolution] = React.useState<
+    | Extract<
+        Awaited<ReturnType<typeof suggestResolutionForAppointmentAction>>,
+        { ok: true }
+      >['data']
+    | null
+  >(null);
+  const [resolving, setResolving] = React.useState(false);
+
+  const loadConflicts = React.useCallback(() => {
+    getAppointmentConflictsAction(appointmentId).then((result) => {
+      if (result.ok) setConflictInfo(result.data);
+      else setConflictInfo(null);
+    });
+  }, [appointmentId]);
 
   const load = React.useCallback(() => {
     getAppointmentDetailAction(appointmentId).then((result) => {
@@ -117,7 +142,8 @@ export function AppointmentDrawer({
 
   React.useEffect(() => {
     load();
-  }, [load]);
+    loadConflicts();
+  }, [load, loadConflicts]);
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -129,7 +155,39 @@ export function AppointmentDrawer({
 
   const refresh = () => {
     load();
+    loadConflicts();
     router.refresh();
+  };
+
+  const requestResolution = () => {
+    setResolving(true);
+    suggestResolutionForAppointmentAction(appointmentId).then((result) => {
+      setResolving(false);
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+      setResolution(result.data);
+    });
+  };
+
+  const applyResolution = () => {
+    setResolving(true);
+    applyResolutionForAppointmentAction(appointmentId).then((result) => {
+      setResolving(false);
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+      const { appliedCount, unresolvedCount } = result.data;
+      toast.success(
+        appliedCount > 0
+          ? `${appliedCount} Termin${appliedCount === 1 ? '' : 'e'} umgeplant.${unresolvedCount > 0 ? ` ${unresolvedCount} bleiben offen.` : ''}`
+          : 'Keine Termine mussten verschoben werden.',
+      );
+      setResolution(null);
+      refresh();
+    });
   };
 
   const changeStatus = (status: Parameters<typeof updateAppointmentStatusAction>[1]) => {
@@ -184,10 +242,20 @@ export function AppointmentDrawer({
     });
   };
 
+  const parsedRecurrence = detail?.series ? parseRuleToForm(detail.series.rule) : null;
   const editTarget: AppointmentEditTarget | null = detail
     ? {
         appointmentId: detail.id,
         isSeriesMember: Boolean(detail.series),
+        recurrence: parsedRecurrence
+          ? {
+              frequency: parsedRecurrence.frequency,
+              weekdays: parsedRecurrence.weekdays,
+              endMode: parsedRecurrence.endMode,
+              endDate: parsedRecurrence.endDate ?? '',
+              count: parsedRecurrence.count ?? 10,
+            }
+          : null,
         values: {
           title: detail.title,
           description: detail.description ?? '',
@@ -280,6 +348,91 @@ export function AppointmentDrawer({
             </header>
 
             <div className="flex-1 space-y-4 p-4">
+              {/* Konflikte: konkret benennen, wo & mit welchem Termin. */}
+              {conflictInfo && conflictInfo.conflicts.length > 0 ? (
+                <section className="rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-soft)] p-3">
+                  <h3 className="flex items-center gap-1.5 text-[length:var(--text-sm)] font-semibold text-[var(--color-warning)]">
+                    <AlertTriangle className="size-4 shrink-0" aria-hidden />
+                    {conflictInfo.conflicts.length === 1
+                      ? 'Ein Konflikt bei diesem Termin'
+                      : `${conflictInfo.conflicts.length} Konflikte bei diesem Termin`}
+                  </h3>
+                  <ul className="mt-2 space-y-1 text-[length:var(--text-sm)] text-[var(--color-ink)]">
+                    {conflictInfo.conflicts.map((conflict, index) => (
+                      <li key={index} className="flex items-start gap-1.5">
+                        <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[var(--color-warning)]" aria-hidden />
+                        {conflict.message}
+                      </li>
+                    ))}
+                  </ul>
+
+                  {resolution ? (
+                    <div className="mt-3 rounded-[var(--radius-md)] border border-[var(--color-line)] bg-[var(--color-panel)] p-2.5">
+                      <p className="text-[length:var(--text-xs)] font-medium text-[var(--color-ink-muted)]">
+                        Vorschlag – flexible Termine werden umgeplant, fixe bleiben:
+                      </p>
+                      {resolution.moves.length === 0 ? (
+                        <p className="mt-1.5 text-[length:var(--text-sm)]">
+                          Kein automatischer Vorschlag möglich – bitte manuell anpassen.
+                        </p>
+                      ) : (
+                        <ul className="mt-1.5 space-y-1 text-[length:var(--text-sm)]">
+                          {resolution.moves.map((move) => (
+                            <li key={move.appointmentId} className="flex flex-wrap items-center gap-1">
+                              <span className="font-medium">{move.customerName}</span>
+                              <span className="text-[var(--color-ink-subtle)]">
+                                {move.fromLabel} →
+                              </span>
+                              <span className="font-medium text-[var(--color-success)]">
+                                {move.toLabel}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      {resolution.unresolved.length > 0 ? (
+                        <ul className="mt-1.5 space-y-1 text-[length:var(--text-xs)] text-[var(--color-danger)]">
+                          {resolution.unresolved.map((item) => (
+                            <li key={item.appointmentId}>
+                              {item.title}: {item.reason}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      <div className="mt-2.5 flex justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setResolution(null)}
+                          disabled={resolving}
+                        >
+                          Verwerfen
+                        </Button>
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          loading={resolving}
+                          disabled={resolution.moves.length === 0}
+                          onClick={applyResolution}
+                        >
+                          <Check aria-hidden /> Übernehmen
+                        </Button>
+                      </div>
+                    </div>
+                  ) : conflictInfo.canResolve ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="mt-2.5"
+                      loading={resolving}
+                      onClick={requestResolution}
+                    >
+                      <Sparkles aria-hidden /> Konflikt automatisch auflösen
+                    </Button>
+                  ) : null}
+                </section>
+              ) : null}
+
               {/* Kunde */}
               <section>
                 <h3 className="mb-1.5 text-[length:var(--text-2xs)] font-semibold tracking-wider text-[var(--color-ink-subtle)] uppercase">

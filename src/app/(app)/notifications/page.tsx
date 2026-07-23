@@ -5,18 +5,25 @@ import { PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
 import { formatDateTime } from '@/lib/dates';
 import { db } from '@/server/db';
-import { requireOrganizationMembership } from '@/server/permissions';
+import { hasPermission, requireOrganizationMembership } from '@/server/permissions';
+import { listScopeConflicts } from '@/server/services/conflict-service';
+import { ConflictNoticeList } from '@/features/notifications/conflict-notice-list';
 import { NotificationList } from '@/features/notifications/notification-list';
 
 export const metadata: Metadata = { title: 'Benachrichtigungen' };
 
 export default async function NotificationsPage() {
   const ctx = await requireOrganizationMembership();
-  const notifications = await db.notification.findMany({
-    where: { userId: ctx.user.id, organizationId: ctx.organization.id },
-    orderBy: { createdAt: 'desc' },
-    take: 100,
-  });
+  const [notifications, conflicts] = await Promise.all([
+    db.notification.findMany({
+      where: { userId: ctx.user.id, organizationId: ctx.organization.id },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    }),
+    hasPermission(ctx, 'appointments.viewAll') || hasPermission(ctx, 'appointments.manage')
+      ? listScopeConflicts()
+      : Promise.resolve([]),
+  ]);
 
   return (
     <>
@@ -30,6 +37,7 @@ export default async function NotificationsPage() {
         }
       />
       <div className="mx-auto max-w-3xl p-4 sm:p-5">
+        <ConflictNoticeList conflicts={conflicts} />
         <NotificationList
           items={notifications.map((notification) => ({
             id: notification.id,

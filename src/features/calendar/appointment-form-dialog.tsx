@@ -34,9 +34,19 @@ const WEEKDAY_OPTIONS = [
   { value: 7, label: 'So' },
 ];
 
+export interface AppointmentEditRecurrence {
+  frequency: 'DAILY' | 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY_DATE' | 'MONTHLY_WEEKDAY';
+  weekdays: number[];
+  endMode: 'never' | 'date' | 'count';
+  endDate: string;
+  count: number;
+}
+
 export interface AppointmentEditTarget {
   appointmentId: string;
   isSeriesMember: boolean;
+  /** Aktuelle Wiederholung der Serie (zum Bearbeiten des Rhythmus). */
+  recurrence?: AppointmentEditRecurrence | null;
   values: {
     title: string;
     description: string;
@@ -111,18 +121,28 @@ export function AppointmentFormDialog({
   );
   const [internalNotes, setInternalNotes] = React.useState(editTarget?.values.internalNotes ?? '');
 
-  // Wiederholung (nur beim Anlegen).
+  // Wiederholung: beim Anlegen frei wählbar; beim Bearbeiten aus der Serie
+  // vorbelegt (der Rhythmus lässt sich für die ganze Serie ändern).
+  const editRec = editTarget?.recurrence ?? null;
   const [recurrenceEnabled, setRecurrenceEnabled] = React.useState(prefill?.series ?? false);
   const [frequency, setFrequency] = React.useState<
     'DAILY' | 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY_DATE' | 'MONTHLY_WEEKDAY'
-  >('WEEKLY');
-  const [weekdays, setWeekdays] = React.useState<number[]>([]);
-  const [endMode, setEndMode] = React.useState<'never' | 'date' | 'count'>('never');
-  const [endDate, setEndDate] = React.useState('');
-  const [count, setCount] = React.useState(10);
+  >(editRec?.frequency ?? 'WEEKLY');
+  const [weekdays, setWeekdays] = React.useState<number[]>(editRec?.weekdays ?? []);
+  const [endMode, setEndMode] = React.useState<'never' | 'date' | 'count'>(
+    editRec?.endMode ?? 'never',
+  );
+  const [endDate, setEndDate] = React.useState(editRec?.endDate ?? '');
+  const [count, setCount] = React.useState(editRec?.count ?? 10);
 
   // Serien-Bearbeitungsumfang.
   const [scope, setScope] = React.useState<'single' | 'following' | 'all'>('single');
+
+  // Rhythmus lässt sich bei „Ganze Serie“ und „Dieser und folgende“ ändern –
+  // beide planen künftige Termine. „Nur dieser Termin“ ändert die Serie nicht.
+  const showRecurrenceEditor = isEdit
+    ? Boolean(editTarget?.isSeriesMember) && (scope === 'all' || scope === 'following')
+    : true;
 
   // Konflikt-Bestätigung (WARNING: „trotzdem speichern?").
   const [conflicts, setConflicts] = React.useState<{ message: string; severity: string }[] | null>(
@@ -145,17 +165,30 @@ export function AppointmentFormDialog({
     latestTime: isFlexible ? latestTime : '',
     routeRelevant,
     internalNotes,
-    recurrence: !isEdit
+    recurrence:
+      !isEdit && recurrenceEnabled
+        ? {
+            enabled: true,
+            frequency,
+            weekdays: weekdays.length > 0 ? weekdays : undefined,
+            endMode,
+            endDate: endMode === 'date' && endDate ? endDate : undefined,
+            count: endMode === 'count' ? count : undefined,
+          }
+        : undefined,
+  });
+
+  // Geänderter Rhythmus für „Ganze Serie“.
+  const buildRecurrenceEdit = () =>
+    showRecurrenceEditor && isEdit
       ? {
-          enabled: recurrenceEnabled,
           frequency,
           weekdays: weekdays.length > 0 ? weekdays : undefined,
           endMode,
           endDate: endMode === 'date' && endDate ? endDate : undefined,
           count: endMode === 'count' ? count : undefined,
         }
-      : undefined,
-  });
+      : undefined;
 
   const submit = (confirmed: boolean) => {
     startTransition(async () => {
@@ -176,6 +209,7 @@ export function AppointmentFormDialog({
               latestTime: values.latestTime,
               routeRelevant: values.routeRelevant,
               internalNotes: values.internalNotes,
+              recurrence: buildRecurrenceEdit(),
             },
             editTarget.isSeriesMember ? scope : 'single',
             confirmed,
@@ -469,16 +503,27 @@ export function AppointmentFormDialog({
               </div>
             ) : null}
 
-            {!isEdit ? (
+            {showRecurrenceEditor ? (
               <div
                 className="rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] p-3"
                 data-tour="appointment-form-recurrence"
               >
-                <label className="flex items-center justify-between gap-3">
-                  <span className="text-[length:var(--text-sm)] font-medium">Wiederholung</span>
-                  <Switch checked={recurrenceEnabled} onCheckedChange={setRecurrenceEnabled} />
-                </label>
-                {recurrenceEnabled ? (
+                {!isEdit ? (
+                  <label className="flex items-center justify-between gap-3">
+                    <span className="text-[length:var(--text-sm)] font-medium">Wiederholung</span>
+                    <Switch checked={recurrenceEnabled} onCheckedChange={setRecurrenceEnabled} />
+                  </label>
+                ) : (
+                  <div>
+                    <span className="block text-[length:var(--text-sm)] font-medium">
+                      Wiederholung der Serie
+                    </span>
+                    <span className="block text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                      Änderungen gelten für alle künftigen Termine der Serie.
+                    </span>
+                  </div>
+                )}
+                {recurrenceEnabled || isEdit ? (
                   <div className="mt-3 space-y-3">
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>

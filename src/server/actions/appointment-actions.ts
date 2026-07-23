@@ -100,7 +100,18 @@ export async function createAppointmentAction(
   });
 }
 
-const updateSchema = appointmentSchema.omit({ customerId: true, recurrence: true }).partial();
+const editRecurrenceSchema = z.object({
+  frequency: z.enum(['DAILY', 'WEEKLY', 'BIWEEKLY', 'MONTHLY_DATE', 'MONTHLY_WEEKDAY']),
+  weekdays: z.array(z.number().int().min(1).max(7)).optional(),
+  endMode: z.enum(['never', 'date', 'count']).default('never'),
+  endDate: z.string().regex(dateRegex).optional(),
+  count: z.number().int().min(1).max(500).optional(),
+});
+
+const updateSchema = appointmentSchema
+  .omit({ customerId: true, recurrence: true })
+  .partial()
+  .extend({ recurrence: editRecurrenceSchema.optional() });
 
 export async function updateAppointmentAction(
   appointmentId: string,
@@ -126,6 +137,20 @@ export async function updateAppointmentAction(
         latestTime: data.latestTime !== undefined ? data.latestTime || null : undefined,
         routeRelevant: data.routeRelevant,
         internalNotes: data.internalNotes !== undefined ? data.internalNotes || null : undefined,
+        recurrence: data.recurrence
+          ? {
+              frequency: data.recurrence.frequency,
+              weekdays: data.recurrence.weekdays,
+              endDate:
+                data.recurrence.endMode === 'date' && data.recurrence.endDate
+                  ? new Date(`${data.recurrence.endDate}T00:00:00Z`)
+                  : null,
+              count:
+                data.recurrence.endMode === 'count' && data.recurrence.count
+                  ? data.recurrence.count
+                  : null,
+            }
+          : undefined,
       },
       { scope, confirmed },
     );

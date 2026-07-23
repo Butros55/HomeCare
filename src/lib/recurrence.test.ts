@@ -7,7 +7,43 @@ import {
   expandOccurrenceDates,
   isValidRecurrenceRule,
   occurrenceTimes,
+  parseRuleToForm,
 } from './recurrence';
+
+describe('parseRuleToForm', () => {
+  it('liest wöchentliche Wochentage zurück (ISO 1..7)', () => {
+    expect(parseRuleToForm('FREQ=WEEKLY;INTERVAL=1;BYDAY=TU,WE,SU')).toEqual({
+      frequency: 'WEEKLY',
+      weekdays: [2, 3, 7],
+      endMode: 'never',
+      endDate: null,
+      count: null,
+    });
+  });
+
+  it('erkennt zweiwöchentlich am Intervall', () => {
+    const parsed = parseRuleToForm('FREQ=WEEKLY;INTERVAL=2;BYDAY=MO');
+    expect(parsed?.frequency).toBe('BIWEEKLY');
+    expect(parsed?.weekdays).toEqual([1]);
+  });
+
+  it('liest COUNT und UNTIL', () => {
+    expect(parseRuleToForm('FREQ=DAILY;INTERVAL=1;COUNT=5')).toMatchObject({
+      frequency: 'DAILY',
+      endMode: 'count',
+      count: 5,
+    });
+    expect(parseRuleToForm('FREQ=WEEKLY;INTERVAL=1;BYDAY=MO;UNTIL=20261231T235959Z')).toMatchObject({
+      endMode: 'date',
+      endDate: '2026-12-31',
+    });
+  });
+
+  it('Roundtrip: build → parse ergibt dieselben Wochentage', () => {
+    const rule = buildRecurrenceRule({ frequency: 'WEEKLY', weekdays: [1, 4] }, utcDate(2026, 7, 20));
+    expect(parseRuleToForm(rule)?.weekdays).toEqual([1, 4]);
+  });
+});
 
 describe('buildRecurrenceRule', () => {
   const monday = utcDate(2026, 7, 20); // Montag

@@ -59,15 +59,13 @@ export default async function ReportsPage({
       <>
         <PageHeader
           title="Mein Bericht"
-          description={`Zeitraum ${filters.from} bis ${filters.to}`}
-        >
-          <div className="mt-4" data-tour="reports-filters">
-            <ReportPeriodFilter
-              defaultFrom={defaultFrom}
-              defaultTo={defaultTo}
-            />
-          </div>
-        </PageHeader>
+          description="Dein Verdienst im gewählten Zeitraum"
+          actions={
+            <div data-tour="reports-filters">
+              <ReportPeriodFilter defaultFrom={defaultFrom} defaultTo={defaultTo} />
+            </div>
+          }
+        />
         <div className="mx-auto max-w-5xl p-4 sm:p-5">
           <PersonalEarningsDashboard data={earnings} />
         </div>
