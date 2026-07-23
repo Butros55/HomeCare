@@ -225,10 +225,8 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
       {createOpen ? (
         <AppointmentFormDialog
           open={createOpen}
-          onOpenChange={(open) => {
-            setCreateOpen(open);
-            if (!open) refetch();
-          }}
+          onOpenChange={setCreateOpen}
+          onChanged={refetch}
           customers={props.customers}
           employees={props.employees}
           prefill={createPrefill}
@@ -240,10 +238,8 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
       {drawerAppointmentId ? (
         <AppointmentDrawer
           appointmentId={drawerAppointmentId}
-          onClose={() => {
-            setDrawerAppointmentId(null);
-            refetch();
-          }}
+          onClose={() => setDrawerAppointmentId(null)}
+          onChanged={refetch}
           canManage={props.canManage}
           soloMode={props.soloMode}
           ownEmployeeId={props.ownEmployeeId}

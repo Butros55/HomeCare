@@ -115,6 +115,44 @@ interface DayChip {
   cls: string;
   dot: string;
   sub?: string;
+  isSeries: boolean;
+  hasConflict: boolean;
+}
+
+/**
+ * Termin-Chip der Monatsansicht mit Markern oben rechts: Konflikt (auffällige
+ * rote Plakette + roter Rahmen) und Serie (subtiles Wiederholungs-Icon).
+ */
+function ProMonthChip({ chip }: { chip: DayChip }) {
+  const showMarkers = chip.hasConflict || chip.isSeries;
+  return (
+    <span
+      className={cn(
+        MONTH_CHIP_CLASS,
+        'relative',
+        chip.cls,
+        chip.hasConflict &&
+          'ring-1 ring-inset ring-[var(--color-danger)] bg-[color-mix(in_srgb,var(--color-danger)_16%,transparent)]',
+      )}
+      title={chip.hasConflict ? 'Terminkonflikt' : chip.isSeries ? 'Serientermin' : undefined}
+    >
+      <span className={cn('block truncate', showMarkers && 'pr-3.5')}>{chip.label}</span>
+      {showMarkers && (
+        <span className="pointer-events-none absolute top-1/2 right-0.5 flex -translate-y-1/2 items-center gap-0.5">
+          {chip.hasConflict && (
+            <span className="grid size-3 place-items-center rounded-full bg-[var(--color-danger)] text-[7px] font-bold text-white">
+              !
+            </span>
+          )}
+          {chip.isSeries && (
+            <span className="text-[9px] leading-none opacity-70" aria-hidden>
+              ↻
+            </span>
+          )}
+        </span>
+      )}
+    </span>
+  );
 }
 
 interface TransitionRect {
@@ -421,9 +459,7 @@ function MonthTransitionOverlay({ transition }: { transition: MonthViewTransitio
                           className={MONTH_CHIP_STACK_CLASS}
                         >
                           {cell.chips.map((chip) => (
-                            <span key={chip.key} className={cn(MONTH_CHIP_CLASS, chip.cls)}>
-                              {chip.label}
-                            </span>
+                            <ProMonthChip key={chip.key} chip={chip} />
                           ))}
                           {cell.extra > 0 && (
                             <span className="block min-w-0 max-w-full truncate px-1 text-[8.5px] leading-tight text-muted-foreground">
@@ -676,6 +712,8 @@ export function ProMonthCalendar({
         cls: CHIP_CLASS_BY_KIND[ev.kind],
         dot: DOT_CLASS_BY_KIND[ev.kind],
         sub: format(new Date(ev.start), 'HH:mm'),
+        isSeries: ev.isSeries,
+        hasConflict: ev.hasConflict,
       });
     }
     const MAX = 3;
@@ -1542,14 +1580,32 @@ export function ProMonthCalendar({
                                               {chips.map((c) => (
                                                 <span
                                                   key={c.key}
+                                                  role="button"
+                                                  tabIndex={0}
+                                                  aria-label={`Termin ${c.label} öffnen`}
+                                                  title={c.hasConflict ? 'Terminkonflikt' : c.isSeries ? 'Serientermin' : undefined}
+                                                  onClick={(event) => {
+                                                    // Termin öffnen statt in den Tag zu wechseln.
+                                                    event.stopPropagation();
+                                                    onOpenEvent(c.key);
+                                                  }}
+                                                  onKeyDown={(event) => {
+                                                    if (event.key === 'Enter' || event.key === ' ') {
+                                                      event.preventDefault();
+                                                      event.stopPropagation();
+                                                      onOpenEvent(c.key);
+                                                    }
+                                                  }}
                                                   className={cn(
-                                                    'relative block w-full min-w-0 max-w-full overflow-hidden text-left leading-tight transition-[max-height,background-color,border-radius,padding] duration-200 ease-out',
+                                                    'relative block w-full min-w-0 max-w-full cursor-pointer overflow-hidden text-left leading-tight transition-[max-height,background-color,border-radius,padding] duration-200 ease-out',
                                                     zoomMode === 'bars'
                                                       ? cn('max-h-1.5 rounded-full', c.dot)
                                                       : cn(
                                                           'max-h-8 rounded px-1',
                                                           c.cls,
                                                           zoomMode === 'full' ? 'py-1' : 'py-px',
+                                                          c.hasConflict &&
+                                                            'ring-1 ring-inset ring-[var(--color-danger)] bg-[color-mix(in_srgb,var(--color-danger)_16%,transparent)]',
                                                         ),
                                                   )}
                                                 >
@@ -1557,6 +1613,7 @@ export function ProMonthCalendar({
                                                     className={cn(
                                                       'block truncate font-medium leading-tight transition-opacity duration-150 ease-out text-[length:calc(9px*var(--chip-scale))] sm:text-[length:calc(10px*var(--chip-scale))]',
                                                       zoomMode === 'bars' ? 'opacity-0' : 'opacity-100',
+                                                      (c.hasConflict || c.isSeries) && 'pr-3.5',
                                                     )}
                                                   >
                                                     {c.label}
@@ -1569,6 +1626,21 @@ export function ProMonthCalendar({
                                                       )}
                                                     >
                                                       {c.sub}
+                                                    </span>
+                                                  )}
+                                                  {/* Marker oben rechts: Konflikt (rot) + Serie (subtil). */}
+                                                  {zoomMode !== 'bars' && (c.hasConflict || c.isSeries) && (
+                                                    <span className="pointer-events-none absolute top-0.5 right-0.5 flex items-center gap-0.5">
+                                                      {c.hasConflict && (
+                                                        <span className="grid size-3 place-items-center rounded-full bg-[var(--color-danger)] text-[7px] font-bold text-white">
+                                                          !
+                                                        </span>
+                                                      )}
+                                                      {c.isSeries && (
+                                                        <span className="text-[9px] leading-none opacity-70" aria-hidden>
+                                                          ↻
+                                                        </span>
+                                                      )}
                                                     </span>
                                                   )}
                                                 </span>

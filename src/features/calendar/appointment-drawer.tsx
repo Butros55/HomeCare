@@ -46,6 +46,7 @@ import { cn } from '@/lib/utils';
 import {
   assignEmployeeAction,
   cancelAppointmentAction,
+  deleteAppointmentAction,
   duplicateAppointmentAction,
   getAppointmentDetailAction,
   respondToAssignmentAction,
@@ -90,6 +91,7 @@ export function AppointmentDrawer({
   ownEmployeeId,
   employees,
   customers,
+  onChanged,
 }: {
   appointmentId: string;
   onClose: () => void;
@@ -98,6 +100,12 @@ export function AppointmentDrawer({
   ownEmployeeId?: string | null;
   employees: { id: string; name: string }[];
   customers: { id: string; name: string }[];
+  /**
+   * Nach einer Änderung aufgerufen, um gezielt zu aktualisieren (z. B. nur die
+   * Kalender-Events neu laden) statt eines kompletten Reloads. Fallback:
+   * router.refresh().
+   */
+  onChanged?: () => void;
 }) {
   const router = useRouter();
   const [detail, setDetail] = React.useState<Detail | null>(null);
@@ -105,6 +113,8 @@ export function AppointmentDrawer({
   const [cancelOpen, setCancelOpen] = React.useState(false);
   const [cancelScope, setCancelScope] = React.useState<'single' | 'following' | 'all'>('single');
   const [cancelReason, setCancelReason] = React.useState('');
+  // „Absagen" (bleibt als abgesagt sichtbar) vs. „Löschen" (vollständig entfernen).
+  const [cancelMode, setCancelMode] = React.useState<'cancel' | 'delete'>('cancel');
   const [pending, startTransition] = React.useTransition();
   const [assignConflicts, setAssignConflicts] = React.useState<{
     employeeId: string | null;
@@ -156,7 +166,9 @@ export function AppointmentDrawer({
   const refresh = () => {
     load();
     loadConflicts();
-    router.refresh();
+    // Kalender gezielt aktualisieren (async) statt kompletter Seiten-Reload.
+    if (onChanged) onChanged();
+    else router.refresh();
   };
 
   const requestResolution = () => {
@@ -680,10 +692,8 @@ export function AppointmentDrawer({
       {editOpen && editTarget ? (
         <AppointmentFormDialog
           open={editOpen}
-          onOpenChange={(open) => {
-            setEditOpen(open);
-            if (!open) refresh();
-          }}
+          onOpenChange={setEditOpen}
+          onChanged={refresh}
           customers={customers}
           employees={employees}
           editTarget={editTarget}
@@ -716,37 +726,72 @@ export function AppointmentDrawer({
         }}
       />
 
-      {/* Absagen */}
+      {/* Absagen oder Löschen */}
       <ConfirmDialog
         open={cancelOpen}
-        onOpenChange={setCancelOpen}
-        title="Termin absagen?"
+        onOpenChange={(open) => {
+          setCancelOpen(open);
+          if (!open) setCancelMode('cancel');
+        }}
+        title={cancelMode === 'delete' ? 'Termin löschen?' : 'Termin absagen?'}
         destructive
-        confirmLabel="Absagen"
+        confirmLabel={cancelMode === 'delete' ? 'Endgültig löschen' : 'Absagen'}
         loading={pending}
         onConfirm={() => {
           startTransition(async () => {
-            const result = await cancelAppointmentAction(
-              appointmentId,
-              detail?.series ? cancelScope : 'single',
-              cancelReason || undefined,
-            );
+            const scope = detail?.series ? cancelScope : 'single';
+            const result =
+              cancelMode === 'delete'
+                ? await deleteAppointmentAction(appointmentId, scope)
+                : await cancelAppointmentAction(appointmentId, scope, cancelReason || undefined);
             if (result.ok) {
-              toast.success('Termin abgesagt.');
+              toast.success(cancelMode === 'delete' ? 'Termin gelöscht.' : 'Termin abgesagt.');
               setCancelOpen(false);
-              refresh();
+              setCancelMode('cancel');
+              // Beim Löschen ist der Termin weg → Drawer schließen.
+              if (cancelMode === 'delete') onClose();
+              else refresh();
             } else toast.error(result.message);
           });
         }}
       >
         <div className="mt-3 space-y-3">
+          {/* Absagen (bleibt sichtbar) vs. Löschen (ganz entfernen). */}
+          <div role="radiogroup" aria-label="Aktion" className="grid grid-cols-2 gap-1.5">
+            {(
+              [
+                ['cancel', 'Absagen', 'bleibt als abgesagt sichtbar'],
+                ['delete', 'Löschen', 'wird vollständig entfernt'],
+              ] as const
+            ).map(([value, label, hint]) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={cancelMode === value}
+                onClick={() => setCancelMode(value)}
+                className={cn(
+                  'rounded-[var(--radius-md)] border px-3 py-2 text-left text-[length:var(--text-sm)] transition-colors',
+                  cancelMode === value
+                    ? 'border-[var(--color-danger)] bg-[var(--color-danger-soft)] font-medium text-[var(--color-danger)]'
+                    : 'border-[var(--color-line)] text-[var(--color-ink-muted)]',
+                )}
+              >
+                <span className="block">{label}</span>
+                <span className="block text-[length:var(--text-2xs)] font-normal text-[var(--color-ink-subtle)]">
+                  {hint}
+                </span>
+              </button>
+            ))}
+          </div>
+
           {detail?.series ? (
-            <div role="radiogroup" aria-label="Absageumfang" className="space-y-1.5">
+            <div role="radiogroup" aria-label="Umfang" className="space-y-1.5">
               {(
                 [
-                  ['single', 'Nur diesen Termin absagen'],
-                  ['following', 'Diesen und alle folgenden absagen'],
-                  ['all', 'Gesamte Serie beenden'],
+                  ['single', cancelMode === 'delete' ? 'Nur diesen Termin löschen' : 'Nur diesen Termin absagen'],
+                  ['following', cancelMode === 'delete' ? 'Diesen und alle folgenden löschen' : 'Diesen und alle folgenden absagen'],
+                  ['all', cancelMode === 'delete' ? 'Gesamte Serie löschen' : 'Gesamte Serie beenden'],
                 ] as const
               ).map(([value, label]) => (
                 <button
@@ -767,15 +812,18 @@ export function AppointmentDrawer({
               ))}
             </div>
           ) : null}
-          <div>
-            <Label htmlFor="cancel-reason">Grund (optional)</Label>
-            <Textarea
-              id="cancel-reason"
-              rows={2}
-              value={cancelReason}
-              onChange={(event) => setCancelReason(event.target.value)}
-            />
-          </div>
+
+          {cancelMode === 'cancel' ? (
+            <div>
+              <Label htmlFor="cancel-reason">Grund (optional)</Label>
+              <Textarea
+                id="cancel-reason"
+                rows={2}
+                value={cancelReason}
+                onChange={(event) => setCancelReason(event.target.value)}
+              />
+            </div>
+          ) : null}
         </div>
       </ConfirmDialog>
     </div>

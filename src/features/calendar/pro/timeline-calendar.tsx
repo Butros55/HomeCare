@@ -15,6 +15,7 @@ import { CalendarBlank, CaretLeft, ListBullets, Plus, SidebarSimple, Warning } f
 import { AnimatePresence, motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
 import { selectionHaptic } from './haptics';
+import { layoutOverlapping } from './overlap-layout';
 import { dayKey, type ProCalendarEvent, type ProEventKind } from './types';
 import { CalendarViewTabs } from './view-tabs';
 import {
@@ -53,6 +54,7 @@ interface ScheduleEntry {
   title: string;
   subtitle: string;
   hasConflict: boolean;
+  isSeries: boolean;
   customerColor: string;
   startMinutes: number;
   endMinutes: number;
@@ -171,6 +173,7 @@ function eventToScheduleEntry(event: ProCalendarEvent): ScheduleEntry {
     title: event.summary,
     subtitle: event.detail || 'Termin',
     hasConflict: event.hasConflict,
+    isSeries: event.isSeries,
     customerColor: event.customerColor,
     startMinutes: minutesOfDay(start),
     endMinutes: Math.max(minutesOfDay(start) + 30, minutesOfDay(end)),
@@ -180,6 +183,7 @@ function eventToScheduleEntry(event: ProCalendarEvent): ScheduleEntry {
 function dayEntries(dayEvents: ProCalendarEvent[]): ScheduleEntry[] {
   return dayEvents.map(eventToScheduleEntry).sort((a, b) => a.startMinutes - b.startMinutes);
 }
+
 
 export function ProTimelineCalendar({
   viewMode,
@@ -766,7 +770,7 @@ export function ProTimelineCalendar({
 
   const renderTimelineDayColumn = (day: Date) => {
     const key = dayKey(day);
-    const entries = dayEntries(eventsByDay.get(key) ?? []);
+    const entries = layoutOverlapping(dayEntries(eventsByDay.get(key) ?? []));
     return (
       <div key={key} className={cn('relative border-r border-border/60 dark:border-white/10', TIMELINE_HEIGHT_CLASS)}>
         {HOUR_MARKERS.map((hour) => (
@@ -782,6 +786,11 @@ export function ProTimelineCalendar({
 
         {entries.map((entry) => {
           const style = EVENT_STYLE[entry.kind];
+          // Überlappende Termine teilen sich die Breite in Spalten. 6px Rand
+          // links/rechts, 3px Lücke zwischen den Spalten.
+          const colWidth = `((100% - 12px) / ${entry.colCount})`;
+          const left = `calc(6px + ${entry.colIndex} * ${colWidth})`;
+          const width = `calc(${colWidth} - ${entry.colCount > 1 ? '3px' : '0px'})`;
           return (
             <button
               key={entry.id}
@@ -791,7 +800,7 @@ export function ProTimelineCalendar({
                 onOpenEvent(entry.id);
               }}
               className={cn(
-                'absolute left-1.5 right-1.5 z-10 overflow-hidden rounded-md border px-2 py-1.5 text-left shadow-sm transition-[filter] hover:brightness-[0.97]',
+                'absolute z-10 overflow-hidden rounded-md border px-2 py-1.5 text-left shadow-sm transition-[filter] hover:brightness-[0.97]',
                 style.block,
                 entry.hasConflict && 'ring-2 ring-red-500/70',
               )}
@@ -799,10 +808,30 @@ export function ProTimelineCalendar({
                 top: timelinePosition(entry.startMinutes),
                 height: timelineHeight(entry.startMinutes, entry.endMinutes),
                 minHeight: '1.9rem',
+                left,
+                width,
               }}
             >
               <span className={cn('absolute bottom-1.5 left-1 top-1.5 w-1 rounded-full', style.rail)} />
-              <div className="min-w-0 pl-2">
+              {/* Marker oben rechts: Konflikt (rote Plakette) + Serie (subtil). */}
+              {(entry.hasConflict || entry.isSeries) && (
+                <span className="pointer-events-none absolute right-1 top-1 flex items-center gap-1">
+                  {entry.hasConflict && (
+                    <span
+                      className="grid size-4 place-items-center rounded-full bg-[var(--color-danger)] text-[9px] font-bold text-white shadow-sm"
+                      title="Terminkonflikt"
+                    >
+                      !
+                    </span>
+                  )}
+                  {entry.isSeries && (
+                    <span className="text-xs leading-none opacity-70" title="Serientermin" aria-hidden>
+                      ↻
+                    </span>
+                  )}
+                </span>
+              )}
+              <div className={cn('min-w-0 pl-2', (entry.hasConflict || entry.isSeries) && 'pr-5')}>
                 <p className={cn('truncate text-sm font-bold leading-tight', style.title)}>{entry.title}</p>
                 <p className="mt-0.5 line-clamp-2 text-[11px] font-medium leading-tight opacity-75">{entry.subtitle}</p>
                 <p className="mt-0.5 text-[11px] font-semibold leading-tight opacity-75">

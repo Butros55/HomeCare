@@ -1065,6 +1065,104 @@ export async function cancelAppointment(
   }
 }
 
+/**
+ * Termin(e) vollständig löschen (Soft-Delete über deletedAt) – im Gegensatz zum
+ * Absagen verschwinden sie komplett aus dem Kalender. Für Serien wird die
+ * Wiederholung so angepasst, dass gelöschte Vorkommen nicht neu entstehen.
+ */
+export async function deleteAppointment(
+  appointmentId: string,
+  options: { scope: EditScope },
+): Promise<void> {
+  const ctx = await requireOrganizationMembership();
+  const appointment = await db.appointment.findUnique({
+    where: { id: appointmentId },
+    include: { series: true },
+  });
+  assertSameOrg(ctx, appointment);
+  await requireAppointmentManage(ctx, appointment.assignedEmployeeId);
+
+  const now = new Date();
+
+  if (options.scope === 'single' || !appointment.seriesId) {
+    await db.$transaction(async (tx) => {
+      await tx.appointment.update({
+        where: { id: appointment.id },
+        data: { deletedAt: now },
+      });
+      // Einzelnes Serien-Vorkommen: als abgesagte Ausnahme markieren, damit es
+      // bei einer Neu-Materialisierung nicht wieder auftaucht.
+      if (appointment.seriesId && appointment.occurrenceDate) {
+        await tx.appointmentSeriesException.upsert({
+          where: {
+            seriesId_occurrenceDate: {
+              seriesId: appointment.seriesId,
+              occurrenceDate: appointment.occurrenceDate,
+            },
+          },
+          create: {
+            seriesId: appointment.seriesId,
+            occurrenceDate: appointment.occurrenceDate,
+            exceptionType: 'CANCELLED',
+          },
+          update: { exceptionType: 'CANCELLED', replacementAppointmentId: null },
+        });
+      }
+      await writeAuditLog(
+        {
+          organizationId: ctx.organization.id,
+          actorUserId: ctx.user.id,
+          action: 'appointment.deleted',
+          entityType: 'Appointment',
+          entityId: appointment.id,
+          metadata: { scope: 'single' },
+        },
+        tx,
+      );
+    });
+    return;
+  }
+
+  // Serie: „ganze Serie" oder „dieser und folgende" – künftige Vorkommen löschen.
+  const fromDate =
+    options.scope === 'all'
+      ? null
+      : (appointment.occurrenceDate ?? toUtcDateOnly(appointment.startAt));
+
+  await db.$transaction(async (tx) => {
+    const targets = await tx.appointment.findMany({
+      where: {
+        seriesId: appointment.seriesId!,
+        deletedAt: null,
+        ...(fromDate ? { occurrenceDate: { gte: fromDate } } : {}),
+      },
+      select: { id: true },
+    });
+    await tx.appointment.updateMany({
+      where: { id: { in: targets.map((a) => a.id) } },
+      data: { deletedAt: now },
+    });
+    await tx.appointmentSeries.update({
+      where: { id: appointment.seriesId! },
+      data:
+        options.scope === 'all'
+          ? { status: 'ENDED', materializedUntil: null }
+          : { endDate: addDays(fromDate!, -1), materializedUntil: addDays(fromDate!, -1) },
+    });
+    await writeAuditLog(
+      {
+        organizationId: ctx.organization.id,
+        actorUserId: ctx.user.id,
+        action: 'series.deleted',
+        entityType: 'AppointmentSeries',
+        entityId: appointment.seriesId!,
+        metadata: { scope: options.scope, deletedCount: targets.length },
+      },
+      tx,
+    );
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Status & Zuweisungsantwort
 // ---------------------------------------------------------------------------

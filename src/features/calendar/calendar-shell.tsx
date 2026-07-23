@@ -237,6 +237,13 @@ export function CalendarShell(props: CalendarShellProps) {
   };
 
   const handleDateClick = (arg: DateClickArg) => {
+    const viewType = arg.view.type;
+    // In Monats-/Jahresansicht öffnet ein Klick auf einen (leeren) Tag den Tag –
+    // ein Klick auf einen Termin öffnet dagegen das Panel (siehe handleEventClick).
+    if (viewType === 'dayGridMonth' || viewType === 'multiMonthYear' || viewType === 'listMonth') {
+      arg.view.calendar.changeView('timeGridDay', arg.dateStr.slice(0, 10));
+      return;
+    }
     if (!props.canManage) return;
     const date = arg.dateStr.slice(0, 10);
     const startTime = arg.allDay ? '09:00' : arg.dateStr.slice(11, 16) || '09:00';
@@ -246,6 +253,9 @@ export function CalendarShell(props: CalendarShellProps) {
 
   const handleEventClick = (arg: EventClickArg) => {
     arg.jsEvent.preventDefault();
+    // Termin-Klick öffnet immer das Panel – auch in der Monats-/Jahresansicht,
+    // niemals nur die Tagesansicht.
+    arg.jsEvent.stopPropagation();
     setDrawerAppointmentId(arg.event.id);
   };
 
@@ -599,10 +609,8 @@ export function CalendarShell(props: CalendarShellProps) {
       {createOpen ? (
         <AppointmentFormDialog
           open={createOpen}
-          onOpenChange={(open) => {
-            setCreateOpen(open);
-            if (!open) refetch();
-          }}
+          onOpenChange={setCreateOpen}
+          onChanged={refetch}
           customers={props.customers}
           employees={props.employees}
           prefill={createPrefill}
@@ -614,10 +622,8 @@ export function CalendarShell(props: CalendarShellProps) {
       {drawerAppointmentId ? (
         <AppointmentDrawer
           appointmentId={drawerAppointmentId}
-          onClose={() => {
-            setDrawerAppointmentId(null);
-            refetch();
-          }}
+          onClose={() => setDrawerAppointmentId(null)}
+          onChanged={refetch}
           canManage={props.canManage}
           employees={props.employees}
           customers={props.customers}
@@ -721,11 +727,19 @@ function renderEventContent(arg: EventContentArg) {
     hasConflict: boolean;
     unassigned: boolean;
     cancelled: boolean;
+    seriesId: string | null;
   };
   const isList = arg.view.type.startsWith('list');
   return (
     <div
-      className={`hcp-event ${p.cancelled ? 'hcp-event-cancelled' : ''} ${p.unassigned ? 'hcp-event-unassigned' : ''}`}
+      className={[
+        'hcp-event',
+        p.cancelled ? 'hcp-event-cancelled' : '',
+        p.unassigned ? 'hcp-event-unassigned' : '',
+        p.hasConflict ? 'hcp-event-has-conflict' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
       style={{ ['--event-color' as string]: p.dotColor }}
     >
       <span className="hcp-event-dot" aria-hidden />
@@ -736,11 +750,19 @@ function renderEventContent(arg: EventContentArg) {
         {p.employeeName && isList ? ` · ${p.employeeName}` : ''}
         {p.unassigned ? ' · offen' : ''}
       </span>
-      {p.hasConflict ? (
-        <span className="hcp-event-conflict" title="Konflikt">
-          ⚠
-        </span>
-      ) : null}
+      {/* Marker oben rechts: Konflikt (auffällig) und/oder Serie (subtil). */}
+      <span className="hcp-event-markers" aria-hidden>
+        {p.hasConflict ? (
+          <span className="hcp-event-conflict" title="Terminkonflikt">
+            !
+          </span>
+        ) : null}
+        {p.seriesId ? (
+          <span className="hcp-event-series" title="Serientermin">
+            ↻
+          </span>
+        ) : null}
+      </span>
     </div>
   );
 }

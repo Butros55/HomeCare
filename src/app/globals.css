@@ -478,6 +478,7 @@
 
 /* Eigene Event-Darstellung: Punkt + Zeit + Titel auf getönter Pille. */
 .hcp-event {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -537,10 +538,56 @@
   white-space: normal;
 }
 
+/* Marker-Gruppe oben rechts (Konflikt + Serie), überlagert die Pille. */
+.hcp-event-markers {
+  position: absolute;
+  top: 1px;
+  right: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* Serientermin: subtiles Wiederholungs-Icon. */
+.hcp-event-series {
+  font-size: 0.85em;
+  color: var(--color-ink-subtle);
+  opacity: 0.7;
+}
+
+/* Konflikt: auffällige rote Warnplakette – in allen Ansichten sichtbar. */
 .hcp-event-conflict {
-  flex: none;
-  margin-left: auto;
-  color: var(--color-warning);
+  display: inline-grid;
+  place-items: center;
+  min-width: 0.95rem;
+  height: 0.95rem;
+  padding: 0 2px;
+  border-radius: 999px;
+  background: var(--color-danger);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 800;
+  box-shadow: 0 0 0 1.5px var(--color-panel);
+}
+
+/* Konflikt-Pille insgesamt hervorheben (roter Rahmen + Tönung), damit man den
+ * Konflikt sofort am Termin-Div erkennt – Monats-, Wochen- und Tagesansicht. */
+.hcp-event-has-conflict {
+  border-left-color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 16%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--color-danger) 55%, transparent);
+  outline-offset: -1px;
+}
+
+/* Platz für die Marker rechts, damit der Titel nicht darunter läuft. */
+.hcp-event-title {
+  padding-right: 2px;
+}
+.hcp-event-has-conflict .hcp-event-title,
+.hcp-event:has(.hcp-event-series) .hcp-event-title {
+  padding-right: 0.9rem;
 }
 
 .hcp-event-cancelled {

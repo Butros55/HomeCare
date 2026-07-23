@@ -46,6 +46,8 @@ export interface ProCalendarEvent {
   /** Nur im Team-Modus ein eigener Handlungsbedarf; Solo kennt keine Zuweisung. */
   unassigned: boolean;
   hasConflict: boolean;
+  /** Serienzugehörigkeit – für das Serien-Icon am Termin-Chip. */
+  isSeries: boolean;
   status: string;
 }
 
@@ -70,6 +72,7 @@ export function toProEvent(event: CalendarEventDto, soloMode = false): ProCalend
     employeeName: event.employeeName,
     unassigned: !soloMode && !event.employeeId,
     hasConflict: event.hasConflict,
+    isSeries: event.seriesId != null,
     status: event.status,
   };
 }

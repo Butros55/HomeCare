@@ -77,6 +77,7 @@ export function AppointmentFormDialog({
   editTarget,
   fixedEmployeeId,
   soloMode = false,
+  onChanged,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -91,6 +92,12 @@ export function AppointmentFormDialog({
   fixedEmployeeId?: string | null;
   /** Alleine-Modus: nur die für eine schnelle Terminpflege nötigen Felder. */
   soloMode?: boolean;
+  /**
+   * Wird nach erfolgreichem Speichern aufgerufen – ermöglicht ein gezieltes
+   * Aktualisieren (z. B. nur die Kalender-Events neu laden) statt eines
+   * kompletten Seiten-Reloads. Ohne Angabe: router.refresh() als Fallback.
+   */
+  onChanged?: () => void;
 }) {
   const router = useRouter();
   const isEdit = Boolean(editTarget);
@@ -254,7 +261,9 @@ export function AppointmentFormDialog({
             : 'Termin angelegt.',
       );
       onOpenChange(false);
-      router.refresh();
+      // Nur aktualisieren, was nötig ist (async), statt kompletter Reload.
+      if (onChanged) onChanged();
+      else router.refresh();
     });
   };
 
