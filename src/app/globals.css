@@ -118,6 +118,27 @@
   --shadow-panel: 0 1px 2px rgb(23 26 74 / 0.04), 0 6px 20px rgb(23 26 74 / 0.05);
   --shadow-popover: 0 4px 10px rgb(23 26 74 / 0.06), 0 16px 40px rgb(23 26 74 / 0.16);
   --shadow-drawer: -12px 0 40px rgb(23 26 74 / 0.14);
+
+  /* --- Aliasse für den portierten StudyMate-Kalender (shadcn-Namensschema).
+     Zeigen auf die HomeCare-Palette und folgen damit auch dem Dunkelmodus. --- */
+  --color-background: var(--color-canvas);
+  --color-foreground: var(--color-ink);
+  --color-card: var(--color-panel);
+  --color-card-foreground: var(--color-ink);
+  --color-muted: var(--color-panel-sunken);
+  --color-muted-foreground: var(--color-ink-muted);
+  --color-border: var(--color-line);
+  --color-primary: var(--color-brand);
+  --color-primary-foreground: #ffffff;
+  --color-accent: var(--color-brand-subtle);
+  --color-accent-foreground: var(--color-brand);
+}
+
+/* Safe-Area-Variablen des portierten Kalenders (im Web schlicht 0). */
+:root {
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
 }
 
 /* ---------------------------------------------------------------------------

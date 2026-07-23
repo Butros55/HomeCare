@@ -31,7 +31,8 @@ export async function MyDayDashboard({
   mode,
 }: {
   ctx: OrgContext;
-  mode: 'solo' | 'employee';
+  /** 'personal' = Leitung in der eigenen Kompakt-Ansicht (nur eigene Termine). */
+  mode: 'solo' | 'employee' | 'personal';
 }) {
   const data = await getMyDayData(ctx, { includeUnassigned: mode === 'solo' });
   const timezone = ctx.organization.timezone;

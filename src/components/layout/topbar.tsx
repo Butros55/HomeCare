@@ -5,6 +5,7 @@ import {
   Building2,
   CalendarPlus,
   Check,
+  CircleUserRound,
   Clock,
   KeyRound,
   LogOut,
@@ -20,6 +21,7 @@ import {
 import Link from 'next/link';
 import { useTheme } from 'next-themes';
 import * as React from 'react';
+import { toast } from 'sonner';
 
 import {
   DropdownMenu,
@@ -31,6 +33,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { EntityAvatar } from '@/components/ui/misc';
 import { CountBadge } from '@/components/ui/status-pill';
+import { togglePersonalViewAction } from '@/server/actions/preference-actions';
 import { logoutAction, switchOrganizationAction } from '@/server/auth/actions';
 import { cn } from '@/lib/utils';
 
@@ -46,6 +49,7 @@ export function Topbar({
   unreadNotifications,
   canCreate,
   canManageEmployees,
+  personalViewToggle,
   onOpenSearch,
 }: {
   user: { id: string; name: string; email: string };
@@ -54,9 +58,20 @@ export function Topbar({
   unreadNotifications: number;
   canCreate: boolean;
   canManageEmployees: boolean;
+  /** null = Umschalter ausblenden (Alleine-Modus/Mitarbeiter); sonst aktueller Zustand. */
+  personalViewToggle: { personalView: boolean } | null;
   onOpenSearch: () => void;
 }) {
   const { theme, setTheme } = useTheme();
+  const [switchPending, startSwitchTransition] = React.useTransition();
+
+  const switchView = (personal: boolean) => {
+    if (switchPending || !personalViewToggle || personalViewToggle.personalView === personal) return;
+    startSwitchTransition(async () => {
+      const result = await togglePersonalViewAction(personal);
+      if (!result.ok) toast.error(result.message);
+    });
+  };
 
   return (
     <header className="flex h-[var(--spacing-topbar)] shrink-0 items-center gap-2 border-b border-[var(--color-line-subtle)] bg-[var(--color-surface)] px-3">
@@ -77,6 +92,49 @@ export function Topbar({
       </button>
 
       <div className="flex-1" />
+
+      {personalViewToggle ? (
+        // Schneller Ansichtswechsel: Verwaltung ↔ persönliche Kompakt-Ansicht.
+        // Reine UI-Umschaltung – Termine/Zuordnungen bleiben unverändert.
+        <div
+          className="flex shrink-0 items-center rounded-full border border-[var(--color-line)] bg-[var(--color-panel-sunken)] p-0.5"
+          role="group"
+          aria-label="Ansicht wechseln"
+        >
+          <button
+            type="button"
+            onClick={() => switchView(false)}
+            disabled={switchPending}
+            aria-pressed={!personalViewToggle.personalView}
+            title="Verwaltungsansicht: Mitarbeiter, Zuweisungen, Auswertungen"
+            className={cn(
+              'flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[length:var(--text-xs)] font-medium transition-colors pointer-coarse:h-9 pointer-coarse:px-3',
+              !personalViewToggle.personalView
+                ? 'bg-[var(--color-panel)] text-[var(--color-ink)] shadow-[var(--shadow-panel)]'
+                : 'text-[var(--color-ink-subtle)] hover:text-[var(--color-ink)]',
+            )}
+          >
+            <UsersRound className="size-3.5" aria-hidden />
+            <span className="hidden sm:inline">Verwaltung</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => switchView(true)}
+            disabled={switchPending}
+            aria-pressed={personalViewToggle.personalView}
+            title="Meine Ansicht: nur eigene Termine, Routen und Stunden"
+            className={cn(
+              'flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[length:var(--text-xs)] font-medium transition-colors pointer-coarse:h-9 pointer-coarse:px-3',
+              personalViewToggle.personalView
+                ? 'bg-[var(--color-panel)] text-[var(--color-ink)] shadow-[var(--shadow-panel)]'
+                : 'text-[var(--color-ink-subtle)] hover:text-[var(--color-ink)]',
+            )}
+          >
+            <CircleUserRound className="size-3.5" aria-hidden />
+            <span className="hidden sm:inline">Meine Ansicht</span>
+          </button>
+        </div>
+      ) : null}
 
       {canCreate ? (
         <DropdownMenu>

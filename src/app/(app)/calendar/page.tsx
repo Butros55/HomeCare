@@ -9,7 +9,7 @@ import {
   requireOrganizationMembership,
   uiModeFor,
 } from '@/server/permissions';
-import { CalendarShell } from '@/features/calendar/calendar-shell';
+import { ProCalendarShell } from '@/features/calendar/pro/pro-calendar-shell';
 
 export const metadata: Metadata = { title: 'Kalender' };
 
@@ -22,7 +22,7 @@ export default async function CalendarPage({
   const params = await searchParams;
   const scope = await getManagedEmployeeIds(ctx);
 
-  const [employees, customers, teamManagers, preference] = await Promise.all([
+  const [employees, customers] = await Promise.all([
     db.employee.findMany({
       where: {
         organizationId: ctx.organization.id,
@@ -41,47 +41,26 @@ export default async function CalendarPage({
           take: 500,
         })
       : Promise.resolve([]),
-    hasPermission(ctx, 'appointments.viewAll')
-      ? db.employee.findMany({
-          where: {
-            organizationId: ctx.organization.id,
-            deletedAt: null,
-            subordinates: { some: { deletedAt: null } },
-          },
-          select: { id: true, firstName: true, lastName: true, userId: true },
-          orderBy: [{ lastName: 'asc' }],
-        })
-      : Promise.resolve([]),
-    db.userPreference.findUnique({ where: { userId: ctx.user.id } }),
   ]);
 
   const canManage = hasPermission(ctx, 'appointments.manage');
 
+  // Portierter StudyMate-Kalender: füllt die Seitenhöhe, App-Sidebar bleibt.
   return (
-    <CalendarShell
-      canManage={canManage}
-      isEmployeeOnly={ctx.membership.role === 'EMPLOYEE'}
-      ownEmployeeId={ctx.employee?.id ?? null}
-      simplePlanning={uiModeFor(ctx) !== 'team'}
-      initialView={preference?.calendarView ?? 'timeGridWeek'}
-      initialColorBy={(preference?.calendarColorBy as 'customer' | 'employee' | 'status' | 'team') ?? 'customer'}
-      employees={employees.map((e) => ({ id: e.id, name: employeeDisplayName(e, ctx.user.id) }))}
-      customers={customers.map((c) => ({ id: c.id, name: `${c.firstName} ${c.lastName}`, color: c.color }))}
-      teamManagers={teamManagers.map((t) => ({ id: t.id, name: employeeDisplayName(t, ctx.user.id) }))}
-      urlParams={{
-        neu: params.neu === '1',
-        kunde: params.kunde,
-        serie: params.serie === '1',
-        mitarbeiter: params.mitarbeiter,
-        termin: params.termin,
-        zuweisung:
-          params.zuweisung === 'offen'
-            ? 'unassigned'
-            : params.zuweisung === 'abgelehnt'
-              ? 'declined'
-              : undefined,
-        konflikte: params.konflikte === '1',
-      }}
-    />
+    <div className="flex h-full min-h-0 flex-col">
+      <ProCalendarShell
+        canManage={canManage}
+        ownEmployeeId={ctx.employee?.id ?? null}
+        simplePlanning={uiModeFor(ctx) !== 'team'}
+        employees={employees.map((e) => ({ id: e.id, name: employeeDisplayName(e, ctx.user.id) }))}
+        customers={customers.map((c) => ({ id: c.id, name: `${c.firstName} ${c.lastName}`, color: c.color }))}
+        urlParams={{
+          neu: params.neu === '1',
+          kunde: params.kunde,
+          serie: params.serie === '1',
+          termin: params.termin,
+        }}
+      />
+    </div>
   );
 }

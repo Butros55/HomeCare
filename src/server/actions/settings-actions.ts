@@ -39,30 +39,198 @@ export async function updateOrganizationAction(
   });
 }
 
+/** Zustände, in denen ein Termin noch „lebendig“ ist und umgezogen werden darf. */
+const REASSIGNABLE_STATUSES = ['DRAFT', 'PLANNED', 'CONFIRMED'] as const;
+
 /**
- * UI-Modus der Organisation umstellen: „Alleine“ (reduziertes Alltags-UI)
- * oder „Leitung mit Team“ (volle Verwaltung). Jederzeit wechselbar.
+ * UI-Modus der Organisation umstellen – inklusive Daten-Umzug:
+ *
+ *  Leitung → Alleine: Alle künftigen Termine der Mitarbeiter wandern auf das
+ *  eigene Profil; der ursprüngliche Mitarbeiter wird als Marker gespeichert
+ *  (soloReassignedFromEmployeeId). Mitarbeiter, Kunden usw. bleiben erhalten.
+ *
+ *  Alleine → Leitung: Die Marker stellen die alten Zuordnungen wieder her
+ *  (nur künftige, noch nicht abgeschlossene Termine – Historie bleibt wahr).
+ *
+ * Wichtig: Der schnelle Ansichtswechsel in der Topbar macht das NICHT –
+ * er ist eine reine UI-Umschaltung. Nur dieser Einstellungs-Wechsel zieht um.
  */
 export async function updateSoloModeAction(
   soloMode: boolean,
-): Promise<ActionResult<{ done: true }>> {
+): Promise<ActionResult<{ done: true; movedCount: number }>> {
   return runAction(async () => {
     const ctx = await requirePermission('settings.manage');
-    await db.organization.update({
-      where: { id: ctx.organization.id },
-      data: { soloMode: Boolean(soloMode) },
+    const next = Boolean(soloMode);
+    const orgId = ctx.organization.id;
+    const now = new Date();
+    let movedCount = 0;
+
+    if (next === ctx.organization.soloMode) {
+      return { done: true as const, movedCount: 0 };
+    }
+
+    await db.$transaction(async (tx) => {
+      if (next) {
+        // ---- Leitung → Alleine: Termine der Mitarbeiter auf sich selbst ----
+        // Eigenes Mitarbeiterprofil sicherstellen (Ziel des Umzugs).
+        let ownEmployee = await tx.employee.findFirst({
+          where: { organizationId: orgId, userId: ctx.user.id, deletedAt: null },
+          select: { id: true },
+        });
+        if (!ownEmployee) {
+          ownEmployee = await tx.employee.create({
+            data: {
+              organizationId: orgId,
+              userId: ctx.user.id,
+              firstName: ctx.user.firstName,
+              lastName: ctx.user.lastName,
+              email: ctx.user.email,
+              employmentType: 'FULL_TIME',
+              canReceiveHours: true,
+              canRecruitEmployees: true,
+            },
+            select: { id: true },
+          });
+        }
+
+        // Betroffene Mitarbeiter ermitteln (alle außer dem eigenen Profil).
+        const grouped = await tx.appointment.groupBy({
+          by: ['assignedEmployeeId'],
+          where: {
+            organizationId: orgId,
+            deletedAt: null,
+            startAt: { gte: now },
+            status: { in: [...REASSIGNABLE_STATUSES] },
+            assignedEmployeeId: { not: null },
+          },
+          _count: { _all: true },
+        });
+        for (const group of grouped) {
+          const fromId = group.assignedEmployeeId;
+          if (!fromId || fromId === ownEmployee.id) continue;
+          const result = await tx.appointment.updateMany({
+            where: {
+              organizationId: orgId,
+              deletedAt: null,
+              startAt: { gte: now },
+              status: { in: [...REASSIGNABLE_STATUSES] },
+              assignedEmployeeId: fromId,
+            },
+            data: {
+              assignedEmployeeId: ownEmployee.id,
+              soloReassignedFromEmployeeId: fromId,
+              assignmentStatus: 'ASSIGNED',
+            },
+          });
+          movedCount += result.count;
+        }
+
+        // Serien: Standard-Mitarbeiter ebenfalls umziehen (für künftige Vorkommen).
+        const seriesRows = await tx.appointmentSeries.findMany({
+          where: {
+            organizationId: orgId,
+            status: 'ACTIVE',
+            defaultEmployeeId: { not: null },
+          },
+          select: { id: true, defaultEmployeeId: true },
+        });
+        for (const series of seriesRows) {
+          if (!series.defaultEmployeeId || series.defaultEmployeeId === ownEmployee.id) continue;
+          await tx.appointmentSeries.update({
+            where: { id: series.id },
+            data: {
+              defaultEmployeeId: ownEmployee.id,
+              soloReassignedFromEmployeeId: series.defaultEmployeeId,
+            },
+          });
+        }
+      } else {
+        // ---- Alleine → Leitung: alte Zuordnungen wiederherstellen ----
+        const marked = await tx.appointment.groupBy({
+          by: ['soloReassignedFromEmployeeId'],
+          where: {
+            organizationId: orgId,
+            deletedAt: null,
+            soloReassignedFromEmployeeId: { not: null },
+          },
+          _count: { _all: true },
+        });
+        const originalIds = marked
+          .map((group) => group.soloReassignedFromEmployeeId)
+          .filter((id): id is string => Boolean(id));
+        const stillActive = new Set(
+          (
+            await tx.employee.findMany({
+              where: { id: { in: originalIds }, deletedAt: null, status: 'ACTIVE' },
+              select: { id: true },
+            })
+          ).map((employee) => employee.id),
+        );
+
+        for (const originalId of originalIds) {
+          if (stillActive.has(originalId)) {
+            // Künftige, noch offene Termine zurück zum ursprünglichen Mitarbeiter.
+            const result = await tx.appointment.updateMany({
+              where: {
+                organizationId: orgId,
+                deletedAt: null,
+                soloReassignedFromEmployeeId: originalId,
+                startAt: { gte: now },
+                status: { in: [...REASSIGNABLE_STATUSES] },
+              },
+              data: {
+                assignedEmployeeId: originalId,
+                soloReassignedFromEmployeeId: null,
+                assignmentStatus: 'ASSIGNED',
+              },
+            });
+            movedCount += result.count;
+          }
+          // Restliche Marker aufräumen (vergangene/abgeschlossene oder
+          // Mitarbeiter inzwischen inaktiv → Termine bleiben bei der Leitung).
+          await tx.appointment.updateMany({
+            where: { organizationId: orgId, soloReassignedFromEmployeeId: originalId },
+            data: { soloReassignedFromEmployeeId: null },
+          });
+        }
+
+        // Serien-Zuordnungen wiederherstellen.
+        const markedSeries = await tx.appointmentSeries.findMany({
+          where: { organizationId: orgId, soloReassignedFromEmployeeId: { not: null } },
+          select: { id: true, soloReassignedFromEmployeeId: true },
+        });
+        for (const series of markedSeries) {
+          const originalId = series.soloReassignedFromEmployeeId!;
+          await tx.appointmentSeries.update({
+            where: { id: series.id },
+            data: {
+              defaultEmployeeId: stillActive.has(originalId) ? originalId : undefined,
+              soloReassignedFromEmployeeId: null,
+            },
+          });
+        }
+      }
+
+      await tx.organization.update({
+        where: { id: orgId },
+        data: { soloMode: next },
+      });
+      await writeAuditLog(
+        {
+          organizationId: orgId,
+          actorUserId: ctx.user.id,
+          action: 'organization.updated',
+          entityType: 'Organization',
+          entityId: orgId,
+          metadata: { soloMode: next, movedAppointments: movedCount },
+        },
+        tx,
+      );
     });
-    await writeAuditLog({
-      organizationId: ctx.organization.id,
-      actorUserId: ctx.user.id,
-      action: 'organization.updated',
-      entityType: 'Organization',
-      entityId: ctx.organization.id,
-      metadata: { soloMode: Boolean(soloMode) },
-    });
-    // Modus verändert Navigation und Dashboards überall.
+
+    // Modus verändert Navigation, Dashboards, Kalender und Routen überall.
     revalidatePath('/', 'layout');
-    return { done: true as const };
+    return { done: true as const, movedCount };
   });
 }
 

@@ -87,5 +87,5 @@ export function buildContext(
   organization: Organization,
   employee: Employee | null,
 ): OrgContext {
-  return { user, membership, organization, employee };
+  return { user, membership, organization, employee, personalView: false };
 }

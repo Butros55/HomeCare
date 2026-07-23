@@ -111,6 +111,8 @@ export interface OrgContext {
   organization: Organization;
   /** Eigenes Mitarbeiterprofil in dieser Organisation (falls vorhanden). */
   employee: Employee | null;
+  /** Leitung: persönliche Kompakt-Ansicht aktiv (reiner Ansichtswechsel, keine Datenänderung). */
+  personalView: boolean;
 }
 
 export const ACTIVE_ORG_COOKIE = 'hcp_active_org';
@@ -138,15 +140,12 @@ export const getOrgContext = cache(async (): Promise<OrgContext | null> => {
   if (memberships.length === 0) return null;
 
   const store = await cookies();
+  const preference = await db.userPreference.findUnique({
+    where: { userId: session.user.id },
+    select: { lastActiveOrganizationId: true, personalViewActive: true },
+  });
   const preferredOrgId =
-    store.get(ACTIVE_ORG_COOKIE)?.value ??
-    (
-      await db.userPreference.findUnique({
-        where: { userId: session.user.id },
-        select: { lastActiveOrganizationId: true },
-      })
-    )?.lastActiveOrganizationId ??
-    null;
+    store.get(ACTIVE_ORG_COOKIE)?.value ?? preference?.lastActiveOrganizationId ?? null;
 
   const membership =
     memberships.find((m) => m.organizationId === preferredOrgId) ?? memberships[0]!;
@@ -165,6 +164,7 @@ export const getOrgContext = cache(async (): Promise<OrgContext | null> => {
     membership: membershipRest as OrganizationMembership,
     organization,
     employee,
+    personalView: preference?.personalViewActive ?? false,
   };
 });
 
@@ -182,17 +182,25 @@ export function isLeadershipRole(role: MembershipRole): boolean {
 
 /**
  * UI-Modus (Anfrage Juli 2026 – zwei getrennte Ansichten):
- *  - 'solo':     Leitung organisiert nur sich selbst → stark reduziertes
- *                Alltags-UI ohne Mitarbeiter-/Zuweisungslogik.
+ *  - 'solo':     Organisation im Alleine-Modus → stark reduziertes Alltags-UI
+ *                ohne Mitarbeiter-/Zuweisungslogik (kein Umschalten möglich).
  *  - 'employee': Mitarbeiter-Konto → dasselbe reduzierte UI, aber nur mit den
  *                eigenen (zugewiesenen) Terminen/Routen.
+ *  - 'personal': Leitung im Team-Modus hat die persönliche Kompakt-Ansicht
+ *                eingeschaltet (reiner Ansichtswechsel – Daten unverändert).
  *  - 'team':     volles Leitungs-UI (wie bisher).
  */
-export type UiMode = 'solo' | 'employee' | 'team';
+export type UiMode = 'solo' | 'employee' | 'team' | 'personal';
 
 export function uiModeFor(ctx: OrgContext): UiMode {
   if (ctx.membership.role === 'EMPLOYEE') return 'employee';
-  return ctx.organization.soloMode ? 'solo' : 'team';
+  if (ctx.organization.soloMode) return 'solo';
+  return ctx.personalView ? 'personal' : 'team';
+}
+
+/** Darf zwischen Verwaltungs- und persönlicher Ansicht umschalten? */
+export function canTogglePersonalView(ctx: OrgContext): boolean {
+  return isLeadershipRole(ctx.membership.role) && !ctx.organization.soloMode;
 }
 
 /** Individuelle Berechtigungen einer Mitgliedschaft (null = Rollen-Standard). */

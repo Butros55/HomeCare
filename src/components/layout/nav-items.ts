@@ -37,7 +37,7 @@ export interface NavSection {
 }
 
 /** UI-Modus (Server-seitig aus Rolle + Organisation ermittelt, s. src/server/permissions). */
-export type NavUiMode = 'solo' | 'employee' | 'team';
+export type NavUiMode = 'solo' | 'employee' | 'team' | 'personal';
 
 export const NAV_SECTIONS: NavSection[] = [
   {

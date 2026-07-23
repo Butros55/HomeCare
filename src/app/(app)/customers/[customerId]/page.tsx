@@ -68,8 +68,9 @@ export default async function CustomerDetailPage({
   const { ctx, customer, canManage, canAllocate: canAllocateRaw } = detail;
   if (!customer) notFound();
 
-  // Solo-Modus: keine Mitarbeiter-/Zuweisungslogik im Kunden-UI.
-  const solo = uiModeFor(ctx) === 'solo';
+  // Kompakt-Ansicht (Solo-Modus oder persönliche Leitungs-Ansicht):
+  // keine Mitarbeiter-/Zuweisungslogik im Kunden-UI.
+  const solo = uiModeFor(ctx) !== 'team';
   const canAllocate = canAllocateRaw && !solo;
   const visibleTabs = TABS.filter((t) => !(solo && t.key === 'mitarbeiter'));
   if (!visibleTabs.some((t) => t.key === tab)) tab = 'uebersicht';

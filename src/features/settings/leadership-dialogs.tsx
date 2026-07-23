@@ -30,10 +30,15 @@ export function ModeSettings({ soloMode }: { soloMode: boolean }) {
     startTransition(async () => {
       const result = await updateSoloModeAction(nextSolo);
       if (result.ok) {
+        const moved = result.data.movedCount;
         toast.success(
           nextSolo
-            ? 'Alleine-Modus aktiv – die App zeigt jetzt das reduzierte Alltags-UI.'
-            : 'Leitungs-Modus aktiv – volle Verwaltung eingeblendet.',
+            ? moved > 0
+              ? `Alleine-Modus aktiv – ${moved} künftige${moved === 1 ? 'r' : ''} Termin${moved === 1 ? '' : 'e'} auf dich übertragen.`
+              : 'Alleine-Modus aktiv – die App zeigt jetzt das reduzierte Alltags-UI.'
+            : moved > 0
+              ? `Leitungs-Modus aktiv – ${moved} Termin${moved === 1 ? '' : 'e'} wieder den Mitarbeitern zugeordnet.`
+              : 'Leitungs-Modus aktiv – volle Verwaltung eingeblendet.',
         );
         router.refresh();
       } else {
@@ -78,6 +83,12 @@ export function ModeSettings({ soloMode }: { soloMode: boolean }) {
             </span>
           </button>
         </div>
+        <p className="mt-2.5 text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+          Beim Wechsel zu „Alleine“ werden alle künftigen Mitarbeiter-Termine auf dich übertragen
+          (Mitarbeiter und Kunden bleiben gespeichert); beim Wechsel zurück erhalten die Mitarbeiter
+          ihre Zuordnungen automatisch wieder. Tipp: Für einen schnellen Blick auf die eigenen
+          Termine reicht der Umschalter „Meine Ansicht“ oben in der Leiste – der ändert keine Daten.
+        </p>
       </PanelBody>
     </Panel>
   );

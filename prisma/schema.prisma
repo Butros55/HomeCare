@@ -223,6 +223,8 @@ model UserPreference {
   calendarFilters          Json?
   notificationPrefs        Json?
   lastActiveOrganizationId String?
+  /// Leitung: persönliche Kompakt-Ansicht („Mein Tag") statt Verwaltungs-UI aktiv (reiner Ansichtswechsel)
+  personalViewActive       Boolean @default(false)
 }
 
 model Session {
@@ -515,6 +517,8 @@ model AppointmentSeries {
   customer               Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
   defaultEmployeeId      String?
   defaultEmployee        Employee?    @relation("SeriesDefaultEmployee", fields: [defaultEmployeeId], references: [id], onDelete: SetNull)
+  /// Solo-Wechsel: ursprünglicher Standard-Mitarbeiter (Wiederherstellung beim Zurückwechseln)
+  soloReassignedFromEmployeeId String?
   title                  String
   description            String?
   /// RFC-5545-RRULE, z. B. "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,TH"
@@ -551,6 +555,8 @@ model Appointment {
   occurrenceDate             DateTime?
   assignedEmployeeId         String?
   assignedEmployee           Employee?                  @relation("AppointmentEmployee", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+  /// Solo-Wechsel: ursprünglicher Mitarbeiter (für die Wiederherstellung beim Zurückwechseln zu „Leitung")
+  soloReassignedFromEmployeeId String?
   title                      String
   description                String?
   startAt                    DateTime

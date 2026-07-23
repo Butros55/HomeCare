@@ -25,6 +25,7 @@ export function AppShell({
   uiMode = 'team',
   canCreate,
   canManageEmployees,
+  personalViewToggle = null,
   unreadNotifications,
   onSearch,
   children,
@@ -38,6 +39,7 @@ export function AppShell({
   uiMode?: NavUiMode;
   canCreate: boolean;
   canManageEmployees: boolean;
+  personalViewToggle?: { personalView: boolean } | null;
   unreadNotifications: number;
   onSearch?: (query: string) => Promise<SearchResultItem[]>;
   children: React.ReactNode;
@@ -66,6 +68,7 @@ export function AppShell({
           unreadNotifications={unreadNotifications}
           canCreate={canCreate}
           canManageEmployees={canManageEmployees}
+          personalViewToggle={personalViewToggle}
           onOpenSearch={() => setPaletteOpen(true)}
         />
         <main className="flex-1 overflow-y-auto pb-[calc(var(--spacing-bottom-nav)+env(safe-area-inset-bottom))] md:pb-0">

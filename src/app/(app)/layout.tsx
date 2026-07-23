@@ -5,7 +5,13 @@ import { APP_NAME } from '@/lib/app-config';
 import { globalSearchAction } from '@/server/actions/search-actions';
 import { getCurrentSession } from '@/server/auth/session';
 import { db } from '@/server/db';
-import { getOrgContext, hasPermission, navPermissionsFor, uiModeFor } from '@/server/permissions';
+import {
+  canTogglePersonalView,
+  getOrgContext,
+  hasPermission,
+  navPermissionsFor,
+  uiModeFor,
+} from '@/server/permissions';
 
 /**
  * Geschütztes Layout: verlangt Session + Organisationsmitgliedschaft und
@@ -48,6 +54,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       uiMode={uiModeFor(ctx)}
       canCreate={hasPermission(ctx, 'appointments.manage')}
       canManageEmployees={hasPermission(ctx, 'employees.manage')}
+      personalViewToggle={canTogglePersonalView(ctx) ? { personalView: ctx.personalView } : null}
       unreadNotifications={unreadNotifications}
       onSearch={globalSearchAction}
     >

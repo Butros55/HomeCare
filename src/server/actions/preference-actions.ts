@@ -1,10 +1,15 @@
 'use server';
 
+import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { db } from '@/server/db';
-import { runAction, type ActionResult } from '@/server/errors';
-import { requireAuthenticatedUser } from '@/server/permissions';
+import { AppError, runAction, type ActionResult } from '@/server/errors';
+import {
+  canTogglePersonalView,
+  requireAuthenticatedUser,
+  requireOrganizationMembership,
+} from '@/server/permissions';
 
 const calendarPrefSchema = z.object({
   calendarView: z
@@ -26,6 +31,31 @@ export async function saveCalendarPreferenceAction(
       update: data,
     });
     return { done: true as const };
+  });
+}
+
+/**
+ * Schnell-Umschalter der Leitung: persönliche Kompakt-Ansicht („Mein Tag“)
+ * ein-/ausschalten. Reiner Ansichtswechsel pro Benutzer – Daten und
+ * Zuordnungen bleiben unangetastet.
+ */
+export async function togglePersonalViewAction(
+  active: boolean,
+): Promise<ActionResult<{ personalView: boolean }>> {
+  return runAction(async () => {
+    const ctx = await requireOrganizationMembership();
+    if (!canTogglePersonalView(ctx)) {
+      throw new AppError('ACCESS_DENIED', {
+        message: 'Der Ansichtswechsel ist nur für Leitungs-Konten im Team-Modus verfügbar.',
+      });
+    }
+    await db.userPreference.upsert({
+      where: { userId: ctx.user.id },
+      create: { userId: ctx.user.id, personalViewActive: Boolean(active) },
+      update: { personalViewActive: Boolean(active) },
+    });
+    revalidatePath('/', 'layout');
+    return { personalView: Boolean(active) };
   });
 }
 
