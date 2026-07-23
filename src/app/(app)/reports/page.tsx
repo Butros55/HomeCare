@@ -102,8 +102,8 @@ export default async function ReportsPage({
         </div>
       </PageHeader>
 
-      <div className="space-y-4 p-4 sm:p-5" data-tour="reports-stats">
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <div className="space-y-4 p-4 sm:p-5">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5" data-tour="reports-stats">
           <StatTile label="Kundenstunden (Budget)" value={formatMinutesAsHours(data.totals.budgetMinutes)} />
           <StatTile label="Zugewiesen" value={formatMinutesAsHours(data.totals.allocatedMinutes)} />
           <StatTile label="Geplant" value={formatMinutesAsHours(data.totals.plannedMinutes)} />
@@ -133,7 +133,7 @@ export default async function ReportsPage({
           />
         </div>
 
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2" data-tour="reports-charts">
           <Panel>
             <PanelHeader>
               <PanelTitle>Geplante Stunden je Mitarbeiter</PanelTitle>
@@ -169,7 +169,7 @@ export default async function ReportsPage({
           </Panel>
         </div>
 
-        <Panel>
+        <Panel data-tour="reports-tables">
           <PanelHeader>
             <PanelTitle>Mitarbeiter</PanelTitle>
           </PanelHeader>

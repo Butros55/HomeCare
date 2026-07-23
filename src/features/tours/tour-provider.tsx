@@ -84,18 +84,38 @@ function measure(el: HTMLElement): TargetRect {
   return { top: rect.top, left: rect.left, width: rect.width, height: rect.height };
 }
 
-/** Popover-Position: bevorzugte Seite, bei Platzmangel geflippt, im Viewport geklemmt. */
+/**
+ * Popover-Position: bevorzugte Seite, bei Platzmangel geflippt, im Viewport
+ * geklemmt. Sehr große Ziele (ganze Listen/Bereiche) bekommen das Popover
+ * ZENTRIERT über dem Spotlight – seitlich wäre kein Platz und unten liefe es
+ * aus dem Bild (der „Weiter“-Button war dann abgeschnitten).
+ */
 function popoverPosition(
   rect: TargetRect | null,
   preferred: TourPlacement | undefined,
   popH: number,
-): { top: number; left: number; placement: TourPlacement; arrowOffset: number } {
+): { top: number; left: number; placement: TourPlacement | 'center'; arrowOffset: number } {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const width = Math.min(POPOVER_WIDTH, vw - 24);
+  const centered = () => ({
+    top: Math.max(12, Math.min(vh - popH - 12, vh / 2 - popH / 2)),
+    left: Math.max(12, vw / 2 - width / 2),
+    placement: 'center' as const,
+    arrowOffset: -1,
+  });
 
-  if (!rect) {
-    return { top: Math.max(24, vh / 2 - popH / 2), left: vw / 2 - width / 2, placement: 'bottom', arrowOffset: -1 };
+  if (!rect) return centered();
+
+  // Riesige Ziele: Popover mittig auf dem Spotlight platzieren (leicht nach
+  // unten versetzt, damit die Überschrift des Bereichs sichtbar bleibt).
+  const huge = rect.height > vh * 0.55 || (rect.width > vw * 0.8 && rect.height > vh * 0.4);
+  if (huge) {
+    const centerTop = Math.max(
+      12,
+      Math.min(vh - popH - 12, rect.top + Math.min(rect.height * 0.35, vh * 0.3)),
+    );
+    return { top: centerTop, left: Math.max(12, vw / 2 - width / 2), placement: 'center', arrowOffset: -1 };
   }
 
   const fits: Record<TourPlacement, boolean> = {
@@ -107,7 +127,9 @@ function popoverPosition(
   const order: TourPlacement[] = preferred
     ? [preferred, 'bottom', 'right', 'top', 'left']
     : ['bottom', 'right', 'top', 'left'];
-  const placement = order.find((p) => fits[p]) ?? 'bottom';
+  const placement = order.find((p) => fits[p]);
+  // Keine Seite passt (kleines Fenster) → zentriert statt abgeschnitten.
+  if (!placement) return centered();
 
   let top: number;
   let left: number;
@@ -427,6 +449,7 @@ export function TourProvider({
             role="dialog"
             aria-modal="true"
             aria-label={step!.title}
+            data-tour-overlay=""
           >
             {/* Vier Abdunkelungs-Flächen um das Spotlight – das Ziel bleibt scharf.
                 Sie fangen alle Klicks ab; nur das Loch lässt Klicks durch. */}
@@ -492,9 +515,9 @@ export function TourProvider({
                   className="pointer-events-auto absolute z-10 outline-none"
                   style={{ width: Math.min(POPOVER_WIDTH, window.innerWidth - 24) }}
                 >
-                  <div className="relative rounded-[var(--radius-xl)] border border-[var(--color-line-subtle)] bg-[var(--color-panel)] p-4 shadow-[var(--shadow-popover)]">
-                    {/* Pfeil */}
-                    {spot ? (
+                  <div className="relative max-h-[calc(100dvh-24px)] overflow-y-auto rounded-[var(--radius-xl)] border border-[var(--color-line-subtle)] bg-[var(--color-panel)] p-4 shadow-[var(--shadow-popover)]">
+                    {/* Pfeil (entfällt bei zentrierter Platzierung über großen Zielen) */}
+                    {spot && pop.placement !== 'center' && pop.arrowOffset >= 0 ? (
                       <span
                         aria-hidden
                         className={cn(

@@ -60,7 +60,7 @@ export default async function DashboardPage() {
 
       <div className="space-y-4 p-4 sm:p-5">
         {/* Kennzahlkarten – klickbar, führen zu gefilterten Ansichten */}
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-5" data-tour="dashboard-stats">
           <Link href="/calendar" className="rounded-[var(--radius-xl)]">
             <StatTile icon={<CalendarDays />} label="Termine heute" value={data.counts.todayCount} hint="Zum Kalender" />
           </Link>
@@ -149,7 +149,7 @@ export default async function DashboardPage() {
 
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
           {/* Heute */}
-          <Panel className="xl:col-span-2">
+          <Panel className="xl:col-span-2" data-tour="dashboard-today">
             <PanelHeader>
               <PanelTitle>Heute</PanelTitle>
               <Link
@@ -321,7 +321,7 @@ export default async function DashboardPage() {
 
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
           {/* Handlungsbedarf */}
-          <Panel className="xl:col-span-2">
+          <Panel className="xl:col-span-2" data-tour="dashboard-action-items">
             <PanelHeader>
               <PanelTitle>Handlungsbedarf</PanelTitle>
             </PanelHeader>

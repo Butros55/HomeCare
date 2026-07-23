@@ -50,7 +50,7 @@ export async function MyDayDashboard({
 
       <div className="mx-auto max-w-5xl space-y-4 p-4 sm:p-5">
         {/* Kompakte Kennzahlen */}
-        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4" data-tour="my-day-stats">
           <StatTile
             icon={<CalendarDays />}
             label="Termine heute"
@@ -84,7 +84,7 @@ export async function MyDayDashboard({
         </div>
 
         {/* Große Schnellaktionen – das tägliche Werkzeug */}
-        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4" data-tour="my-day-actions">
           {canManage ? (
             <Button asChild variant="primary" size="lg" className="h-14 justify-start text-[length:var(--text-base)]">
               <Link href="/calendar?neu=1">
@@ -112,7 +112,7 @@ export async function MyDayDashboard({
         </div>
 
         {/* Heutige Route – groß und lesbar */}
-        <Panel>
+        <Panel data-tour="my-day-today">
           <PanelHeader>
             <PanelTitle>Heute</PanelTitle>
             <Link

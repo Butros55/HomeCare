@@ -83,7 +83,7 @@ function UiOutline({ icon, children }: { icon?: React.ReactNode; children: React
 }
 
 /** Status-Pill exakt wie in den Tabellen (Aktiv/Gesperrt …). */
-function UiStatus({ tone, children }: { tone: 'done' | 'stuck' | 'progress' | 'hold'; children: React.ReactNode }) {
+function UiStatus({ tone, children }: { tone: 'done' | 'stuck' | 'progress' | 'hold' | 'todo'; children: React.ReactNode }) {
   return (
     <span aria-hidden className="mx-0.5 inline-flex translate-y-[-1px] align-middle">
       <StatusPill size="sm" tone={tone}>
@@ -209,11 +209,11 @@ export const TOUR_DEFINITIONS: TourDefinition[] = [
   },
 
   // -------------------------------------------------------------------------
-  // Mitarbeiter
+  // Mitarbeiter: Liste + Anlege-Flow (über den Seitenwechsel hinweg)
   // -------------------------------------------------------------------------
   {
     id: 'employees',
-    version: 1,
+    version: 2,
     route: /^\/employees(\?.*)?$/,
     enabled: (permissions, uiMode) => permissions.employees && uiMode === 'team',
     steps: [
@@ -221,19 +221,6 @@ export const TOUR_DEFINITIONS: TourDefinition[] = [
         id: 'intro',
         title: 'Dein Team',
         body: 'Hier verwaltest du alle Mitarbeiter: Profile, Arbeitszeiten, Verfügbarkeiten und wie viele Stunden sie schon erhalten haben.',
-      },
-      {
-        id: 'create',
-        target: 'employees-create-button',
-        title: 'Mitarbeiter anlegen',
-        body: (
-          <p>
-            Über <UiPrimary icon={<Plus />}>Mitarbeiter anlegen</UiPrimary> erstellst du neue Profile. Per
-            Einladung bekommt die Person ein eigenes Konto mit reduzierter Ansicht – nur ihre Termine und
-            Routen.
-          </p>
-        ),
-        placement: 'bottom',
       },
       {
         id: 'list',
@@ -248,6 +235,48 @@ export const TOUR_DEFINITIONS: TourDefinition[] = [
         ),
         placement: 'top',
       },
+      {
+        id: 'create-button',
+        target: 'employees-create-button',
+        title: 'Neuen Mitarbeiter anlegen',
+        body: (
+          <p>
+            Klicke jetzt auf <UiPrimary icon={<Plus />}>Mitarbeiter anlegen</UiPrimary> – wir zeigen dir
+            kurz das Formular.
+          </p>
+        ),
+        placement: 'bottom',
+        interaction: 'target-click',
+      },
+      {
+        id: 'form-master',
+        target: 'employee-form-master',
+        route: /^\/employees\/new(\?.*)?$/,
+        title: 'Stammdaten',
+        body: 'Name, Personalnummer, Kontakt und optional der Vorgesetzte (für Team-Strukturen). Pflichtfelder sind mit * markiert.',
+        placement: 'right',
+      },
+      {
+        id: 'form-hours',
+        target: 'employee-form-hours',
+        route: /^\/employees\/new(\?.*)?$/,
+        title: 'Arbeitszeit & Stunden',
+        body: 'Beschäftigungsart, Wochen-/Monatsziel und Tageslimit. Daraus entstehen die „Fehlend“-Warnungen in der Übersicht und die Konfliktprüfung im Kalender.',
+        placement: 'right',
+      },
+      {
+        id: 'form-actions',
+        target: 'employee-form-actions',
+        route: /^\/employees\/new(\?.*)?$/,
+        title: 'Speichern & einladen',
+        body: (
+          <p>
+            <UiPrimary>Mitarbeiter anlegen</UiPrimary> speichert das Profil. Danach kannst du die Person
+            über ihr Profil per E-Mail einladen – sie erhält ein eigenes Konto mit reduzierter Ansicht.
+          </p>
+        ),
+        placement: 'top',
+      },
     ],
   },
 
@@ -256,7 +285,7 @@ export const TOUR_DEFINITIONS: TourDefinition[] = [
   // -------------------------------------------------------------------------
   {
     id: 'calendar',
-    version: 1,
+    version: 2,
     route: /^\/calendar(\?.*)?$/,
     steps: [
       {
@@ -292,16 +321,56 @@ export const TOUR_DEFINITIONS: TourDefinition[] = [
         placement: 'right',
       },
       {
-        id: 'create',
+        id: 'create-button',
         target: 'calendar-create-button',
         title: 'Termin anlegen',
         body: (
           <p>
-            Mit <UiPrimary icon={<Plus />} /> legst du neue Termine (auch Serien) an. Konflikte wie
-            Überschneidungen oder fehlendes Stundenbudget werden vor dem Speichern geprüft.
+            Klicke jetzt auf <UiPrimary icon={<Plus />} /> – wir gehen das Terminformular einmal kurz
+            durch.
           </p>
         ),
         placement: 'left',
+        interaction: 'target-click',
+      },
+      {
+        id: 'form-basics',
+        target: 'appointment-form-basics',
+        title: 'Kunde, Titel & Status',
+        body: (
+          <p>
+            Wähle den Kunden und optional den Mitarbeiter. Der Status <UiStatus tone="todo">Geplant</UiStatus>{' '}
+            ist der Normalfall; <UiStatus tone="hold">Entwurf</UiStatus> bleibt unverbindlich und zählt noch
+            nicht als verplant.
+          </p>
+        ),
+        placement: 'right',
+      },
+      {
+        id: 'form-when',
+        target: 'appointment-form-when',
+        title: 'Datum, Zeit & Dauer',
+        body: 'Datum, Startzeit und Dauer („2“, „2,5“ oder „150 Minuten“). Überschneidungen, Abwesenheiten und fehlendes Stundenbudget werden beim Speichern geprüft – mit Warnung statt Blockade.',
+        placement: 'right',
+      },
+      {
+        id: 'form-recurrence',
+        target: 'appointment-form-recurrence',
+        title: 'Wiederholung (Serien)',
+        body: 'Für regelmäßige Einsätze: täglich, wöchentlich, alle zwei Wochen oder monatlich – mit Enddatum oder Anzahl. Einzelne Vorkommen lassen sich später separat ändern.',
+        placement: 'right',
+      },
+      {
+        id: 'form-actions',
+        target: 'appointment-form-actions',
+        title: 'Anlegen',
+        body: (
+          <p>
+            <UiPrimary>Termin anlegen</UiPrimary> speichert den Einsatz. Du kannst das Formular jetzt
+            ausfüllen – oder mit „Abbrechen“ schließen.
+          </p>
+        ),
+        placement: 'top',
       },
     ],
   },
@@ -355,7 +424,7 @@ export const TOUR_DEFINITIONS: TourDefinition[] = [
   // -------------------------------------------------------------------------
   {
     id: 'reports',
-    version: 1,
+    version: 2,
     route: /^\/reports(\?.*)?$/,
     enabled: (permissions, uiMode) => permissions.reports && uiMode === 'team',
     steps: [
@@ -386,8 +455,108 @@ export const TOUR_DEFINITIONS: TourDefinition[] = [
       {
         id: 'stats',
         target: 'reports-stats',
-        title: 'Kennzahlen & Tabellen',
-        body: 'Oben die Summen, darunter Diagramme und Detailtabellen pro Mitarbeiter und Kunde.',
+        title: 'Die Kennzahlen',
+        body: 'Die Summen des Zeitraums: Budget, zugewiesene, geplante und geleistete Stunden, Fahrtzeit, Auslastung sowie Ausfälle und unbesetzte Termine.',
+        placement: 'bottom',
+      },
+      {
+        id: 'charts',
+        target: 'reports-charts',
+        title: 'Diagramme',
+        body: 'Links: geplante vs. zugewiesene Stunden je Mitarbeiter. Rechts: die Termine des Zeitraums nach Status.',
+        placement: 'top',
+      },
+      {
+        id: 'tables',
+        target: 'reports-tables',
+        title: 'Detailtabellen',
+        body: 'Die genauen Werte pro Mitarbeiter (und darunter pro Kunde) – dieselben Zahlen, die auch im CSV-Export landen.',
+        placement: 'top',
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // Dashboard (Leitungs-Ansicht)
+  // -------------------------------------------------------------------------
+  {
+    id: 'dashboard',
+    version: 1,
+    route: /^\/dashboard(\?.*)?$/,
+    enabled: (_permissions, uiMode) => uiMode === 'team',
+    steps: [
+      {
+        id: 'intro',
+        title: 'Dein Dashboard',
+        body: 'Der Startpunkt für jeden Tag: die wichtigsten Zahlen, der heutige Ablauf und alles, was Aufmerksamkeit braucht.',
+      },
+      {
+        id: 'stats',
+        target: 'dashboard-stats',
+        title: 'Kennzahlen – alle klickbar',
+        body: (
+          <p>
+            Termine heute, offene Kundenstunden, Termine ohne Zuordnung, Konflikte … Jede Kachel führt per
+            Klick direkt zur passenden, vorgefilterten Ansicht.
+          </p>
+        ),
+        placement: 'bottom',
+      },
+      {
+        id: 'today',
+        target: 'dashboard-today',
+        title: 'Der heutige Tag',
+        body: 'Alle heutigen Einsätze in zeitlicher Reihenfolge – mit Fahrzeit und Abfahrtszeit zwischen den Stopps und direktem Navigations-Link.',
+        placement: 'right',
+      },
+      {
+        id: 'action-items',
+        target: 'dashboard-action-items',
+        title: 'Handlungsbedarf',
+        body: 'Was jetzt zu tun ist: Mitarbeiter unter Stundenziel, Kunden mit offenen Stunden, unzugewiesene Termine oder fehlende Adressen – jeweils mit Direktlink.',
+        placement: 'top',
+      },
+    ],
+  },
+
+  // -------------------------------------------------------------------------
+  // Mein Tag (Alleine-Modus, persönliche Ansicht & Mitarbeiter-Konten)
+  // -------------------------------------------------------------------------
+  {
+    id: 'my-day',
+    version: 1,
+    route: /^\/dashboard(\?.*)?$/,
+    enabled: (_permissions, uiMode) => uiMode !== 'team',
+    steps: [
+      {
+        id: 'intro',
+        title: 'Mein Tag',
+        body: 'Deine schlanke Tagesansicht: nur deine Termine, Routen und Stunden – gedacht für den Blick vor dem Losfahren.',
+      },
+      {
+        id: 'stats',
+        target: 'my-day-stats',
+        title: 'Der Tag in Zahlen',
+        body: '„Losfahren um“ zeigt die späteste Abfahrt für den ersten Termin (inkl. Fahrzeit ab deinem Startpunkt). Daneben: Einsatzzeit heute, offene Stunden und die Wochensumme.',
+        placement: 'bottom',
+      },
+      {
+        id: 'actions',
+        target: 'my-day-actions',
+        title: 'Schnellzugriffe',
+        body: (
+          <p>
+            <UiPrimary icon={<CalendarPlus />}>Termin anlegen</UiPrimary> plant direkt für dich selbst;
+            „Route heute“ öffnet die fertige Tagesroute mit Karte und Reihenfolge.
+          </p>
+        ),
+        placement: 'bottom',
+      },
+      {
+        id: 'today',
+        target: 'my-day-today',
+        title: 'Heute',
+        body: 'Deine Einsätze in Reihenfolge – mit Adresse, Abfahrtszeit pro Stopp und einem Klick zur Navigation.',
         placement: 'top',
       },
     ],

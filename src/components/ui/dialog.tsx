@@ -26,10 +26,24 @@ export function DialogContent({
   description?: string;
   wide?: boolean;
 }) {
+  // Läuft eine Hinweis-Tour, darf ein Klick auf deren Popover/Overlay den
+  // Dialog nicht schließen (Radix wertet ihn sonst als "outside interaction").
+  const tourActive = () =>
+    typeof document !== 'undefined' && document.querySelector('[data-tour-overlay]') !== null;
+
   return (
     <DialogPrimitive.Portal>
       <DialogPrimitive.Overlay className="animate-overlay-in fixed inset-0 z-50 bg-black/30 backdrop-blur-sm" />
       <DialogPrimitive.Content
+        onPointerDownOutside={(event) => {
+          if (tourActive()) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (tourActive()) event.preventDefault();
+        }}
+        onEscapeKeyDown={(event) => {
+          if (tourActive()) event.preventDefault();
+        }}
         className={cn(
           // Mobil: Bottom-Sheet
           'animate-sheet-in fixed inset-x-0 bottom-0 z-50 max-h-[92dvh] w-full overflow-y-auto rounded-t-[var(--radius-xl)]',

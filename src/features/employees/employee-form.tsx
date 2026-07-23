@@ -89,7 +89,7 @@ export function EmployeeForm({
 
   return (
     <form onSubmit={onSubmit} method="post" noValidate className="space-y-4">
-      <Panel>
+      <Panel data-tour="employee-form-master">
         <PanelHeader>
           <PanelTitle>Stammdaten</PanelTitle>
         </PanelHeader>
@@ -188,7 +188,7 @@ export function EmployeeForm({
         </PanelBody>
       </Panel>
 
-      <Panel>
+      <Panel data-tour="employee-form-hours">
         <PanelHeader>
           <PanelTitle>Arbeitszeit & Stunden</PanelTitle>
         </PanelHeader>
@@ -276,7 +276,7 @@ export function EmployeeForm({
         </PanelBody>
       </Panel>
 
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex items-center justify-end gap-2" data-tour="employee-form-actions">
         <Button type="button" variant="ghost" onClick={() => router.back()} disabled={pending}>
           Abbrechen
         </Button>

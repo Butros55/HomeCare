@@ -273,7 +273,7 @@ export function AppointmentFormDialog({
               </div>
             ) : null}
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2" data-tour="appointment-form-basics">
               {!isEdit ? (
                 <div>
                   <Label htmlFor="af-customer" required>
@@ -333,7 +333,7 @@ export function AppointmentFormDialog({
                   </SelectContent>
                 </Select>
               </div>
-              <div>
+              <div data-tour="appointment-form-when">
                 <Label htmlFor="af-date" required>
                   Datum
                 </Label>
@@ -421,7 +421,10 @@ export function AppointmentFormDialog({
             ) : null}
 
             {!isEdit ? (
-              <div className="rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] p-3">
+              <div
+                className="rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] p-3"
+                data-tour="appointment-form-recurrence"
+              >
                 <label className="flex items-center justify-between gap-3">
                   <span className="text-[length:var(--text-sm)] font-medium">Wiederholung</span>
                   <Switch checked={recurrenceEnabled} onCheckedChange={setRecurrenceEnabled} />
@@ -531,7 +534,7 @@ export function AppointmentFormDialog({
               />
             </div>
 
-            <DialogFooter>
+            <DialogFooter data-tour="appointment-form-actions">
               <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={pending}>
                 Abbrechen
               </Button>
