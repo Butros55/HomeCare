@@ -121,6 +121,8 @@ export function NoteCarousel({
   const cardRefs = React.useRef<Map<string, HTMLElement>>(new Map());
   const frameRef = React.useRef<number | null>(null);
   const glideRef = React.useRef<number | null>(null);
+  const idleRef = React.useRef<number | null>(null);
+  const settlingRef = React.useRef(false);
   const wasOpenRef = React.useRef(false);
   const seenIdsRef = React.useRef<Set<string>>(new Set(notes.map((note) => note.id)));
   const [editingId, setEditingId] = React.useState<string | null>(null);
@@ -168,6 +170,25 @@ export function NoteCarousel({
       window.cancelAnimationFrame(glideRef.current);
       glideRef.current = null;
     }
+    if (idleRef.current !== null) {
+      window.cancelAnimationFrame(idleRef.current);
+      idleRef.current = null;
+    }
+    settlingRef.current = false;
+  }, []);
+
+  /**
+   * Restlichen Schwung verwerfen. Ohne das würde der Browser weiter scrollen
+   * und die eigene Animation überstimmen – es „ploppt" dann statt zu gleiten.
+   */
+  const killMomentum = React.useCallback(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const left = scroller.scrollLeft;
+    scroller.style.overflowX = 'hidden';
+    scroller.getBoundingClientRect();
+    scroller.style.overflowX = '';
+    scroller.scrollLeft = left;
   }, []);
 
   /**
@@ -232,6 +253,33 @@ export function NoteCarousel({
     if (closest?.key === NEW_SHEET_KEY) centerOn(firstNoteId, 620);
   }, [centerOn, creating, notes]);
 
+  /**
+   * Erst wenn der Schwung ausgelaufen ist, sanft zurückgleiten. So kämpft die
+   * eigene Animation nie gegen das Momentum – auch nicht bei einem kräftigen
+   * Wisch nach links.
+   */
+  const settleWhenIdle = React.useCallback(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller || settlingRef.current) return;
+    settlingRef.current = true;
+    let lastLeft = scroller.scrollLeft;
+    let stableFrames = 0;
+    const check = () => {
+      const current = scroller.scrollLeft;
+      stableFrames = Math.abs(current - lastLeft) < 0.5 ? stableFrames + 1 : 0;
+      lastLeft = current;
+      if (stableFrames < 3) {
+        idleRef.current = window.requestAnimationFrame(check);
+        return;
+      }
+      idleRef.current = null;
+      settlingRef.current = false;
+      killMomentum();
+      settleOnRealSheet();
+    };
+    idleRef.current = window.requestAnimationFrame(check);
+  }, [killMomentum, settleOnRealSheet]);
+
   React.useEffect(() => {
     const scroller = scrollerRef.current;
     if (!scroller) return;
@@ -264,10 +312,10 @@ export function NoteCarousel({
   React.useEffect(() => {
     const scroller = scrollerRef.current;
     if (!scroller) return;
-    const onSettle = () => settleOnRealSheet();
+    const onSettle = () => settleWhenIdle();
     scroller.addEventListener('scrollend', onSettle);
     return () => scroller.removeEventListener('scrollend', onSettle);
-  }, [settleOnRealSheet]);
+  }, [settleWhenIdle]);
 
   React.useEffect(() => stopGlide, [stopGlide]);
 
@@ -372,9 +420,11 @@ export function NoteCarousel({
         ref={scrollerRef}
         onScroll={scheduleFan}
         onPointerDown={stopGlide}
-        onPointerUp={settleOnRealSheet}
-        onPointerCancel={settleOnRealSheet}
-        className="scrollbar-none flex snap-x snap-proximity items-end gap-3 overflow-x-auto overflow-y-hidden pb-8"
+        onPointerUp={settleWhenIdle}
+        onPointerCancel={settleWhenIdle}
+        // Bewusst ohne CSS-scroll-snap: das würde die eigene, sanfte
+        // Gleit-Animation sofort an den nächsten Punkt reißen.
+        className="scrollbar-none flex items-end gap-3 overflow-x-auto overflow-y-hidden pb-8"
         style={{
           paddingTop: OVERSHOOT_HEADROOM,
           paddingInline: `max(1rem, calc(50% - var(--sheet-h) / ${SHEET_RATIO * 2}))`,
@@ -383,12 +433,7 @@ export function NoteCarousel({
         {/* Leeres Blatt: ein Tipp darauf legt sofort eine neue Seite an. */}
         <div className="shrink-0" style={flightStyle(0)}>
           <SheetColumn ref={(node) => registerCard(NEW_SHEET_KEY, node)}>
-            <SheetShell
-              onClick={onCreate}
-              disabled={creating}
-              label="Neue Seite anlegen"
-              className="snap-center"
-            >
+            <SheetShell onClick={onCreate} disabled={creating} label="Neue Seite anlegen">
               <span className="flex size-full flex-col items-center justify-center gap-2 rounded-[var(--radius-lg)] border-2 border-dashed border-slate-400/80 bg-white/55 text-slate-500 shadow-[0_6px_16px_-10px_rgb(0_0_0/0.5)] backdrop-blur-[2px]">
                 <Plus className="size-6" aria-hidden />
                 <span className="text-[length:var(--text-2xs)] font-medium">Neue Seite</span>
@@ -411,7 +456,6 @@ export function NoteCarousel({
                   label={`Seite „${note.title.trim() || 'Unbenannte Notiz'}" öffnen`}
                   title="Tippen zum Wechseln · Doppeltippen zum Öffnen"
                   current={active}
-                  className="snap-center"
                 >
                   <span
                     className={cn(

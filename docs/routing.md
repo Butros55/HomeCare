@@ -9,7 +9,8 @@ erreichen nie den Client.
 | Zweck | Dev-Standard | Optional (implementiert) | Produktion (vorbereitet) |
 |---|---|---|---|
 | Geocoding | `mock` (deterministisch) | `nominatim` | Google, Mapbox, ORS |
-| Routing/Matrix | `mock` (Haversine-Schätzung) | `osrm` | Google Routes, Mapbox, ORS, GraphHopper |
+| Routing/Matrix | `mock` (Haversine-Schätzung) | `osrm`, `mapbox`, `graphhopper`, `google` | dieselben mit eigenem Kontingent |
+| Streckenverlauf (Karte) | `mock` (Luftlinie) | OSRM, Mapbox, GraphHopper, Google (Fallback-Kette) | dieselben |
 | Karten-Tiles | OSM (`NEXT_PUBLIC_MAP_TILE_URL`) | beliebiger Tile-Server | kommerzieller Tile-/Style-Provider |
 
 **Mock-Provider (Standard):** Geocoding hasht die normalisierte Adresse auf eine stabile
@@ -66,6 +67,31 @@ MVP-Verfahren gemäß Anforderung 17, deterministisch und unit-getestet:
 6. Ergebnis: Reihenfolge, Ankunft/Einsatzbeginn/-ende je Stopp, Fahrzeit/Distanz je
    Abschnitt, Wartezeiten, Puffer, Summen, Rückkehrzeit, Warnungen; „keine zulässige
    Route“ wird explizit gemeldet (`ROUTE_NOT_FEASIBLE` bzw. Warnliste).
+
+## Streckenverlauf auf der Karte
+
+Die Karte zeigt die **tatsächlich zu fahrende Strecke**, nicht die Luftlinie.
+
+- `RoutingProvider.computeRoutePath(points)` liefert die Geometrie als
+  `[lat, lng]`-Folge. Alle Dienste kodieren sie als „Encoded Polyline";
+  `src/lib/polyline.ts` dekodiert sie (Genauigkeit 5, Mapbox 6) – unit-getestet
+  gegen das Referenzbeispiel des Google-Algorithmus.
+- Abgefragt werden: OSRM (`overview=full&geometries=polyline`), Mapbox Directions
+  (`polyline6`), GraphHopper (`points_encoded=true`), Google Directions
+  (`overview_polyline`).
+- `computeRoutePathCached()` versucht zuerst den konfigurierten `ROUTING_PROVIDER`
+  und danach jeden weiteren Dienst, für den ein Schlüssel hinterlegt ist. Erst wenn
+  keiner antwortet, wird die **Luftlinie** gezeichnet (gestrichelt, mit Hinweis im
+  Kartenkopf). Die Funktion wirft nie – eine fehlende Geometrie darf die
+  Routenansicht nicht blockieren.
+- Ergebnisse werden 30 min in-memory gecacht (Schlüssel: gerundete Koordinatenfolge);
+  nur echte Straßenverläufe landen im Cache. Timeout je Aufruf: `ROUTING_TIMEOUT_MS`
+  (Standard 8000 ms).
+- Aufruf über `getRoutePathAction` – sessiongebunden und auf 30 Punkte begrenzt,
+  damit daraus kein offener Routing-Proxy wird. Schlüssel bleiben serverseitig.
+- Darstellung (`src/features/map/leaflet-map.tsx`): breite weiße Kontur unter der
+  farbigen Linie, damit die Strecke auf jedem Kartenhintergrund lesbar bleibt; die
+  Karte zoomt auf Stopps **und** Streckenverlauf (Umwege ragen oft darüber hinaus).
 
 Regeln der Routenseite:
 

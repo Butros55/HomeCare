@@ -5,6 +5,9 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { AppError, runAction, type ActionResult } from '@/server/errors';
+import { requireOrganizationMembership } from '@/server/permissions';
+import { computeRoutePathCached } from '@/server/providers/routing';
+import type { RoutePath } from '@/server/providers/types';
 import {
   computeRoutePlan,
   discardRoutePlan,
@@ -21,6 +24,34 @@ import {
 
 export async function getRoutePlanningDataAction(employeeId: string, date: string) {
   return runAction(() => getRoutePlanningData(employeeId, date));
+}
+
+const routePathSchema = z.object({
+  points: z
+    .array(
+      z.object({
+        latitude: z.number().min(-90).max(90),
+        longitude: z.number().min(-180).max(180),
+      }),
+    )
+    .min(2)
+    .max(30),
+});
+export type RoutePathActionInput = z.input<typeof routePathSchema>;
+
+/**
+ * Tatsächlich zu fahrende Strecke für die Karte (Straßenverlauf statt
+ * Luftlinie). Nur für angemeldete Mitglieder – Schlüssel und Anbieter bleiben
+ * serverseitig; das Ergebnis ist gecacht.
+ */
+export async function getRoutePathAction(
+  input: RoutePathActionInput,
+): Promise<ActionResult<RoutePath>> {
+  return runAction(async () => {
+    await requireOrganizationMembership();
+    const { points } = routePathSchema.parse(input);
+    return computeRoutePathCached(points);
+  });
 }
 
 const gpsSchema = z

@@ -50,12 +50,29 @@ export interface RouteLeg {
   distanceMeters: number;
 }
 
+/** Tatsächlich zu fahrende Strecke – für die Darstellung auf der Karte. */
+export interface RoutePath {
+  /** Straßenverlauf als [lat, lng]-Folge (bei `road: false` nur die Stopps). */
+  coordinates: [number, number][];
+  /** true = echter Straßenverlauf, false = Luftlinie als Ersatzdarstellung. */
+  road: boolean;
+  /** Welcher Dienst die Geometrie geliefert hat (für den Hinweis im UI). */
+  provider: string;
+  distanceMeters: number;
+  travelSeconds: number;
+}
+
 export interface RoutingProvider {
   readonly name: string;
   /** Fahrzeit/Distanz für eine Punktfolge (n-1 Legs). */
   computeRoute(points: LatLng[]): Promise<RouteLeg[]>;
   /** Vollständige Matrix zwischen allen Punkten (matrix[i][j] = i → j). */
   computeRouteMatrix(points: LatLng[]): Promise<RouteLeg[][]>;
+  /**
+   * Gefahrene Strecke inklusive Straßenverlauf. Provider ohne echte Geometrie
+   * liefern die Stopps als Luftlinie zurück (`road: false`).
+   */
+  computeRoutePath(points: LatLng[]): Promise<RoutePath>;
 }
 
 export interface MapProvider {

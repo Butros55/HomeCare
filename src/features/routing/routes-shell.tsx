@@ -52,6 +52,7 @@ import {
   computeRouteAction,
   discardRouteAction,
   generateRouteSuggestionsAction,
+  getRoutePathAction,
   getRoutePlanningDataAction,
   saveRouteAction,
   type ComputeRouteActionInput,
@@ -503,15 +504,52 @@ function SingleRoutePlanner({
           color: c.customerColor,
         }));
 
-  const polyline: [number, number][] | undefined = route
-    ? [
-        [route.origin.latitude, route.origin.longitude] as [number, number],
-        ...route.stops.map((s) => [s.latitude, s.longitude] as [number, number]),
-        ...(returnToStart
-          ? ([[route.origin.latitude, route.origin.longitude]] as [number, number][])
-          : []),
-      ]
-    : undefined;
+  const polyline: [number, number][] | undefined = React.useMemo(() => {
+    if (!route) return undefined;
+    return [
+      [route.origin.latitude, route.origin.longitude] as [number, number],
+      ...route.stops.map((s) => [s.latitude, s.longitude] as [number, number]),
+      ...(returnToStart
+        ? ([[route.origin.latitude, route.origin.longitude]] as [number, number][])
+        : []),
+    ];
+  }, [route, returnToStart]);
+
+  // Echte Fahrstrecke (Straßenverlauf) nachladen, sobald die Stopp-Folge
+  // feststeht. Das Ergebnis trägt den Schlüssel seiner Anfrage – so wird eine
+  // veraltete Antwort nach einer Umplanung einfach ignoriert.
+  const pathKey = React.useMemo(
+    () => (polyline ? polyline.map(([lat, lng]) => `${lat.toFixed(5)},${lng.toFixed(5)}`).join(';') : null),
+    [polyline],
+  );
+  const [roadPath, setRoadPath] = React.useState<{
+    key: string;
+    coordinates: [number, number][];
+    road: boolean;
+    provider: string;
+  } | null>(null);
+
+  React.useEffect(() => {
+    if (!polyline || polyline.length < 2 || !pathKey) return;
+    let cancelled = false;
+    const points = polyline.map(([latitude, longitude]) => ({ latitude, longitude }));
+    getRoutePathAction({ points }).then((result) => {
+      if (cancelled || !result.ok) return;
+      setRoadPath({
+        key: pathKey,
+        coordinates: result.data.coordinates,
+        road: result.data.road,
+        provider: result.data.provider,
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pathKey, polyline]);
+
+  /** Nur verwenden, wenn die Antwort zur aktuell gezeigten Route gehört. */
+  const activeRoadPath =
+    roadPath && roadPath.key === pathKey && roadPath.road ? roadPath.coordinates : undefined;
 
   const originOptions: { value: OriginType; label: string; icon: React.ReactNode; disabled: boolean; hint?: string }[] = [
     {
@@ -750,11 +788,21 @@ function SingleRoutePlanner({
           <Panel className="xl:col-span-3">
             <PanelHeader>
               <PanelTitle>Karte</PanelTitle>
+              {/* Sichtbar machen, ob die echte Strecke oder nur die Luftlinie liegt. */}
+              {polyline && polyline.length > 1 ? (
+                <span className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+                  {activeRoadPath
+                    ? 'Tatsächliche Fahrstrecke'
+                    : roadPath && roadPath.key === pathKey
+                      ? 'Luftlinie – kein Routendienst erreichbar'
+                      : 'Fahrstrecke wird geladen …'}
+                </span>
+              ) : null}
             </PanelHeader>
             <PanelBody className="p-3">
               <div className="h-[400px] overflow-hidden rounded-[var(--radius-lg)]">
                 {markers.length > 0 ? (
-                  <LeafletMap markers={markers} polyline={polyline} />
+                  <LeafletMap markers={markers} polyline={polyline} roadPath={activeRoadPath} />
                 ) : (
                   <div className="flex h-full items-center justify-center rounded-[var(--radius-lg)] bg-[var(--color-panel-sunken)] text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
                     Termine wählen und Route berechnen.

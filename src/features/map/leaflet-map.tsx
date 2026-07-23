@@ -37,30 +37,38 @@ function markerIcon(color: string, sequence?: number): L.DivIcon {
   });
 }
 
-function FitBounds({ markers }: { markers: MapMarker[] }) {
+function FitBounds({ markers, path }: { markers: MapMarker[]; path?: [number, number][] }) {
   const map = useMap();
   React.useEffect(() => {
     if (markers.length === 0) return;
-    if (markers.length === 1) {
+    if (markers.length === 1 && !path?.length) {
       map.setView([markers[0]!.latitude, markers[0]!.longitude], 15);
       return;
     }
-    const bounds = L.latLngBounds(markers.map((m) => [m.latitude, m.longitude] as [number, number]));
-    map.fitBounds(bounds, { padding: [28, 28] });
-  }, [map, markers]);
+    // Die Strecke kann über die Stopps hinausragen (Umwege, Auffahrten).
+    const points: [number, number][] = [
+      ...markers.map((m) => [m.latitude, m.longitude] as [number, number]),
+      ...(path ?? []),
+    ];
+    map.fitBounds(L.latLngBounds(points), { padding: [28, 28] });
+  }, [map, markers, path]);
   return null;
 }
 
 export function LeafletMap({
   markers,
   polyline,
+  roadPath,
 }: {
   markers: MapMarker[];
-  /** Optionale Routendarstellung (Reihenfolge der Punkte). */
+  /** Luftlinie zwischen den Stopps – Ersatz, solange keine Strecke vorliegt. */
   polyline?: [number, number][];
+  /** Tatsächlich zu fahrende Strecke (Straßenverlauf) – hat Vorrang. */
+  roadPath?: [number, number][];
 }) {
   const center: [number, number] =
     markers.length > 0 ? [markers[0]!.latitude, markers[0]!.longitude] : [51.9607, 7.6261];
+  const hasRoad = Boolean(roadPath && roadPath.length > 1);
 
   return (
     <MapContainer
@@ -71,7 +79,21 @@ export function LeafletMap({
       attributionControl
     >
       <TileLayer url={TILE_URL} attribution={ATTRIBUTION} maxZoom={19} />
-      {polyline && polyline.length > 1 ? (
+
+      {/* Echte Fahrstrecke: breite helle Kontur unter der farbigen Linie,
+          damit sie auf jedem Kartenhintergrund lesbar bleibt. */}
+      {hasRoad ? (
+        <>
+          <Polyline
+            positions={roadPath!}
+            pathOptions={{ color: '#ffffff', weight: 9, opacity: 0.9, lineJoin: 'round' }}
+          />
+          <Polyline
+            positions={roadPath!}
+            pathOptions={{ color: '#6c5ce7', weight: 5, opacity: 0.95, lineJoin: 'round' }}
+          />
+        </>
+      ) : polyline && polyline.length > 1 ? (
         <Polyline
           positions={polyline}
           pathOptions={{ color: '#6c5ce7', weight: 3, opacity: 0.7, dashArray: '6 8' }}
@@ -94,7 +116,7 @@ export function LeafletMap({
           </Popup>
         </Marker>
       ))}
-      <FitBounds markers={markers} />
+      <FitBounds markers={markers} path={hasRoad ? roadPath : polyline} />
     </MapContainer>
   );
 }
