@@ -1,0 +1,33 @@
+# Separates Projekt – dient nur als Design-Referenz, gehört nicht zu diesem Repo
+/Coreflow/
+
+# Abhängigkeiten
+/node_modules
+
+# Next.js
+/.next/
+/out/
+next-env.d.ts
+
+# Produktion
+/build
+
+# Umgebungsvariablen (Beispieldatei .env.example ist versioniert)
+.env
+.env.local
+.env.*.local
+
+# Tests
+/coverage
+/playwright-report/
+/test-results/
+/blob-report/
+
+# Logs & Betriebssystem
+npm-debug.log*
+*.log
+.DS_Store
+Thumbs.db
+
+# TypeScript
+*.tsbuildinfo

@@ -1,0 +1,644 @@
+@import 'tailwindcss';
+
+/* ---------------------------------------------------------------------------
+ * HomeCare Planner – Design-Tokens
+ *
+ * Designsprache nach der Coreflow-Referenz: sanft lavendelfarbene Canvas,
+ * schwebende weiße Karten mit großen Radien und weichen Schatten, violette
+ * Brand mit dezentem Verlauf, pastellige Status-Tönungen. Dicht, aber ruhig.
+ *
+ * Alles ist ein Token – keine Komponente hartkodiert einen Hex-Wert.
+ * `static` ist nötig, weil Komponenten Tokens zur Laufzeit auflösen
+ * (`var(--color-status-${tone}-soft)`), was der Tailwind-Scan nicht sieht.
+ * ------------------------------------------------------------------------- */
+
+@theme static {
+  /* --- Flächen (hell, Primärthema) --- */
+  --color-canvas: #f3f4fb;
+  --color-surface: #ffffff;
+  --color-panel: #ffffff;
+  --color-panel-raised: #f4f5fb;
+  --color-panel-sunken: #eef0f8;
+
+  /* --- Linien: Haarlinien, bewusst kontrastarm --- */
+  --color-line: #e8eaf3;
+  --color-line-strong: #d6dae9;
+  --color-line-subtle: #f0f1f8;
+
+  /* --- Text --- */
+  --color-ink: #1b1f36;
+  --color-ink-muted: #5c6382;
+  --color-ink-subtle: #939ab5;
+  --color-ink-inverse: #ffffff;
+
+  /* --- Brand: Violett-Indigo mit weichem Verlauf --- */
+  --color-brand: #6c5ce7;
+  --color-brand-hover: #7d6ef2;
+  --color-brand-active: #5a4bd2;
+  --color-brand-subtle: #eeecfd;
+  --color-brand-ring: #6c5ce740;
+  --gradient-brand: linear-gradient(135deg, #6c5ce7 0%, #9d7bf5 100%);
+
+  /* --- Statuspalette: `-solid` trägt den Farbton, `-soft` die Pastell-Tönung --- */
+  --color-status-todo: #3e6de0;
+  --color-status-todo-soft: #3e6de01a;
+  --color-status-progress: #d98324;
+  --color-status-progress-soft: #f5a5242b;
+  --color-status-review: #8e42e6;
+  --color-status-review-soft: #a855f724;
+  --color-status-done: #189a4e;
+  --color-status-done-soft: #22c55e24;
+  --color-status-stuck: #dc3d3d;
+  --color-status-stuck-soft: #ef444420;
+  --color-status-hold: #64748b;
+  --color-status-hold-soft: #64748b1f;
+
+  /* --- Priorität / Konfliktschwere --- */
+  --color-priority-low: #0f97c7;
+  --color-priority-low-soft: #38bdf824;
+  --color-priority-medium: #7c5ce0;
+  --color-priority-medium-soft: #a78bfa26;
+  --color-priority-high: #e2496b;
+  --color-priority-high-soft: #fb718526;
+  --color-priority-urgent: #d92626;
+  --color-priority-urgent-soft: #dc262622;
+
+  /* --- Semantisches Feedback --- */
+  --color-success: #189a4e;
+  --color-success-soft: #22c55e1c;
+  --color-warning: #d98324;
+  --color-warning-soft: #f5a52426;
+  --color-danger: #dc3d3d;
+  --color-danger-soft: #ef44441c;
+  --color-info: #3e6de0;
+  --color-info-soft: #3e6de018;
+
+  /* --- Gruppenfarben (Kalender, Avatare, Karten-Pins) --- */
+  --color-group-1: #6c5ce7;
+  --color-group-2: #10b981;
+  --color-group-3: #f59e0b;
+  --color-group-4: #a855f7;
+  --color-group-5: #f43f5e;
+  --color-group-6: #06b6d4;
+  --color-group-7: #ec4899;
+  --color-group-8: #84cc16;
+
+  /* --- Radien --- */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+
+  /* --- Schrift: Systemstapel, kein Webfont-Roundtrip --- */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'Noto Sans', sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* Dichte Skala: Informationsdichte ist hier ein Feature. */
+  --text-2xs: 0.6875rem;
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-lg: 1rem;
+  --text-xl: 1.125rem;
+  --text-2xl: 1.375rem;
+  --text-3xl: 1.75rem;
+
+  /* --- Layout --- */
+  --spacing-sidebar: 15rem;
+  --spacing-sidebar-collapsed: 3.5rem;
+  --spacing-topbar: 3.5rem;
+  --spacing-bottom-nav: 4rem;
+  --spacing-drawer: 30rem;
+
+  /* Weiche, geschichtete, leicht blau getönte Schatten. */
+  --shadow-panel: 0 1px 2px rgb(23 26 74 / 0.04), 0 6px 20px rgb(23 26 74 / 0.05);
+  --shadow-popover: 0 4px 10px rgb(23 26 74 / 0.06), 0 16px 40px rgb(23 26 74 / 0.16);
+  --shadow-drawer: -12px 0 40px rgb(23 26 74 / 0.14);
+}
+
+/* ---------------------------------------------------------------------------
+ * Dunkles Thema – via next-themes (<html data-theme="dark">), inkl. Systemmodus.
+ * ------------------------------------------------------------------------- */
+[data-theme='dark'] {
+  --color-canvas: #0a0d1c;
+  --color-surface: #10142a;
+  --color-panel: #151a34;
+  --color-panel-raised: #1d2344;
+  --color-panel-sunken: #0c1022;
+
+  --color-line: #242b4d;
+  --color-line-strong: #35406b;
+  --color-line-subtle: #1b2140;
+
+  --color-ink: #eef1fb;
+  --color-ink-muted: #9aa4c7;
+  --color-ink-subtle: #6b769c;
+  --color-ink-inverse: #0a0d1c;
+
+  --color-brand: #7d6ef2;
+  --color-brand-hover: #8d80f5;
+  --color-brand-active: #6c5ce7;
+  --color-brand-subtle: #232052;
+  --color-brand-ring: #7d6ef259;
+  --gradient-brand: linear-gradient(135deg, #7d6ef2 0%, #a78bfa 100%);
+
+  --color-status-todo: #6f9bff;
+  --color-status-todo-soft: #3f8cff24;
+  --color-status-progress: #f5a524;
+  --color-status-progress-soft: #f5a52424;
+  --color-status-review: #bf7af7;
+  --color-status-review-soft: #a855f724;
+  --color-status-done: #34d374;
+  --color-status-done-soft: #22c55e24;
+  --color-status-stuck: #f87171;
+  --color-status-stuck-soft: #ef444424;
+  --color-status-hold: #94a3b8;
+  --color-status-hold-soft: #64748b2e;
+
+  --color-priority-low: #38bdf8;
+  --color-priority-low-soft: #38bdf826;
+  --color-priority-medium: #a78bfa;
+  --color-priority-medium-soft: #a78bfa26;
+  --color-priority-high: #fb7185;
+  --color-priority-high-soft: #fb718526;
+  --color-priority-urgent: #f14e4e;
+  --color-priority-urgent-soft: #dc262633;
+
+  --color-success: #34d374;
+  --color-success-soft: #22c55e21;
+  --color-warning: #f5a524;
+  --color-warning-soft: #f5a52421;
+  --color-danger: #f87171;
+  --color-danger-soft: #ef444421;
+  --color-info: #6f9bff;
+  --color-info-soft: #3f8cff21;
+
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.28);
+  --shadow-popover: 0 8px 30px rgb(0 0 0 / 0.55);
+  --shadow-drawer: -8px 0 30px rgb(0 0 0 / 0.45);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-line);
+  }
+
+  html {
+    color-scheme: light;
+    scrollbar-gutter: stable;
+  }
+
+  html[data-theme='dark'] {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Sichtbarer, konsistenter Fokus – für Tastaturnutzer unverzichtbar. */
+  :focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+    border-radius: var(--radius-xs);
+  }
+
+  ::selection {
+    background-color: var(--color-brand);
+    color: white;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-line-strong);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-ink-subtle);
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
+}
+
+@layer utilities {
+  /* Tabellen/Kennzahlen: Ziffern gleicher Breite. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Brand-Verlauf (Logo-Kachel, Login-Hero, primäre CTAs). */
+  .bg-brand-gradient {
+    background-image: var(--gradient-brand);
+  }
+
+}
+
+/* Drawer-/Overlay-Animationen als @utility registriert, damit auch
+   Responsive-Varianten funktionieren (z. B. Bottom-Sheet mobil,
+   Seiten-Drawer ab sm: `animate-sheet-in sm:animate-drawer-in`). */
+@utility animate-drawer-in {
+  animation: drawer-slide-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@utility animate-drawer-out {
+  animation: drawer-slide-out 200ms cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+@utility animate-sheet-in {
+  animation: sheet-slide-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@utility animate-overlay-in {
+  animation: overlay-fade-in 240ms ease-out;
+}
+@utility animate-overlay-out {
+  animation: overlay-fade-out 200ms ease-in forwards;
+}
+@utility animate-pop-in {
+  animation: pop-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes drawer-slide-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+@keyframes drawer-slide-out {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+@keyframes sheet-slide-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes overlay-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes overlay-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * FullCalendar – an das Token-Design angepasst.
+ * ------------------------------------------------------------------------- */
+.hcp-calendar {
+  --fc-border-color: var(--color-line-subtle);
+  --fc-page-bg-color: var(--color-panel);
+  --fc-neutral-bg-color: var(--color-panel-sunken);
+  --fc-today-bg-color: var(--color-brand-subtle);
+  --fc-now-indicator-color: var(--color-danger);
+  --fc-list-event-hover-bg-color: var(--color-panel-raised);
+  --fc-highlight-color: var(--color-brand-ring);
+}
+
+.hcp-calendar .fc {
+  height: 100%;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--color-line-subtle);
+  background: var(--color-panel);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+  font-size: var(--text-sm);
+}
+
+.hcp-calendar .fc .fc-scrollgrid {
+  border: none;
+}
+
+.hcp-calendar .fc .fc-col-header-cell {
+  padding: 8px 4px;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-ink-subtle);
+  background: var(--color-surface);
+}
+
+.hcp-calendar .fc .fc-daygrid-day-number,
+.hcp-calendar .fc .fc-multimonth-daygrid .fc-daygrid-day-number {
+  font-size: var(--text-xs);
+  color: var(--color-ink-muted);
+  padding: 4px 6px;
+}
+
+.hcp-calendar .fc .fc-day-today .fc-daygrid-day-number {
+  font-weight: 700;
+  color: var(--color-brand);
+}
+
+.hcp-calendar .fc .fc-timegrid-slot-label,
+.hcp-calendar .fc .fc-timegrid-axis-cushion {
+  font-size: var(--text-2xs);
+  color: var(--color-ink-subtle);
+}
+
+.hcp-calendar .fc .fc-event {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.hcp-calendar .fc .fc-daygrid-more-link {
+  font-size: var(--text-2xs);
+  color: var(--color-brand);
+  font-weight: 600;
+}
+
+.hcp-calendar .fc .fc-popover {
+  border-radius: var(--radius-lg);
+  border-color: var(--color-line-subtle);
+  background: var(--color-panel);
+  box-shadow: var(--shadow-popover);
+}
+
+.hcp-calendar .fc .fc-popover-header {
+  background: var(--color-panel-sunken);
+  font-size: var(--text-xs);
+}
+
+.hcp-calendar .fc .fc-list {
+  border: none;
+}
+
+.hcp-calendar .fc .fc-list-day-cushion {
+  background: var(--color-panel-sunken);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.hcp-calendar .fc .fc-multimonth {
+  border: none;
+}
+
+.hcp-calendar .fc .fc-multimonth-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-ink);
+  padding: 10px 0 6px;
+}
+
+/* Eigene Event-Darstellung: Punkt + Zeit + Titel auf getönter Pille. */
+.hcp-event {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  width: 100%;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--event-color) 14%, transparent);
+  border-left: 3px solid var(--event-color);
+  color: var(--color-ink);
+  font-size: var(--text-2xs);
+  line-height: 1.35;
+  overflow: hidden;
+}
+
+.fc-timegrid-event .hcp-event {
+  height: 100%;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px 6px;
+}
+
+.fc-list-event .hcp-event {
+  background: transparent;
+  border-left: none;
+  font-size: var(--text-sm);
+}
+
+.hcp-event-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--event-color);
+}
+
+.fc-timegrid-event .hcp-event-dot {
+  display: none;
+}
+
+.hcp-event-time {
+  flex: none;
+  font-weight: 600;
+  color: var(--color-ink-muted);
+}
+
+.hcp-event-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.fc-timegrid-event .hcp-event-title {
+  white-space: normal;
+}
+
+.hcp-event-conflict {
+  flex: none;
+  margin-left: auto;
+  color: var(--color-warning);
+}
+
+.hcp-event-cancelled {
+  opacity: 0.55;
+}
+
+.hcp-event-cancelled .hcp-event-title {
+  text-decoration: line-through;
+}
+
+.hcp-event-unassigned {
+  border-left-style: dashed;
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+}
+
+/* ---------------------------------------------------------------------------
+ * Kalender-Feinschliff: kein Overflow, ruhigeres Bild, iPad/Touch.
+ * ------------------------------------------------------------------------- */
+
+/* Luftigere Zeitraster-Zeilen (weniger gequetschte Events in Woche/Tag). */
+.hcp-calendar .fc .fc-timegrid-slot {
+  height: 2.25rem;
+}
+
+/* Events im Zeitraster: Titel sauber auf 2 Zeilen begrenzen statt überlaufen. */
+.fc-timegrid-event {
+  border-radius: 6px;
+  overflow: hidden;
+}
+.fc-timegrid-event .hcp-event-title {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+}
+/* Sehr kurze Termine (30 min): einzeilig, Zeit + Titel nebeneinander. */
+.fc-timegrid-event.fc-timegrid-event-short .hcp-event {
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+}
+.fc-timegrid-event.fc-timegrid-event-short .hcp-event-title {
+  -webkit-line-clamp: 1;
+  white-space: nowrap;
+}
+
+/* Monatsansicht: kompakte, nie überlaufende Event-Pillen. */
+.hcp-calendar .fc .fc-daygrid-event-harness {
+  margin: 1px 2px;
+}
+.fc-daygrid-event .hcp-event {
+  padding: 1px 5px;
+}
+.hcp-calendar .fc .fc-daygrid-day-bottom {
+  padding: 0 3px 2px;
+}
+.hcp-calendar .fc .fc-daygrid-day-events {
+  min-height: 0;
+}
+
+/* „+N weitere“-Popover: begrenzen und intern scrollen. */
+.hcp-calendar .fc .fc-popover {
+  max-width: min(320px, 88vw);
+}
+.hcp-calendar .fc .fc-popover-body {
+  max-height: 55vh;
+  overflow-y: auto;
+}
+
+/* Listenansicht: großzügigere, touch-freundliche Zeilen. */
+.hcp-calendar .fc .fc-list-event td {
+  padding: 10px 12px;
+}
+.hcp-calendar .fc .fc-list-day-cushion {
+  padding: 8px 12px;
+}
+.hcp-calendar .fc .fc-list-event-graphic {
+  display: none; /* eigener Farbpunkt im Event-Inhalt */
+}
+
+/* Jahresansicht: kleine Monatsraster nicht überladen. */
+.hcp-calendar .fc .fc-multimonth-daygrid .fc-daygrid-day-events {
+  font-size: 10px;
+}
+
+/* Sanftes Touch-Scrolling in allen internen Scrollern. */
+.hcp-calendar .fc .fc-scroller {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Schmalere Viewports (iPad hochkant): Zeit in Monats-Pillen ausblenden. */
+@media (max-width: 1024px) {
+  .fc-daygrid-event .hcp-event-time {
+    display: none;
+  }
+  .hcp-calendar .fc .fc-col-header-cell {
+    padding: 6px 2px;
+  }
+}
+
+/* Touch-Geräte: größere Ziele im Kalender selbst. */
+@media (pointer: coarse) {
+  .hcp-calendar .fc .fc-timegrid-slot {
+    height: 2.75rem;
+  }
+  .hcp-calendar .fc .fc-col-header-cell {
+    padding: 10px 4px;
+  }
+  .hcp-calendar .fc .fc-daygrid-day-number {
+    padding: 5px 7px;
+    font-size: var(--text-sm);
+  }
+  .hcp-calendar .fc .fc-daygrid-more-link {
+    padding: 3px 5px;
+  }
+  .hcp-calendar .fc .fc-list-event td {
+    padding: 14px 12px;
+  }
+  .hcp-event {
+    min-height: 24px;
+  }
+  .fc-daygrid-event .hcp-event {
+    padding: 2px 6px;
+  }
+}

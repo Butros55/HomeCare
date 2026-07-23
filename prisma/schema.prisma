@@ -1,0 +1,707 @@
+// ============================================================================
+// HomeCare Planner – Datenmodell
+//
+// Grundsätze:
+//  - Jeder Geschäftsdatensatz trägt organizationId (Mandantentrennung).
+//  - Alle Zeitmengen sind ganzzahlige Minuten (keine Gleitkommazahlen).
+//  - Soft Delete über deletedAt (Kunden, Mitarbeiter, Termine).
+//  - Zeitstempel in UTC; Anzeige/Serienberechnung in der Org-Zeitzone.
+//  - ERD & Erläuterungen: docs/data-model.md
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================== Enums =======================================
+
+enum MembershipRole {
+  ORGANIZATION_OWNER
+  ADMIN
+  DISPATCHER
+  TEAM_MANAGER
+  EMPLOYEE
+}
+
+enum MembershipStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  MINI_JOB
+  FREELANCE
+}
+
+enum AbsenceType {
+  VACATION
+  SICK
+  TRAINING
+  OTHER
+}
+
+enum AbsenceStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+}
+
+enum CustomerStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum BudgetSourceType {
+  CONTRACT
+  INSURANCE
+  PRIVATE
+  OTHER
+}
+
+enum AllocationStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum SeriesStatus {
+  ACTIVE
+  PAUSED
+  ENDED
+}
+
+enum AppointmentStatus {
+  DRAFT
+  PLANNED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum AssignmentStatus {
+  UNASSIGNED
+  ASSIGNED
+  ACCEPTED
+  DECLINED
+  NEEDS_REASSIGNMENT
+}
+
+enum CustomerConfirmationStatus {
+  NOT_REQUIRED
+  PENDING
+  CONFIRMED
+  DECLINED
+}
+
+enum SeriesExceptionType {
+  CANCELLED
+  MODIFIED
+}
+
+enum TimeEntryStatus {
+  RUNNING
+  COMPLETED
+  APPROVED
+  REJECTED
+}
+
+enum RoutePlanStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum NotificationType {
+  APPOINTMENT_ASSIGNED
+  APPOINTMENT_CHANGED
+  APPOINTMENT_CANCELLED
+  ASSIGNMENT_DECLINED
+  HOURS_ALLOCATED
+  CUSTOMER_OPEN_HOURS
+  EMPLOYEE_NEEDS_HOURS
+  ROUTE_PROBLEM
+  APPOINTMENT_CONFLICT
+  ADDRESS_MISSING
+  SERIES_ENDING
+  BUDGET_ENDING
+  GENERAL
+}
+
+// ============================ Organisation ==================================
+
+model Organization {
+  id                   String   @id @default(cuid())
+  name                 String
+  slug                 String   @unique
+  timezone             String   @default("Europe/Berlin")
+  locale               String   @default("de-DE")
+  /// Strukturierter Standort { label, street, houseNumber, postalCode, city, countryCode, latitude, longitude }
+  defaultStartLocation Json?
+  defaultEndLocation   Json?
+  /// Org-Einstellungen (Aufbewahrungsfristen etc.), zod-validiert in src/server/validation
+  settings             Json?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  memberships   OrganizationMembership[]
+  invitations   Invitation[]
+  employees     Employee[]
+  customers     Customer[]
+  addresses     Address[]
+  hourBudgets   CustomerHourBudget[]
+  allocations   HourAllocation[]
+  series        AppointmentSeries[]
+  appointments  Appointment[]
+  timeEntries   TimeEntry[]
+  routePlans    RoutePlan[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+}
+
+// ============================ Benutzer & Auth ===============================
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  phone        String?
+  avatarUrl    String?
+  status       UserStatus @default(ACTIVE)
+  lastLoginAt  DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  memberships         OrganizationMembership[] @relation("MembershipUser")
+  invitedMemberships  OrganizationMembership[] @relation("MembershipInviter")
+  sessions            Session[]
+  passwordResetTokens PasswordResetToken[]
+  invitationsSent     Invitation[]             @relation("InvitationInviter")
+  employeeProfiles    Employee[]
+  notifications       Notification[]
+  auditLogs           AuditLog[]               @relation("AuditActor")
+  approvedTimeEntries TimeEntry[]              @relation("TimeEntryApprover")
+  hourAdjustments     CustomerHourAdjustment[] @relation("AdjustmentCreator")
+  preference          UserPreference?
+}
+
+model UserPreference {
+  id                       String  @id @default(cuid())
+  userId                   String  @unique
+  user                     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Zuletzt gewählte Kalenderansicht (year|month|week|day|list|agenda)
+  calendarView             String?
+  /// Farbcodierung des Kalenders (customer|employee|status|team)
+  calendarColorBy          String?
+  calendarFilters          Json?
+  notificationPrefs        Json?
+  lastActiveOrganizationId String?
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// SHA-256 des Session-Tokens – das Klartext-Token existiert nur im Cookie.
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model OrganizationMembership {
+  id              String           @id @default(cuid())
+  organizationId  String
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User             @relation("MembershipUser", fields: [userId], references: [id], onDelete: Cascade)
+  role            MembershipRole
+  status          MembershipStatus @default(ACTIVE)
+  invitedByUserId String?
+  invitedBy       User?            @relation("MembershipInviter", fields: [invitedByUserId], references: [id], onDelete: SetNull)
+  joinedAt        DateTime         @default(now())
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@index([organizationId, role])
+}
+
+model Invitation {
+  id              String         @id @default(cuid())
+  organizationId  String
+  organization    Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email           String
+  role            MembershipRole
+  /// Optional: vorhandenes Mitarbeiterprofil, das mit dem neuen Benutzer verknüpft wird.
+  employeeId      String?
+  employee        Employee?      @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  tokenHash       String         @unique
+  invitedByUserId String
+  invitedBy       User           @relation("InvitationInviter", fields: [invitedByUserId], references: [id], onDelete: Cascade)
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  createdAt       DateTime       @default(now())
+
+  @@index([organizationId])
+  @@index([email])
+}
+
+// ============================ Mitarbeiter ===================================
+
+model Employee {
+  id                    String         @id @default(cuid())
+  organizationId        String
+  organization          Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId                String?
+  user                  User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  /// Selbstreferenzierende Hierarchie; Zyklen werden serverseitig verhindert.
+  managerEmployeeId     String?
+  manager               Employee?      @relation("EmployeeHierarchy", fields: [managerEmployeeId], references: [id], onDelete: SetNull)
+  subordinates          Employee[]     @relation("EmployeeHierarchy")
+  personnelNumber       String?
+  firstName             String
+  lastName              String
+  email                 String?
+  phone                 String?
+  status                EmployeeStatus @default(ACTIVE)
+  employmentType        EmploymentType @default(PART_TIME)
+  targetMinutesPerWeek  Int?
+  targetMinutesPerMonth Int?
+  maximumMinutesPerDay  Int?
+  canRecruitEmployees   Boolean        @default(false)
+  canReceiveHours       Boolean        @default(true)
+  /// Strukturierter Standort (JSON) für Routenstart/-ende; null = Org-Standard.
+  startLocation         Json?
+  endLocation           Json?
+  notes                 String?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  deletedAt             DateTime?
+
+  availabilities       EmployeeAvailability[]
+  absences             EmployeeAbsence[]
+  preferredByCustomers Customer[]             @relation("PreferredEmployee")
+  addresses            Address[]
+  allocationsReceived  HourAllocation[]       @relation("AllocationRecipient")
+  allocationsGiven     HourAllocation[]       @relation("AllocationGiver")
+  seriesAsDefault      AppointmentSeries[]    @relation("SeriesDefaultEmployee")
+  appointments         Appointment[]          @relation("AppointmentEmployee")
+  timeEntries          TimeEntry[]
+  routePlans           RoutePlan[]
+  invitations          Invitation[]
+
+  @@unique([organizationId, userId])
+  @@index([organizationId, status])
+  @@index([organizationId, managerEmployeeId])
+  @@index([organizationId, deletedAt])
+}
+
+model EmployeeAvailability {
+  id         String    @id @default(cuid())
+  employeeId String
+  employee   Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  /// ISO-Wochentag: 1 = Montag … 7 = Sonntag
+  weekday    Int
+  /// "HH:mm" in der Organisations-Zeitzone
+  startTime  String
+  endTime    String
+  validFrom  DateTime
+  validUntil DateTime?
+
+  @@index([employeeId, weekday])
+}
+
+model EmployeeAbsence {
+  id         String        @id @default(cuid())
+  employeeId String
+  employee   Employee      @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  startAt    DateTime
+  endAt      DateTime
+  type       AbsenceType
+  note       String?
+  status     AbsenceStatus @default(APPROVED)
+
+  @@index([employeeId, startAt, endAt])
+}
+
+// ============================== Kunden ======================================
+
+model Customer {
+  id                   String         @id @default(cuid())
+  organizationId       String
+  organization         Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerNumber       String
+  salutation           String?
+  firstName            String
+  lastName             String
+  companyName          String?
+  email                String?
+  phone                String?
+  secondaryPhone       String?
+  status               CustomerStatus @default(ACTIVE)
+  preferredEmployeeId  String?
+  preferredEmployee    Employee?      @relation("PreferredEmployee", fields: [preferredEmployeeId], references: [id], onDelete: SetNull)
+  accessInstructions   String?
+  cleaningInstructions String?
+  /// Nur mit Berechtigung PRIVATE_NOTES_READ sichtbar (Datenminimierung).
+  privateNotes         String?
+  routeNotes           String?
+  /// Kundenfarbe für Kalender/Karte (Hex)
+  color                String         @default("#6c5ce7")
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+  deletedAt            DateTime?
+
+  addresses    Address[]
+  hourBudgets  CustomerHourBudget[]
+  allocations  HourAllocation[]
+  series       AppointmentSeries[]
+  appointments Appointment[]
+
+  @@unique([organizationId, customerNumber])
+  @@index([organizationId, status])
+  @@index([organizationId, deletedAt])
+  @@index([organizationId, lastName, firstName])
+}
+
+model Address {
+  id                String       @id @default(cuid())
+  organizationId    String
+  organization      Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerId        String?
+  customer          Customer?    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  employeeId        String?
+  employee          Employee?    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  label             String       @default("Hauptadresse")
+  street            String
+  houseNumber       String
+  addressAddition   String?
+  postalCode        String
+  city              String
+  countryCode       String       @default("DE")
+  latitude          Float?
+  longitude         Float?
+  geocodingProvider String?
+  /// exact | interpolated | approximate | failed
+  geocodingQuality  String?
+  geocodedAt        DateTime?
+
+  appointments Appointment[]
+
+  @@index([organizationId])
+  @@index([customerId])
+  @@index([employeeId])
+  @@index([organizationId, postalCode])
+  @@index([organizationId, city])
+}
+
+// ========================= Stundenbudgets ===================================
+
+model CustomerHourBudget {
+  id             String           @id @default(cuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerId     String
+  customer       Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  /// Zeitraum als UTC-Mitternacht (Datumssemantik), periodEnd inklusiv.
+  periodStart    DateTime
+  periodEnd      DateTime
+  budgetMinutes  Int
+  sourceType     BudgetSourceType @default(CONTRACT)
+  note           String?
+  createdAt      DateTime         @default(now())
+
+  adjustments CustomerHourAdjustment[]
+  allocations HourAllocation[]
+
+  @@index([organizationId, periodStart, periodEnd])
+  @@index([customerId, periodStart])
+}
+
+model CustomerHourAdjustment {
+  id                   String             @id @default(cuid())
+  customerHourBudgetId String
+  budget               CustomerHourBudget @relation(fields: [customerHourBudgetId], references: [id], onDelete: Cascade)
+  /// Positiv = Aufstockung, negativ = Kürzung (bewusste Korrekturbuchung).
+  adjustmentMinutes    Int
+  reason               String
+  createdByUserId      String
+  createdBy            User               @relation("AdjustmentCreator", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  createdAt            DateTime           @default(now())
+
+  @@index([customerHourBudgetId])
+}
+
+model HourAllocation {
+  id                    String             @id @default(cuid())
+  organizationId        String
+  organization          Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerId            String
+  customer              Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  budgetId              String
+  budget                CustomerHourBudget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  /// null = Zuweisung aus dem Org-Budget (Owner/Admin/Disponent);
+  /// gesetzt = Weitergabe aus dem Pool dieses Mitarbeiters (Team-Manager).
+  allocatedByEmployeeId String?
+  allocatedBy           Employee?          @relation("AllocationGiver", fields: [allocatedByEmployeeId], references: [id], onDelete: SetNull)
+  allocatedToEmployeeId String
+  allocatedTo           Employee           @relation("AllocationRecipient", fields: [allocatedToEmployeeId], references: [id], onDelete: Cascade)
+  allocatedMinutes      Int
+  validFrom             DateTime
+  validUntil            DateTime
+  status                AllocationStatus   @default(ACTIVE)
+  note                  String?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  @@index([organizationId, status])
+  @@index([customerId, status])
+  @@index([allocatedToEmployeeId, status])
+  @@index([budgetId])
+}
+
+// ========================= Termine & Serien =================================
+
+model AppointmentSeries {
+  id                     String       @id @default(cuid())
+  organizationId         String
+  organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerId             String
+  customer               Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  defaultEmployeeId      String?
+  defaultEmployee        Employee?    @relation("SeriesDefaultEmployee", fields: [defaultEmployeeId], references: [id], onDelete: SetNull)
+  title                  String
+  description            String?
+  /// RFC-5545-RRULE, z. B. "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,TH"
+  recurrenceRule         String
+  recurrenceTimezone     String       @default("Europe/Berlin")
+  /// Erster Serientag (Datum, UTC-Mitternacht)
+  startDate              DateTime
+  endDate                DateTime?
+  /// "HH:mm" in recurrenceTimezone
+  defaultStartTime       String
+  defaultDurationMinutes Int
+  status                 SeriesStatus @default(ACTIVE)
+  /// Bis zu diesem Datum wurden Termine materialisiert (Horizont wird bei Bedarf erweitert).
+  materializedUntil      DateTime?
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+
+  appointments Appointment[]
+  exceptions   AppointmentSeriesException[]
+
+  @@index([organizationId, status])
+  @@index([customerId])
+}
+
+model Appointment {
+  id                         String                     @id @default(cuid())
+  organizationId             String
+  organization               Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerId                 String
+  customer                   Customer                   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  seriesId                   String?
+  series                     AppointmentSeries?         @relation(fields: [seriesId], references: [id], onDelete: SetNull)
+  /// Für Serien-Termine: das Datum des Vorkommens (UTC-Mitternacht) zur Ausnahmen-Zuordnung.
+  occurrenceDate             DateTime?
+  assignedEmployeeId         String?
+  assignedEmployee           Employee?                  @relation("AppointmentEmployee", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+  title                      String
+  description                String?
+  startAt                    DateTime
+  endAt                      DateTime
+  durationMinutes            Int
+  status                     AppointmentStatus          @default(PLANNED)
+  assignmentStatus           AssignmentStatus           @default(UNASSIGNED)
+  isFlexible                 Boolean                    @default(false)
+  earliestStartAt            DateTime?
+  latestEndAt                DateTime?
+  locationAddressId          String?
+  locationAddress            Address?                   @relation(fields: [locationAddressId], references: [id], onDelete: SetNull)
+  routeRelevant              Boolean                    @default(true)
+  customerConfirmationStatus CustomerConfirmationStatus @default(NOT_REQUIRED)
+  internalNotes              String?
+  cancellationReason         String?
+  completedAt                DateTime?
+  createdAt                  DateTime                   @default(now())
+  updatedAt                  DateTime                   @updatedAt
+  deletedAt                  DateTime?
+
+  timeEntries      TimeEntry[]
+  routeStops       RouteStop[]
+  exceptionSource  AppointmentSeriesException[] @relation("ExceptionReplacement")
+
+  @@index([organizationId, startAt])
+  @@index([organizationId, endAt])
+  @@index([organizationId, status])
+  @@index([organizationId, assignmentStatus])
+  @@index([assignedEmployeeId, startAt])
+  @@index([customerId, startAt])
+  @@index([seriesId, occurrenceDate])
+  @@index([organizationId, deletedAt])
+}
+
+model AppointmentSeriesException {
+  id                       String              @id @default(cuid())
+  seriesId                 String
+  series                   AppointmentSeries   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  /// Datum des Vorkommens (UTC-Mitternacht), das ersetzt/abgesagt wird.
+  occurrenceDate           DateTime
+  exceptionType            SeriesExceptionType
+  replacementAppointmentId String?
+  replacement              Appointment?        @relation("ExceptionReplacement", fields: [replacementAppointmentId], references: [id], onDelete: SetNull)
+  createdAt                DateTime            @default(now())
+
+  @@unique([seriesId, occurrenceDate])
+}
+
+// ========================== Zeiterfassung ===================================
+
+model TimeEntry {
+  id               String          @id @default(cuid())
+  organizationId   String
+  organization     Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  appointmentId    String
+  appointment      Appointment     @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  employeeId       String
+  employee         Employee        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  startedAt        DateTime
+  endedAt          DateTime?
+  workedMinutes    Int             @default(0)
+  breakMinutes     Int             @default(0)
+  travelMinutes    Int?
+  status           TimeEntryStatus @default(RUNNING)
+  note             String?
+  approvedByUserId String?
+  approvedBy       User?           @relation("TimeEntryApprover", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  approvedAt       DateTime?
+
+  @@index([organizationId, startedAt])
+  @@index([appointmentId])
+  @@index([employeeId, startedAt])
+  @@index([organizationId, status])
+}
+
+// =========================== Routenplanung ==================================
+
+model RoutePlan {
+  id                  String          @id @default(cuid())
+  organizationId      String
+  organization        Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  employeeId          String
+  employee            Employee        @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  /// Datum (UTC-Mitternacht)
+  routeDate           DateTime
+  /// Strukturierte Standorte (JSON: label, street, …, latitude, longitude)
+  startAddress        Json
+  endAddress          Json
+  provider            String
+  totalDistanceMeters Int             @default(0)
+  totalTravelSeconds  Int             @default(0)
+  totalServiceMinutes Int             @default(0)
+  plannedDepartureAt  DateTime?
+  plannedReturnAt     DateTime?
+  status              RoutePlanStatus @default(DRAFT)
+  generatedAt         DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  stops RouteStop[]
+
+  @@unique([employeeId, routeDate])
+  @@index([organizationId, routeDate])
+  @@index([organizationId, status])
+}
+
+model RouteStop {
+  id                         String      @id @default(cuid())
+  routePlanId                String
+  routePlan                  RoutePlan   @relation(fields: [routePlanId], references: [id], onDelete: Cascade)
+  appointmentId              String
+  appointment                Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  sequence                   Int
+  arrivalAt                  DateTime
+  serviceStartAt             DateTime
+  serviceEndAt               DateTime
+  departureAt                DateTime
+  travelSecondsFromPrevious  Int         @default(0)
+  distanceMetersFromPrevious Int         @default(0)
+  warning                    String?
+
+  @@unique([routePlanId, sequence])
+  @@index([appointmentId])
+}
+
+// ==================== Benachrichtigungen & Audit ============================
+
+model Notification {
+  id             String           @id @default(cuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type           NotificationType
+  title          String
+  message        String
+  targetUrl      String?
+  readAt         DateTime?
+  createdAt      DateTime         @default(now())
+
+  @@index([userId, readAt, createdAt])
+  @@index([organizationId, createdAt])
+}
+
+model AuditLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actorUserId    String?
+  actor          User?        @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  /// z. B. "customer.created", "hours.allocated", "appointment.rescheduled"
+  action         String
+  entityType     String
+  entityId       String
+  /// Keine Passwörter/Tokens/sensiblen Volltexte – nur Feldnamen & Kurzwerte.
+  metadata       Json?
+  ipAddress      String?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([entityType, entityId])
+  @@index([actorUserId])
+}

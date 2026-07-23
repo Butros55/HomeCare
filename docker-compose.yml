@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: homecare-planner-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: homecare
+      POSTGRES_PASSWORD: homecare
+      POSTGRES_DB: homecare
+    ports:
+      - '5432:5432'
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      # Legt zusätzliche Datenbanken für Integrations- und E2E-Tests an.
+      - ./scripts/db-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U homecare -d homecare']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  db-data:
