@@ -6,6 +6,7 @@ import { BottomNav } from '@/components/layout/bottom-nav';
 import { CommandPalette, type SearchResultItem } from '@/components/layout/command-palette';
 import type { NavPermissions, NavUiMode } from '@/components/layout/nav-items';
 import { Sidebar } from '@/components/layout/sidebar';
+import type { NotificationPreviewItem } from '@/components/layout/notification-popover';
 import { Topbar, type TopbarOrganization } from '@/components/layout/topbar';
 import { usePersistedBoolean } from '@/lib/persisted-state';
 
@@ -27,6 +28,7 @@ export function AppShell({
   canManageEmployees,
   personalViewToggle = null,
   unreadNotifications,
+  recentNotifications,
   onSearch,
   children,
 }: {
@@ -41,6 +43,7 @@ export function AppShell({
   canManageEmployees: boolean;
   personalViewToggle?: { personalView: boolean } | null;
   unreadNotifications: number;
+  recentNotifications: NotificationPreviewItem[];
   onSearch?: (query: string) => Promise<SearchResultItem[]>;
   children: React.ReactNode;
 }) {
@@ -66,6 +69,7 @@ export function AppShell({
           organizations={organizations}
           activeOrganizationId={activeOrganizationId}
           unreadNotifications={unreadNotifications}
+          recentNotifications={recentNotifications}
           canCreate={canCreate}
           canManageEmployees={canManageEmployees}
           personalViewToggle={personalViewToggle}

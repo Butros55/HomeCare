@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 
 import { AppShell } from '@/components/layout/app-shell';
 import { APP_NAME } from '@/lib/app-config';
+import { formatDateTime } from '@/lib/dates';
 import { globalSearchAction } from '@/server/actions/search-actions';
 import { getCurrentSession } from '@/server/auth/session';
 import { db } from '@/server/db';
@@ -25,7 +26,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const ctx = await getOrgContext();
   if (!ctx) redirect('/login');
 
-  const [memberships, unreadNotifications] = await Promise.all([
+  const [memberships, unreadNotifications, recentNotifications] = await Promise.all([
     db.organizationMembership.findMany({
       where: { userId: ctx.user.id, status: 'ACTIVE' },
       include: { organization: { select: { id: true, name: true } } },
@@ -33,6 +34,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     }),
     db.notification.count({
       where: { userId: ctx.user.id, organizationId: ctx.organization.id, readAt: null },
+    }),
+    db.notification.findMany({
+      where: { userId: ctx.user.id, organizationId: ctx.organization.id },
+      orderBy: { createdAt: 'desc' },
+      take: 6,
+      select: {
+        id: true,
+        title: true,
+        message: true,
+        targetUrl: true,
+        readAt: true,
+        createdAt: true,
+      },
     }),
   ]);
 
@@ -56,6 +70,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       canManageEmployees={hasPermission(ctx, 'employees.manage')}
       personalViewToggle={canTogglePersonalView(ctx) ? { personalView: ctx.personalView } : null}
       unreadNotifications={unreadNotifications}
+      recentNotifications={recentNotifications.map((notification) => ({
+        id: notification.id,
+        title: notification.title,
+        message: notification.message,
+        targetUrl: notification.targetUrl,
+        readAt: notification.readAt?.toISOString() ?? null,
+        createdAtLabel: formatDateTime(notification.createdAt, ctx.organization.timezone),
+      }))}
       onSearch={globalSearchAction}
     >
       {children}

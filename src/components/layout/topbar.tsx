@@ -1,7 +1,6 @@
 'use client';
 
 import {
-  Bell,
   Building2,
   CalendarPlus,
   Check,
@@ -31,8 +30,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  NotificationPopover,
+  type NotificationPreviewItem,
+} from '@/components/layout/notification-popover';
 import { EntityAvatar } from '@/components/ui/misc';
-import { CountBadge } from '@/components/ui/status-pill';
 import { togglePersonalViewAction } from '@/server/actions/preference-actions';
 import { logoutAction, switchOrganizationAction } from '@/server/auth/actions';
 import { cn } from '@/lib/utils';
@@ -47,6 +49,7 @@ export function Topbar({
   organizations,
   activeOrganizationId,
   unreadNotifications,
+  recentNotifications,
   canCreate,
   canManageEmployees,
   personalViewToggle,
@@ -56,6 +59,7 @@ export function Topbar({
   organizations: TopbarOrganization[];
   activeOrganizationId: string;
   unreadNotifications: number;
+  recentNotifications: NotificationPreviewItem[];
   canCreate: boolean;
   canManageEmployees: boolean;
   /** null = Umschalter ausblenden (Alleine-Modus/Mitarbeiter); sonst aktueller Zustand. */
@@ -180,20 +184,7 @@ export function Topbar({
         </DropdownMenu>
       ) : null}
 
-      <Link
-        href="/notifications"
-        aria-label={
-          unreadNotifications > 0
-            ? `Benachrichtigungen, ${unreadNotifications} ungelesen`
-            : 'Benachrichtigungen'
-        }
-        className="relative flex size-8 shrink-0 items-center justify-center rounded-full text-[var(--color-ink-muted)] pointer-coarse:size-11 transition-colors hover:bg-[var(--color-panel-raised)] hover:text-[var(--color-ink)]"
-      >
-        <Bell className="size-4" aria-hidden />
-        {unreadNotifications > 0 ? (
-          <CountBadge count={unreadNotifications} className="absolute -top-0.5 -right-0.5" />
-        ) : null}
-      </Link>
+      <NotificationPopover items={recentNotifications} unreadCount={unreadNotifications} />
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
