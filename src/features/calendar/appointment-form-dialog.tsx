@@ -66,6 +66,7 @@ export function AppointmentFormDialog({
   prefill,
   editTarget,
   fixedEmployeeId,
+  soloMode = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -78,6 +79,8 @@ export function AppointmentFormDialog({
    * Profil zugewiesen – das Mitarbeiter-Feld entfällt komplett.
    */
   fixedEmployeeId?: string | null;
+  /** Alleine-Modus: nur die für eine schnelle Terminpflege nötigen Felder. */
+  soloMode?: boolean;
 }) {
   const router = useRouter();
   const isEdit = Boolean(editTarget);
@@ -134,7 +137,7 @@ export function AppointmentFormDialog({
     date,
     startTime,
     durationMinutes: durationMinutes ?? 0,
-    status,
+    status: soloMode ? 'PLANNED' : status,
     isFlexible,
     earliestTime: isFlexible ? earliestTime : '',
     latestTime: isFlexible ? latestTime : '',
@@ -165,7 +168,7 @@ export function AppointmentFormDialog({
               date: values.date,
               startTime: values.startTime,
               durationMinutes: values.durationMinutes,
-              status: values.status,
+              ...(!soloMode ? { status: values.status } : {}),
               isFlexible: values.isFlexible,
               earliestTime: values.earliestTime,
               latestTime: values.latestTime,
@@ -179,8 +182,11 @@ export function AppointmentFormDialog({
 
       if (!result.ok) {
         const details = result.details as { conflicts?: { message: string; severity: string }[] } | undefined;
-        if (details?.conflicts) {
-          setConflicts(details.conflicts);
+        const warnings = details?.conflicts?.filter(
+          (conflict) => conflict.severity === 'WARNING',
+        );
+        if (warnings && warnings.length > 0) {
+          setConflicts(warnings);
         }
         toast.error(result.message);
         return;
@@ -293,7 +299,7 @@ export function AppointmentFormDialog({
                   </Select>
                 </div>
               ) : null}
-              {!fixedEmployeeId ? (
+              {!fixedEmployeeId && !soloMode ? (
                 <div>
                   <Label htmlFor="af-employee">Mitarbeiter</Label>
                   <Select
@@ -320,19 +326,21 @@ export function AppointmentFormDialog({
                 </Label>
                 <Input id="af-title" value={title} onChange={(e) => setTitle(e.target.value)} />
               </div>
-              <div>
-                <Label htmlFor="af-status">Status</Label>
-                <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
-                  <SelectTrigger id="af-status">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="DRAFT">Entwurf</SelectItem>
-                    <SelectItem value="PLANNED">Geplant</SelectItem>
-                    <SelectItem value="CONFIRMED">Bestätigt</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {!soloMode ? (
+                <div>
+                  <Label htmlFor="af-status">Status</Label>
+                  <Select value={status} onValueChange={(v) => setStatus(v as typeof status)}>
+                    <SelectTrigger id="af-status">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="DRAFT">Entwurf</SelectItem>
+                      <SelectItem value="PLANNED">Geplant</SelectItem>
+                      <SelectItem value="CONFIRMED">Bestätigt</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
               <div data-tour="appointment-form-when">
                 <Label htmlFor="af-date" required>
                   Datum
@@ -376,28 +384,30 @@ export function AppointmentFormDialog({
               />
             </div>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <label className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-3 py-2.5">
-                <span className="text-[length:var(--text-sm)]">
-                  <span className="block font-medium">Flexibler Termin</span>
-                  <span className="block text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                    Kann in der Routenplanung verschoben werden.
+            {!soloMode ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-3 py-2.5">
+                  <span className="text-[length:var(--text-sm)]">
+                    <span className="block font-medium">Flexibler Termin</span>
+                    <span className="block text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                      Kann in der Routenplanung verschoben werden.
+                    </span>
                   </span>
-                </span>
-                <Switch checked={isFlexible} onCheckedChange={setIsFlexible} />
-              </label>
-              <label className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-3 py-2.5">
-                <span className="text-[length:var(--text-sm)]">
-                  <span className="block font-medium">Routenrelevant</span>
-                  <span className="block text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                    Wird in Tagesrouten eingeplant.
+                  <Switch checked={isFlexible} onCheckedChange={setIsFlexible} />
+                </label>
+                <label className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-3 py-2.5">
+                  <span className="text-[length:var(--text-sm)]">
+                    <span className="block font-medium">Routenrelevant</span>
+                    <span className="block text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                      Wird in Tagesrouten eingeplant.
+                    </span>
                   </span>
-                </span>
-                <Switch checked={routeRelevant} onCheckedChange={setRouteRelevant} />
-              </label>
-            </div>
+                  <Switch checked={routeRelevant} onCheckedChange={setRouteRelevant} />
+                </label>
+              </div>
+            ) : null}
 
-            {isFlexible ? (
+            {!soloMode && isFlexible ? (
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label htmlFor="af-earliest">Frühester Start</Label>
@@ -524,15 +534,17 @@ export function AppointmentFormDialog({
               </div>
             ) : null}
 
-            <div>
-              <Label htmlFor="af-notes">Interne Notiz</Label>
-              <Textarea
-                id="af-notes"
-                rows={2}
-                value={internalNotes}
-                onChange={(e) => setInternalNotes(e.target.value)}
-              />
-            </div>
+            {!soloMode ? (
+              <div>
+                <Label htmlFor="af-notes">Interne Notiz</Label>
+                <Textarea
+                  id="af-notes"
+                  rows={2}
+                  value={internalNotes}
+                  onChange={(e) => setInternalNotes(e.target.value)}
+                />
+              </div>
+            ) : null}
 
             <DialogFooter data-tour="appointment-form-actions">
               <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={pending}>

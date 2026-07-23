@@ -16,9 +16,13 @@ import {
   employeeScopeFilter,
   getManagedEmployeeIds,
   requirePermission,
+  uiModeFor,
 } from '@/server/permissions';
+import { getPersonalEarningsData } from '@/server/services/earnings-service';
 import { getReportData } from '@/server/services/report-service';
+import { PersonalEarningsDashboard } from '@/features/reports/personal-earnings-dashboard';
 import { ReportFilterBar } from '@/features/reports/report-filter-bar';
+import { ReportPeriodFilter } from '@/features/reports/report-period-filter';
 import { SimpleBarChart } from '@/features/reports/simple-bar-chart';
 
 export const metadata: Metadata = { title: 'Auswertungen' };
@@ -44,8 +48,39 @@ export default async function ReportsPage({
     status: params.status || undefined,
   };
 
+  // Solo-, Mitarbeiter- und persönliche Leitungsansicht bleiben bewusst
+  // kompakt: nur der eigene Verdienst, ohne Team-/Kunden-Verwaltungstabellen.
+  if (uiModeFor(ctx) !== 'team') {
+    const earnings = await getPersonalEarningsData({
+      from: filters.from,
+      to: filters.to,
+    });
+    return (
+      <>
+        <PageHeader
+          title="Mein Bericht"
+          description={`Zeitraum ${filters.from} bis ${filters.to}`}
+        >
+          <div className="mt-4" data-tour="reports-filters">
+            <ReportPeriodFilter
+              defaultFrom={defaultFrom}
+              defaultTo={defaultTo}
+            />
+          </div>
+        </PageHeader>
+        <div className="mx-auto max-w-5xl p-4 sm:p-5">
+          <PersonalEarningsDashboard data={earnings} />
+        </div>
+      </>
+    );
+  }
+
   const scope = await getManagedEmployeeIds(ctx);
-  const [data, employees, customers, teamManagers] = await Promise.all([
+  const [earnings, data, employees, customers, teamManagers] = await Promise.all([
+    getPersonalEarningsData({
+      from: filters.from,
+      to: filters.to,
+    }),
     getReportData(filters),
     db.employee.findMany({
       where: {
@@ -103,6 +138,8 @@ export default async function ReportsPage({
       </PageHeader>
 
       <div className="space-y-4 p-4 sm:p-5">
+        <PersonalEarningsDashboard data={earnings} />
+
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-5" data-tour="reports-stats">
           <StatTile label="Kundenstunden (Budget)" value={formatMinutesAsHours(data.totals.budgetMinutes)} />
           <StatTile label="Zugewiesen" value={formatMinutesAsHours(data.totals.allocatedMinutes)} />

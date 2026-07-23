@@ -1,9 +1,10 @@
 import type { Metadata, Viewport } from 'next';
+import { cookies } from 'next/headers';
 
 import { Providers } from '@/app/providers';
 import { ServiceWorkerRegister } from '@/components/layout/sw-register';
-import { THEME_INIT_SCRIPT } from '@/components/layout/theme-provider';
 import { APP_NAME } from '@/lib/app-config';
+import { THEME_COOKIE_NAME } from '@/lib/theme';
 
 import './globals.css';
 
@@ -32,15 +33,17 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  // Explizite Theme-Wahl kommt als Cookie mit und landet direkt im Server-HTML –
+  // kein Init-Script nötig (React 19 meldet client-gerenderte <script>-Tags als
+  // Dev-Fehler) und trotzdem kein Theme-Flackern. Ohne Cookie entscheidet das
+  // System über `color-scheme: light dark` + `light-dark()`-Tokens.
+  const themeCookie = (await cookies()).get(THEME_COOKIE_NAME)?.value;
+  const dataTheme = themeCookie === 'light' || themeCookie === 'dark' ? themeCookie : undefined;
+
   return (
-    // suppressHydrationWarning: das Theme-Init-Script setzt data-theme vor der Hydration.
-    <html lang="de" suppressHydrationWarning>
-      <head>
-        {/* Server-gerendertes Init: kein Theme-Flackern, kein Script in einer
-            Client-Komponente (React 19 meldet das als Dev-Fehler). */}
-        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
-      </head>
+    // suppressHydrationWarning: der Theme-Provider passt data-theme clientseitig an.
+    <html lang="de" data-theme={dataTheme} suppressHydrationWarning>
       <body>
         <Providers>{children}</Providers>
         <ServiceWorkerRegister />

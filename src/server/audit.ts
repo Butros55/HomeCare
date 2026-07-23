@@ -49,6 +49,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   'member.joined': 'Mitglied beigetreten',
   'member.roleChanged': 'Rolle geändert',
   'member.suspended': 'Mitglied gesperrt',
+  'member.earningsSettingsChanged': 'Verdienst-Einstellungen geändert',
   'customer.created': 'Kunde angelegt',
   'customer.updated': 'Kunde geändert',
   'customer.archived': 'Kunde archiviert',

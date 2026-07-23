@@ -694,7 +694,7 @@ export function ProTimelineCalendar({
     const key = dayKey(day);
     const isTodayHeader = isSameDay(day, today);
     const dayEvents = eventsByDay.get(key) ?? [];
-    const openCount = dayEvents.filter((event) => event.kind === 'open').length;
+    const openCount = dayEvents.filter((event) => event.unassigned).length;
     const conflictCount = dayEvents.filter((event) => event.hasConflict).length;
     return (
       <div

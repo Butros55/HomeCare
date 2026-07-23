@@ -150,32 +150,34 @@ enum NotificationType {
 // ============================ Organisation ==================================
 
 model Organization {
-  id                   String   @id @default(cuid())
-  name                 String
-  slug                 String   @unique
-  timezone             String   @default("Europe/Berlin")
-  locale               String   @default("de-DE")
+  id                           String   @id @default(cuid())
+  name                         String
+  slug                         String   @unique
+  timezone                     String   @default("Europe/Berlin")
+  locale                       String   @default("de-DE")
   /// Strukturierter Standort { label, street, houseNumber, postalCode, city, countryCode, latitude, longitude }
-  defaultStartLocation Json?
-  defaultEndLocation   Json?
+  defaultStartLocation         Json?
+  defaultEndLocation           Json?
   /// Org-Einstellungen (Aufbewahrungsfristen etc.), zod-validiert in src/server/validation
-  settings             Json?
+  settings                     Json?
   /// Standard-Berechtigungen für neue Leitungs-Konten (Permission-Strings); null = Rollen-Standard
   defaultLeadershipPermissions Json?
   /// Standard-Berechtigungen für neue Mitarbeiter-Konten (Permission-Strings); null = Rollen-Standard
   defaultEmployeePermissions   Json?
   /// Solo-Modus: Leitung organisiert (noch) nur sich selbst – reduziertes UI ohne Mitarbeiter-/Zuweisungslogik
-  soloMode             Boolean  @default(false)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  soloMode                     Boolean  @default(false)
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
 
   memberships   OrganizationMembership[]
   invitations   Invitation[]
   employees     Employee[]
   customers     Customer[]
   addresses     Address[]
-  hourBudgets   CustomerHourBudget[]
-  allocations   HourAllocation[]
+  hourBudgets     CustomerHourBudget[]
+  hourTopups      CustomerHourTopup[]
+  recurringGrants CustomerRecurringHourGrant[]
+  allocations     HourAllocation[]
   series        AppointmentSeries[]
   appointments  Appointment[]
   timeEntries   TimeEntry[]
@@ -183,6 +185,7 @@ model Organization {
   notifications Notification[]
   auditLogs     AuditLog[]
   tourProgress  UserTourProgress[]
+  handwrittenNotes HandwrittenNote[]
 }
 
 // ============================ Benutzer & Auth ===============================
@@ -210,8 +213,11 @@ model User {
   auditLogs           AuditLog[]               @relation("AuditActor")
   approvedTimeEntries TimeEntry[]              @relation("TimeEntryApprover")
   hourAdjustments     CustomerHourAdjustment[] @relation("AdjustmentCreator")
+  hourTopups          CustomerHourTopup[]      @relation("TopupCreator")
+  recurringGrants     CustomerRecurringHourGrant[] @relation("GrantCreator")
   preference          UserPreference?
   tourProgress        UserTourProgress[]
+  handwrittenNotes    HandwrittenNote[]
 }
 
 enum TourStatus {
@@ -255,6 +261,23 @@ model UserPreference {
   personalViewActive       Boolean @default(false)
 }
 
+/// Private, handschriftliche Notiz eines Benutzers innerhalb einer Organisation.
+/// Der versionierte Vektorinhalt liegt als JSON vor und bleibt dadurch bearbeitbar.
+model HandwrittenNote {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title          String
+  document       Json
+  contentVersion Int          @default(1)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId, userId, updatedAt])
+}
+
 model Session {
   id         String   @id @default(cuid())
   userId     String
@@ -282,19 +305,23 @@ model PasswordResetToken {
 }
 
 model OrganizationMembership {
-  id              String           @id @default(cuid())
-  organizationId  String
-  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  userId          String
-  user            User             @relation("MembershipUser", fields: [userId], references: [id], onDelete: Cascade)
-  role            MembershipRole
-  status          MembershipStatus @default(ACTIVE)
+  id                             String           @id @default(cuid())
+  organizationId                 String
+  organization                   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId                         String
+  user                           User             @relation("MembershipUser", fields: [userId], references: [id], onDelete: Cascade)
+  role                           MembershipRole
+  status                         MembershipStatus @default(ACTIVE)
   /// Individuelle Berechtigungen (Permission-Strings); null = Rollen-Standard.
   /// Der Inhaber (ORGANIZATION_OWNER) hat unabhängig davon immer Vollzugriff.
-  permissions     Json?
-  invitedByUserId String?
-  invitedBy       User?            @relation("MembershipInviter", fields: [invitedByUserId], references: [id], onDelete: SetNull)
-  joinedAt        DateTime         @default(now())
+  permissions                    Json?
+  /// Persönlicher Brutto-Stundenlohn in Euro-Cent; bewusst je Organisation.
+  hourlyWageCents                Int              @default(0)
+  /// Persönliche Leitungs-Provision je geleisteter Mitarbeiterstunde in Euro-Cent.
+  employeeCommissionCentsPerHour Int              @default(0)
+  invitedByUserId                String?
+  invitedBy                      User?            @relation("MembershipInviter", fields: [invitedByUserId], references: [id], onDelete: SetNull)
+  joinedAt                       DateTime         @default(now())
 
   @@unique([organizationId, userId])
   @@index([userId])
@@ -402,39 +429,41 @@ model EmployeeAbsence {
 // ============================== Kunden ======================================
 
 model Customer {
-  id                   String         @id @default(cuid())
-  organizationId       String
-  organization         Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customerNumber       String
-  salutation           String?
-  firstName            String
-  lastName             String
-  companyName          String?
-  email                String?
-  phone                String?
-  secondaryPhone       String?
-  status               CustomerStatus @default(ACTIVE)
-  preferredEmployeeId  String?
-  preferredEmployee    Employee?      @relation("PreferredEmployee", fields: [preferredEmployeeId], references: [id], onDelete: SetNull)
-  accessInstructions   String?
-  cleaningInstructions String?
+  id                                String         @id @default(cuid())
+  organizationId                    String
+  organization                      Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerNumber                    String
+  salutation                        String?
+  firstName                         String
+  lastName                          String
+  companyName                       String?
+  email                             String?
+  phone                             String?
+  secondaryPhone                    String?
+  status                            CustomerStatus @default(ACTIVE)
+  preferredEmployeeId               String?
+  preferredEmployee                 Employee?      @relation("PreferredEmployee", fields: [preferredEmployeeId], references: [id], onDelete: SetNull)
+  accessInstructions                String?
+  cleaningInstructions              String?
   /// Nur mit Berechtigung PRIVATE_NOTES_READ sichtbar (Datenminimierung).
-  privateNotes         String?
-  routeNotes           String?
+  privateNotes                      String?
+  routeNotes                        String?
   /// Kundenfarbe für Kalender/Karte (Hex)
-  color                String         @default("#6c5ce7")
+  color                             String         @default("#6c5ce7")
   /// Standarddauer neuer (vorgeschlagener) Einsätze in Minuten.
-  defaultAppointmentDurationMinutes Int @default(120)
-  createdAt            DateTime       @default(now())
-  updatedAt            DateTime       @updatedAt
-  deletedAt            DateTime?
+  defaultAppointmentDurationMinutes Int            @default(120)
+  createdAt                         DateTime       @default(now())
+  updatedAt                         DateTime       @updatedAt
+  deletedAt                         DateTime?
 
-  addresses      Address[]
-  hourBudgets    CustomerHourBudget[]
-  allocations    HourAllocation[]
-  series         AppointmentSeries[]
-  appointments   Appointment[]
-  availabilities CustomerAvailability[]
+  addresses       Address[]
+  hourBudgets     CustomerHourBudget[]
+  hourTopups      CustomerHourTopup[]
+  recurringGrants CustomerRecurringHourGrant[]
+  allocations     HourAllocation[]
+  series          AppointmentSeries[]
+  appointments    Appointment[]
+  availabilities  CustomerAvailability[]
 
   @@unique([organizationId, customerNumber])
   @@index([organizationId, status])
@@ -488,7 +517,91 @@ model Address {
   @@index([organizationId, city])
 }
 
-// ========================= Stundenbudgets ===================================
+// ========================= Stundenkonto =====================================
+//
+// Konto-Modell (Umbau Juli 2026): Jeder Kunde hat EIN Stundenkonto.
+//  - Gutschriften sind CustomerHourTopup-Zeilen (einmalig, materialisierte
+//    wiederkehrende Aufladung oder Korrektur ±).
+//  - Abzüge entstehen NICHT als Zeilen, sondern abgeleitet aus abgeschlossenen
+//    Terminen (Ist-Zeit vor Plan-Dauer). Storno/Statuswechsel korrigiert sich
+//    dadurch von selbst – kein Drift zwischen Konto und Terminen.
+//  - Geplante (noch nicht abgeschlossene) Termine reservieren Guthaben.
+
+enum HourTopupKind {
+  MANUAL
+  RECURRING
+  CORRECTION
+}
+
+enum RecurringIntervalUnit {
+  WEEK
+  MONTH
+}
+
+/// Wiederkehrende Aufladung: schreibt alle `intervalCount` Wochen/Monate
+/// `minutes` gut. Vergangene Gutschriften werden lazy als Topups materialisiert
+/// (materializedUntil), Änderungen wirken dadurch nur auf die Zukunft.
+model CustomerRecurringHourGrant {
+  id                String                @id @default(cuid())
+  organizationId    String
+  organization      Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerId        String
+  customer          Customer              @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  minutes           Int
+  intervalUnit      RecurringIntervalUnit
+  intervalCount     Int                   @default(1)
+  /// Erste Gutschrift (UTC-Mitternacht, Datumssemantik)
+  startDate         DateTime
+  /// Optional: keine Gutschriften nach diesem Datum (inklusiv)
+  endDate           DateTime?
+  active            Boolean               @default(true)
+  note              String?
+  /// Gutschriften bis einschließlich dieses Datums sind als Topups gebucht.
+  materializedUntil DateTime?
+  createdByUserId   String?
+  createdBy         User?                 @relation("GrantCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  topups CustomerHourTopup[]
+
+  @@index([organizationId, active])
+  @@index([customerId, active])
+}
+
+/// Einzelne Gutschrift auf dem Stundenkonto. `minutes` ist bei MANUAL/RECURRING
+/// positiv; Korrekturen (CORRECTION) dürfen negativ sein und tragen die
+/// Begründung in `note`.
+model CustomerHourTopup {
+  id               String                      @id @default(cuid())
+  organizationId   String
+  organization     Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerId       String
+  customer         Customer                    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  kind             HourTopupKind
+  minutes          Int
+  /// Buchungsdatum (UTC-Mitternacht); zukünftige Daten = vorgemerkte Gutschrift.
+  effectiveOn      DateTime
+  note             String?
+  /// Herkunft (aus dem Alt-Budget übernommen bzw. bei Aufladung wählbar).
+  sourceType       BudgetSourceType?
+  recurringGrantId String?
+  recurringGrant   CustomerRecurringHourGrant? @relation(fields: [recurringGrantId], references: [id], onDelete: SetNull)
+  createdByUserId  String?
+  createdBy        User?                       @relation("TopupCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdAt        DateTime                    @default(now())
+
+  /// Idempotente Materialisierung: je Regel höchstens eine Gutschrift pro Datum.
+  @@unique([recurringGrantId, effectiveOn])
+  @@index([customerId, effectiveOn])
+  @@index([organizationId, effectiveOn])
+}
+
+// ==================== Stundenbudgets (Alt-Modell) ===========================
+//
+// DEPRECATED: durch das Stundenkonto ersetzt. Die Tabellen bleiben als
+// Historie erhalten (Datenübernahme siehe Migration hour_account); es wird
+// nicht mehr hineingeschrieben.
 
 model CustomerHourBudget {
   id             String           @id @default(cuid())
@@ -532,8 +645,9 @@ model HourAllocation {
   organization          Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   customerId            String
   customer              Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  budgetId              String
-  budget                CustomerHourBudget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  /// DEPRECATED: Konto-Modell – neue Zuweisungen kommen ohne Budget-Bezug aus.
+  budgetId              String?
+  budget                CustomerHourBudget? @relation(fields: [budgetId], references: [id], onDelete: Cascade)
   /// null = Zuweisung aus dem Org-Budget (Owner/Admin/Disponent);
   /// gesetzt = Weitergabe aus dem Pool dieses Mitarbeiters (Team-Manager).
   allocatedByEmployeeId String?
@@ -557,31 +671,31 @@ model HourAllocation {
 // ========================= Termine & Serien =================================
 
 model AppointmentSeries {
-  id                     String       @id @default(cuid())
-  organizationId         String
-  organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customerId             String
-  customer               Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  defaultEmployeeId      String?
-  defaultEmployee        Employee?    @relation("SeriesDefaultEmployee", fields: [defaultEmployeeId], references: [id], onDelete: SetNull)
+  id                           String       @id @default(cuid())
+  organizationId               String
+  organization                 Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerId                   String
+  customer                     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  defaultEmployeeId            String?
+  defaultEmployee              Employee?    @relation("SeriesDefaultEmployee", fields: [defaultEmployeeId], references: [id], onDelete: SetNull)
   /// Solo-Wechsel: ursprünglicher Standard-Mitarbeiter (Wiederherstellung beim Zurückwechseln)
   soloReassignedFromEmployeeId String?
-  title                  String
-  description            String?
+  title                        String
+  description                  String?
   /// RFC-5545-RRULE, z. B. "FREQ=WEEKLY;INTERVAL=1;BYDAY=MO,TH"
-  recurrenceRule         String
-  recurrenceTimezone     String       @default("Europe/Berlin")
+  recurrenceRule               String
+  recurrenceTimezone           String       @default("Europe/Berlin")
   /// Erster Serientag (Datum, UTC-Mitternacht)
-  startDate              DateTime
-  endDate                DateTime?
+  startDate                    DateTime
+  endDate                      DateTime?
   /// "HH:mm" in recurrenceTimezone
-  defaultStartTime       String
-  defaultDurationMinutes Int
-  status                 SeriesStatus @default(ACTIVE)
+  defaultStartTime             String
+  defaultDurationMinutes       Int
+  status                       SeriesStatus @default(ACTIVE)
   /// Bis zu diesem Datum wurden Termine materialisiert (Horizont wird bei Bedarf erweitert).
-  materializedUntil      DateTime?
-  createdAt              DateTime     @default(now())
-  updatedAt              DateTime     @updatedAt
+  materializedUntil            DateTime?
+  createdAt                    DateTime     @default(now())
+  updatedAt                    DateTime     @updatedAt
 
   appointments Appointment[]
   exceptions   AppointmentSeriesException[]
@@ -591,48 +705,48 @@ model AppointmentSeries {
 }
 
 model Appointment {
-  id                         String                     @id @default(cuid())
-  organizationId             String
-  organization               Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customerId                 String
-  customer                   Customer                   @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  seriesId                   String?
-  series                     AppointmentSeries?         @relation(fields: [seriesId], references: [id], onDelete: SetNull)
+  id                           String                     @id @default(cuid())
+  organizationId               String
+  organization                 Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customerId                   String
+  customer                     Customer                   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  seriesId                     String?
+  series                       AppointmentSeries?         @relation(fields: [seriesId], references: [id], onDelete: SetNull)
   /// Für Serien-Termine: das Datum des Vorkommens (UTC-Mitternacht) zur Ausnahmen-Zuordnung.
-  occurrenceDate             DateTime?
-  assignedEmployeeId         String?
-  assignedEmployee           Employee?                  @relation("AppointmentEmployee", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
+  occurrenceDate               DateTime?
+  assignedEmployeeId           String?
+  assignedEmployee             Employee?                  @relation("AppointmentEmployee", fields: [assignedEmployeeId], references: [id], onDelete: SetNull)
   /// Solo-Wechsel: ursprünglicher Mitarbeiter (für die Wiederherstellung beim Zurückwechseln zu „Leitung")
   soloReassignedFromEmployeeId String?
   /// Kontingent-Zuordnung: neue automatische Termine (Routen-Vorschläge) werden
   /// einem konkreten Budget zugerechnet; Bestandstermine (null) zählen weiter
   /// über ihr Datum in den Budgetzeitraum.
-  customerHourBudgetId       String?
-  customerHourBudget         CustomerHourBudget?        @relation("AppointmentBudget", fields: [customerHourBudgetId], references: [id], onDelete: SetNull)
-  title                      String
-  description                String?
-  startAt                    DateTime
-  endAt                      DateTime
-  durationMinutes            Int
-  status                     AppointmentStatus          @default(PLANNED)
-  assignmentStatus           AssignmentStatus           @default(UNASSIGNED)
-  isFlexible                 Boolean                    @default(false)
-  earliestStartAt            DateTime?
-  latestEndAt                DateTime?
-  locationAddressId          String?
-  locationAddress            Address?                   @relation(fields: [locationAddressId], references: [id], onDelete: SetNull)
-  routeRelevant              Boolean                    @default(true)
-  customerConfirmationStatus CustomerConfirmationStatus @default(NOT_REQUIRED)
-  internalNotes              String?
-  cancellationReason         String?
-  completedAt                DateTime?
-  createdAt                  DateTime                   @default(now())
-  updatedAt                  DateTime                   @updatedAt
-  deletedAt                  DateTime?
+  customerHourBudgetId         String?
+  customerHourBudget           CustomerHourBudget?        @relation("AppointmentBudget", fields: [customerHourBudgetId], references: [id], onDelete: SetNull)
+  title                        String
+  description                  String?
+  startAt                      DateTime
+  endAt                        DateTime
+  durationMinutes              Int
+  status                       AppointmentStatus          @default(PLANNED)
+  assignmentStatus             AssignmentStatus           @default(UNASSIGNED)
+  isFlexible                   Boolean                    @default(false)
+  earliestStartAt              DateTime?
+  latestEndAt                  DateTime?
+  locationAddressId            String?
+  locationAddress              Address?                   @relation(fields: [locationAddressId], references: [id], onDelete: SetNull)
+  routeRelevant                Boolean                    @default(true)
+  customerConfirmationStatus   CustomerConfirmationStatus @default(NOT_REQUIRED)
+  internalNotes                String?
+  cancellationReason           String?
+  completedAt                  DateTime?
+  createdAt                    DateTime                   @default(now())
+  updatedAt                    DateTime                   @updatedAt
+  deletedAt                    DateTime?
 
-  timeEntries      TimeEntry[]
-  routeStops       RouteStop[]
-  exceptionSource  AppointmentSeriesException[] @relation("ExceptionReplacement")
+  timeEntries     TimeEntry[]
+  routeStops      RouteStop[]
+  exceptionSource AppointmentSeriesException[] @relation("ExceptionReplacement")
 
   @@index([organizationId, startAt])
   @@index([organizationId, endAt])

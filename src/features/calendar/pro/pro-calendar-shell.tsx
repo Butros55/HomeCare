@@ -33,6 +33,8 @@ export interface ProCalendarShellProps {
   ownEmployeeId: string | null;
   /** Reduziertes UI (Solo/Mitarbeiter): Termine automatisch selbst zuweisen. */
   simplePlanning?: boolean;
+  /** Alleine-Modus: keine Mitarbeiter-/Annahmelogik und vereinfachte Statusführung. */
+  soloMode?: boolean;
   employees: { id: string; name: string }[];
   customers: { id: string; name: string; color: string }[];
   urlParams: {
@@ -113,7 +115,10 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
     setReloadToken((token) => token + 1);
   }, []);
 
-  const proEvents = React.useMemo(() => events.map(toProEvent), [events]);
+  const proEvents = React.useMemo(
+    () => events.map((event) => toProEvent(event, props.soloMode)),
+    [events, props.soloMode],
+  );
   const filteredEvents = React.useMemo(
     () => proEvents.filter((event) => visibleKinds.has(event.kind)),
     [proEvents, visibleKinds],
@@ -189,6 +194,7 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
       selectedEvents={selectedEvents}
       visibleKinds={visibleKinds}
       kindCounts={kindCounts}
+      soloMode={props.soloMode}
       onToggleKind={toggleKind}
       onOpenEvent={openEvent}
       onCreate={() => startCreate(selectedKey)}
@@ -227,6 +233,7 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
           employees={props.employees}
           prefill={createPrefill}
           fixedEmployeeId={props.simplePlanning ? props.ownEmployeeId : null}
+          soloMode={props.soloMode}
         />
       ) : null}
 
@@ -238,6 +245,8 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
             refetch();
           }}
           canManage={props.canManage}
+          soloMode={props.soloMode}
+          ownEmployeeId={props.ownEmployeeId}
           employees={props.employees}
           customers={props.customers}
         />

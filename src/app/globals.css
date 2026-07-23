@@ -1,5 +1,20 @@
 @import 'tailwindcss';
 
+/* `dark:`-Utilities folgen dem effektiven App-Theme: explizit gewählt
+ * (data-theme="dark") oder Systemmodus (kein data-theme + OS dunkel).
+ * Ohne diese Variante würde `dark:` nur auf das OS hören und die Wahl
+ * im Einstellungs-Toggle ignorieren. */
+@custom-variant dark {
+  &:where([data-theme='dark'], [data-theme='dark'] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme='light']), :root:not([data-theme='light']) *) {
+      @slot;
+    }
+  }
+}
+
 /* ---------------------------------------------------------------------------
  * HomeCare Planner – Design-Tokens
  *
@@ -10,68 +25,75 @@
  * Alles ist ein Token – keine Komponente hartkodiert einen Hex-Wert.
  * `static` ist nötig, weil Komponenten Tokens zur Laufzeit auflösen
  * (`var(--color-status-${tone}-soft)`), was der Tailwind-Scan nicht sieht.
+ *
+ * Hell/Dunkel über `light-dark(hell, dunkel)` + `color-scheme` am <html>:
+ * kein Init-Script, kein Flackern, Systemmodus wechselt live ohne JS.
  * ------------------------------------------------------------------------- */
 
 @theme static {
-  /* --- Flächen (hell, Primärthema) --- */
-  --color-canvas: #f3f4fb;
-  --color-surface: #ffffff;
-  --color-panel: #ffffff;
-  --color-panel-raised: #f4f5fb;
-  --color-panel-sunken: #eef0f8;
+  /* --- Flächen --- */
+  --color-canvas: light-dark(#f3f4fb, #0a0d1c);
+  --color-surface: light-dark(#ffffff, #10142a);
+  --color-panel: light-dark(#ffffff, #151a34);
+  --color-panel-raised: light-dark(#f4f5fb, #1d2344);
+  --color-panel-sunken: light-dark(#eef0f8, #0c1022);
 
   /* --- Linien: Haarlinien, bewusst kontrastarm --- */
-  --color-line: #e8eaf3;
-  --color-line-strong: #d6dae9;
-  --color-line-subtle: #f0f1f8;
+  --color-line: light-dark(#e8eaf3, #242b4d);
+  --color-line-strong: light-dark(#d6dae9, #35406b);
+  --color-line-subtle: light-dark(#f0f1f8, #1b2140);
 
   /* --- Text --- */
-  --color-ink: #1b1f36;
-  --color-ink-muted: #5c6382;
-  --color-ink-subtle: #939ab5;
-  --color-ink-inverse: #ffffff;
+  --color-ink: light-dark(#1b1f36, #eef1fb);
+  --color-ink-muted: light-dark(#5c6382, #9aa4c7);
+  --color-ink-subtle: light-dark(#939ab5, #6b769c);
+  --color-ink-inverse: light-dark(#ffffff, #0a0d1c);
 
   /* --- Brand: Violett-Indigo mit weichem Verlauf --- */
-  --color-brand: #6c5ce7;
-  --color-brand-hover: #7d6ef2;
-  --color-brand-active: #5a4bd2;
-  --color-brand-subtle: #eeecfd;
-  --color-brand-ring: #6c5ce740;
-  --gradient-brand: linear-gradient(135deg, #6c5ce7 0%, #9d7bf5 100%);
+  --color-brand: light-dark(#6c5ce7, #7d6ef2);
+  --color-brand-hover: light-dark(#7d6ef2, #8d80f5);
+  --color-brand-active: light-dark(#5a4bd2, #6c5ce7);
+  --color-brand-subtle: light-dark(#eeecfd, #232052);
+  --color-brand-ring: light-dark(#6c5ce740, #7d6ef259);
+  --gradient-brand: linear-gradient(
+    135deg,
+    light-dark(#6c5ce7, #7d6ef2) 0%,
+    light-dark(#9d7bf5, #a78bfa) 100%
+  );
 
   /* --- Statuspalette: `-solid` trägt den Farbton, `-soft` die Pastell-Tönung --- */
-  --color-status-todo: #3e6de0;
-  --color-status-todo-soft: #3e6de01a;
-  --color-status-progress: #d98324;
-  --color-status-progress-soft: #f5a5242b;
-  --color-status-review: #8e42e6;
+  --color-status-todo: light-dark(#3e6de0, #6f9bff);
+  --color-status-todo-soft: light-dark(#3e6de01a, #3f8cff24);
+  --color-status-progress: light-dark(#d98324, #f5a524);
+  --color-status-progress-soft: light-dark(#f5a5242b, #f5a52424);
+  --color-status-review: light-dark(#8e42e6, #bf7af7);
   --color-status-review-soft: #a855f724;
-  --color-status-done: #189a4e;
+  --color-status-done: light-dark(#189a4e, #34d374);
   --color-status-done-soft: #22c55e24;
-  --color-status-stuck: #dc3d3d;
-  --color-status-stuck-soft: #ef444420;
-  --color-status-hold: #64748b;
-  --color-status-hold-soft: #64748b1f;
+  --color-status-stuck: light-dark(#dc3d3d, #f87171);
+  --color-status-stuck-soft: light-dark(#ef444420, #ef444424);
+  --color-status-hold: light-dark(#64748b, #94a3b8);
+  --color-status-hold-soft: light-dark(#64748b1f, #64748b2e);
 
   /* --- Priorität / Konfliktschwere --- */
-  --color-priority-low: #0f97c7;
-  --color-priority-low-soft: #38bdf824;
-  --color-priority-medium: #7c5ce0;
+  --color-priority-low: light-dark(#0f97c7, #38bdf8);
+  --color-priority-low-soft: light-dark(#38bdf824, #38bdf826);
+  --color-priority-medium: light-dark(#7c5ce0, #a78bfa);
   --color-priority-medium-soft: #a78bfa26;
-  --color-priority-high: #e2496b;
+  --color-priority-high: light-dark(#e2496b, #fb7185);
   --color-priority-high-soft: #fb718526;
-  --color-priority-urgent: #d92626;
-  --color-priority-urgent-soft: #dc262622;
+  --color-priority-urgent: light-dark(#d92626, #f14e4e);
+  --color-priority-urgent-soft: light-dark(#dc262622, #dc262633);
 
   /* --- Semantisches Feedback --- */
-  --color-success: #189a4e;
-  --color-success-soft: #22c55e1c;
-  --color-warning: #d98324;
-  --color-warning-soft: #f5a52426;
-  --color-danger: #dc3d3d;
-  --color-danger-soft: #ef44441c;
-  --color-info: #3e6de0;
-  --color-info-soft: #3e6de018;
+  --color-success: light-dark(#189a4e, #34d374);
+  --color-success-soft: light-dark(#22c55e1c, #22c55e21);
+  --color-warning: light-dark(#d98324, #f5a524);
+  --color-warning-soft: light-dark(#f5a52426, #f5a52421);
+  --color-danger: light-dark(#dc3d3d, #f87171);
+  --color-danger-soft: light-dark(#ef44441c, #ef444421);
+  --color-info: light-dark(#3e6de0, #6f9bff);
+  --color-info-soft: light-dark(#3e6de018, #3f8cff21);
 
   /* --- Gruppenfarben (Kalender, Avatare, Karten-Pins) --- */
   --color-group-1: #6c5ce7;
@@ -142,65 +164,23 @@
 }
 
 /* ---------------------------------------------------------------------------
- * Dunkles Thema – via next-themes (<html data-theme="dark">), inkl. Systemmodus.
+ * Dunkles Thema: Die Farbtokens oben lösen sich über `color-scheme` auf.
+ * Nur die Schatten brauchen eigene Dunkel-Werte (andere Geometrie, nicht nur
+ * andere Farbe – `light-dark()` kann keine Längen umschalten). Beide Blöcke
+ * IDENTISCH halten: einmal explizit, einmal Systemmodus.
  * ------------------------------------------------------------------------- */
 [data-theme='dark'] {
-  --color-canvas: #0a0d1c;
-  --color-surface: #10142a;
-  --color-panel: #151a34;
-  --color-panel-raised: #1d2344;
-  --color-panel-sunken: #0c1022;
-
-  --color-line: #242b4d;
-  --color-line-strong: #35406b;
-  --color-line-subtle: #1b2140;
-
-  --color-ink: #eef1fb;
-  --color-ink-muted: #9aa4c7;
-  --color-ink-subtle: #6b769c;
-  --color-ink-inverse: #0a0d1c;
-
-  --color-brand: #7d6ef2;
-  --color-brand-hover: #8d80f5;
-  --color-brand-active: #6c5ce7;
-  --color-brand-subtle: #232052;
-  --color-brand-ring: #7d6ef259;
-  --gradient-brand: linear-gradient(135deg, #7d6ef2 0%, #a78bfa 100%);
-
-  --color-status-todo: #6f9bff;
-  --color-status-todo-soft: #3f8cff24;
-  --color-status-progress: #f5a524;
-  --color-status-progress-soft: #f5a52424;
-  --color-status-review: #bf7af7;
-  --color-status-review-soft: #a855f724;
-  --color-status-done: #34d374;
-  --color-status-done-soft: #22c55e24;
-  --color-status-stuck: #f87171;
-  --color-status-stuck-soft: #ef444424;
-  --color-status-hold: #94a3b8;
-  --color-status-hold-soft: #64748b2e;
-
-  --color-priority-low: #38bdf8;
-  --color-priority-low-soft: #38bdf826;
-  --color-priority-medium: #a78bfa;
-  --color-priority-medium-soft: #a78bfa26;
-  --color-priority-high: #fb7185;
-  --color-priority-high-soft: #fb718526;
-  --color-priority-urgent: #f14e4e;
-  --color-priority-urgent-soft: #dc262633;
-
-  --color-success: #34d374;
-  --color-success-soft: #22c55e21;
-  --color-warning: #f5a524;
-  --color-warning-soft: #f5a52421;
-  --color-danger: #f87171;
-  --color-danger-soft: #ef444421;
-  --color-info: #6f9bff;
-  --color-info-soft: #3f8cff21;
-
   --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.28);
   --shadow-popover: 0 8px 30px rgb(0 0 0 / 0.55);
   --shadow-drawer: -8px 0 30px rgb(0 0 0 / 0.45);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.28);
+    --shadow-popover: 0 8px 30px rgb(0 0 0 / 0.55);
+    --shadow-drawer: -8px 0 30px rgb(0 0 0 / 0.45);
+  }
 }
 
 @layer base {
@@ -208,9 +188,15 @@
     border-color: var(--color-line);
   }
 
+  /* Kein data-theme = Systemmodus: der Browser wählt hell/dunkel selbst und
+   * wechselt live mit dem OS – die `light-dark()`-Tokens folgen automatisch. */
   html {
-    color-scheme: light;
+    color-scheme: light dark;
     scrollbar-gutter: stable;
+  }
+
+  html[data-theme='light'] {
+    color-scheme: light;
   }
 
   html[data-theme='dark'] {

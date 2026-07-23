@@ -4,6 +4,7 @@ import {
   CalendarDays,
   Contact,
   LayoutDashboard,
+  NotebookPen,
   Route,
   Settings,
   UsersRound,
@@ -57,6 +58,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     title: 'Organisation',
     items: [
+      { href: '/notes', label: 'Notizbuch', icon: NotebookPen },
       { href: '/notifications', label: 'Benachrichtigungen', icon: Bell },
       { href: '/reports', label: 'Auswertungen', icon: BarChart3, requires: 'reports' },
       { href: '/settings', label: 'Einstellungen', icon: Settings, requires: 'settings' },
@@ -66,8 +68,8 @@ export const NAV_SECTIONS: NavSection[] = [
 
 /**
  * Reduzierte Navigation für den Alltagsbetrieb: Solo-Leitung und
- * Mitarbeiter-Konten sehen nur „Mein Tag“, Kalender, Kunden, Routen –
- * ohne Mitarbeiterverwaltung und Auswertungen.
+ * Mitarbeiter-Konten sehen „Mein Tag“, Kalender, Kunden und Routen.
+ * Eigene Auswertungen bleiben sichtbar, wenn das Konto reports.view besitzt.
  */
 const REDUCED_NAV_SECTIONS: NavSection[] = [
   {
@@ -80,6 +82,8 @@ const REDUCED_NAV_SECTIONS: NavSection[] = [
   },
   {
     items: [
+      { href: '/notes', label: 'Notizbuch', icon: NotebookPen },
+      { href: '/reports', label: 'Bericht', icon: BarChart3, requires: 'reports' },
       { href: '/notifications', label: 'Benachrichtigungen', icon: Bell },
       { href: '/settings', label: 'Einstellungen', icon: Settings },
     ],

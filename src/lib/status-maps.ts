@@ -33,6 +33,31 @@ export const APPOINTMENT_STATUS: Record<string, { label: string; tone: StatusTon
   NO_SHOW: { label: 'Nicht angetroffen', tone: 'stuck' },
 };
 
+/**
+ * Im Alleine-Modus reichen drei leicht verständliche Zustände. Das
+ * detaillierte Domänenmodell bleibt für den Team-Modus unverändert.
+ */
+export type SimpleAppointmentStatus = 'OPEN' | 'COMPLETED' | 'CANCELLED';
+
+export const SIMPLE_APPOINTMENT_STATUS: Record<
+  SimpleAppointmentStatus,
+  { label: string; tone: StatusTone }
+> = {
+  OPEN: { label: 'Offen', tone: 'progress' },
+  COMPLETED: { label: 'Abgeschlossen', tone: 'done' },
+  CANCELLED: { label: 'Abgesagt', tone: 'stuck' },
+};
+
+export function simpleAppointmentStatus(status: string): SimpleAppointmentStatus {
+  if (status === 'COMPLETED') return 'COMPLETED';
+  if (status === 'CANCELLED' || status === 'NO_SHOW') return 'CANCELLED';
+  return 'OPEN';
+}
+
+export function isAppointmentCompletableStatus(status: string): boolean {
+  return ['DRAFT', 'PLANNED', 'CONFIRMED', 'IN_PROGRESS'].includes(status);
+}
+
 export const ASSIGNMENT_STATUS: Record<string, { label: string; tone: StatusTone }> = {
   UNASSIGNED: { label: 'Offen', tone: 'progress' },
   ASSIGNED: { label: 'Zugewiesen', tone: 'todo' },

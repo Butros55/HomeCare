@@ -1,21 +1,33 @@
 'use client';
 
 /**
- * Leichter Theme-Provider (ersetzt next-themes): hell / dunkel / system über
- * `data-theme` am <html>. Das Init-Script im Root-Layout setzt das Attribut
- * vor der Hydration (kein Flackern); hier läuft nur noch die Umschaltung und
- * der matchMedia-Listener für den Systemmodus.
+ * Leichter Theme-Provider (hell / dunkel / system) ohne Init-Script.
  *
- * Hintergrund des Wechsels: next-themes rendert ein <script> innerhalb einer
- * React-Komponente, was React 19.2 im Dev-Modus als Fehler meldet (und damit
- * das Next-Overlay öffnet). API bleibt kompatibel: useTheme() → { theme, setTheme }.
+ * Arbeitsteilung:
+ *  - CSS: Alle Farbtokens sind `light-dark()`-Werte und folgen `color-scheme`.
+ *    Ohne `data-theme`-Attribut gilt `color-scheme: light dark` → das System
+ *    entscheidet (inkl. Live-Wechsel des OS-Themes, ganz ohne JS-Listener).
+ *  - Server: Das Root-Layout liest das Präferenz-Cookie und rendert bei
+ *    expliziter Wahl `data-theme` direkt ins HTML → korrektes erstes Paint.
+ *  - Client (hier): verwaltet nur noch die Präferenz, setzt/entfernt das
+ *    Attribut bei Umschaltung und persistiert Cookie + localStorage.
+ *
+ * Hintergrund: Ein <script> im React-Baum (next-themes-Ansatz) meldet React 19
+ * im Dev-Modus als Fehler – deshalb kommt dieses Setup ohne Script aus.
+ * API bleibt kompatibel: useTheme() → { theme, setTheme }.
  */
 
 import * as React from 'react';
 
-export type ThemePreference = 'light' | 'dark' | 'system';
+import {
+  isThemePreference,
+  THEME_COOKIE_NAME,
+  THEME_STORAGE_KEY,
+  type ThemePreference,
+} from '@/lib/theme';
 
-export const THEME_STORAGE_KEY = 'hcp.theme';
+export type { ThemePreference };
+export { THEME_STORAGE_KEY };
 
 interface ThemeContextValue {
   /** Gewählte Präferenz (nicht der aufgelöste Modus). */
@@ -32,62 +44,73 @@ export function useTheme(): ThemeContextValue {
   return React.useContext(ThemeContext);
 }
 
-function systemPrefersDark(): boolean {
-  return typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches;
+function applyTheme(preference: ThemePreference) {
+  const root = document.documentElement;
+  if (preference === 'system') {
+    // Kein Attribut = `color-scheme: light dark` → OS entscheidet (auch live).
+    root.removeAttribute('data-theme');
+  } else {
+    root.setAttribute('data-theme', preference);
+  }
 }
 
-function applyTheme(preference: ThemePreference) {
-  const resolved = preference === 'system' ? (systemPrefersDark() ? 'dark' : 'light') : preference;
-  document.documentElement.setAttribute('data-theme', resolved);
+function persistTheme(preference: ThemePreference) {
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, preference);
+  } catch {
+    /* localStorage gesperrt → Cookie reicht */
+  }
+  try {
+    document.cookie = `${THEME_COOKIE_NAME}=${preference}; path=/; max-age=31536000; SameSite=Lax`;
+  } catch {
+    /* ignorieren */
+  }
+}
+
+function readStoredPreference(): ThemePreference | null {
+  try {
+    const cookieMatch = document.cookie
+      .split('; ')
+      .find((entry) => entry.startsWith(`${THEME_COOKIE_NAME}=`));
+    const fromCookie = cookieMatch?.slice(THEME_COOKIE_NAME.length + 1);
+    if (isThemePreference(fromCookie)) return fromCookie;
+  } catch {
+    /* ignorieren */
+  }
+  try {
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (isThemePreference(stored)) return stored;
+  } catch {
+    /* ignorieren */
+  }
+  return null;
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = React.useState<ThemePreference>('system');
 
-  // Gespeicherte Präferenz übernehmen (das Init-Script hat data-theme schon
-  // gesetzt). useSyncExternalStore-frei, aber ohne synchronen setState im
-  // Effect-Body: der Abgleich läuft im nächsten Frame.
+  // Gespeicherte Präferenz übernehmen (das Server-HTML trägt das Attribut für
+  // explizite Wahl bereits). Abgleich im nächsten Frame, damit kein synchroner
+  // setState im Effect-Body läuft; migriert Alt-Bestand aus localStorage ins Cookie.
   React.useEffect(() => {
     let raf = 0;
     raf = window.requestAnimationFrame(() => {
-      try {
-        const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-        if (stored === 'light' || stored === 'dark' || stored === 'system') {
-          setThemeState(stored);
-        }
-      } catch {
-        /* localStorage gesperrt → Systemmodus */
+      const stored = readStoredPreference();
+      if (stored) {
+        setThemeState(stored);
+        applyTheme(stored);
+        persistTheme(stored);
       }
     });
     return () => window.cancelAnimationFrame(raf);
   }, []);
 
-  // Systemmodus folgt Änderungen des OS-Themes live.
-  React.useEffect(() => {
-    applyTheme(theme);
-    if (theme !== 'system') return;
-    const mql = window.matchMedia('(prefers-color-scheme: dark)');
-    const onChange = () => applyTheme('system');
-    mql.addEventListener('change', onChange);
-    return () => mql.removeEventListener('change', onChange);
-  }, [theme]);
-
   const setTheme = React.useCallback((next: ThemePreference) => {
     setThemeState(next);
-    try {
-      window.localStorage.setItem(THEME_STORAGE_KEY, next);
-    } catch {
-      /* ignorieren */
-    }
+    persistTheme(next);
     applyTheme(next);
   }, []);
 
   const value = React.useMemo(() => ({ theme, setTheme }), [theme, setTheme]);
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
-
-/**
- * Inline-Init (als String ins Server-HTML): setzt data-theme vor der Hydration,
- * damit die erste Farbe stimmt und nichts flackert.
- */
-export const THEME_INIT_SCRIPT = `(function(){try{var t=localStorage.getItem('${THEME_STORAGE_KEY}');var d=t==='dark'||((!t||t==='system')&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.setAttribute('data-theme',d?'dark':'light');}catch(e){document.documentElement.setAttribute('data-theme','light');}})();`;

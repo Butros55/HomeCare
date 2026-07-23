@@ -13,12 +13,21 @@ import type { CalendarEventDto } from '@/server/services/calendar-service';
 export type ProEventKind = 'planned' | 'confirmed' | 'done' | 'open' | 'cancelled';
 
 export const PRO_EVENT_KINDS: ProEventKind[] = ['planned', 'confirmed', 'done', 'open', 'cancelled'];
+export const SOLO_EVENT_KINDS: ProEventKind[] = ['open', 'done', 'cancelled'];
 
 export const PRO_KIND_LABELS: Record<ProEventKind, string> = {
   planned: 'Geplant',
   confirmed: 'Bestätigt',
   done: 'Abgeschlossen',
   open: 'Ohne Zuordnung',
+  cancelled: 'Abgesagt',
+};
+
+export const SOLO_KIND_LABELS: Record<ProEventKind, string> = {
+  planned: 'Offen',
+  confirmed: 'Offen',
+  done: 'Abgeschlossen',
+  open: 'Offen',
   cancelled: 'Abgesagt',
 };
 
@@ -34,29 +43,32 @@ export interface ProCalendarEvent {
   customerName: string;
   customerColor: string;
   employeeName: string | null;
+  /** Nur im Team-Modus ein eigener Handlungsbedarf; Solo kennt keine Zuweisung. */
+  unassigned: boolean;
   hasConflict: boolean;
   status: string;
 }
 
-export function kindForEvent(event: CalendarEventDto): ProEventKind {
+export function kindForEvent(event: CalendarEventDto, soloMode = false): ProEventKind {
   if (event.status === 'CANCELLED' || event.status === 'NO_SHOW') return 'cancelled';
-  if (!event.employeeId) return 'open';
   if (event.status === 'COMPLETED') return 'done';
+  if (soloMode || !event.employeeId) return 'open';
   if (event.status === 'CONFIRMED' || event.status === 'IN_PROGRESS') return 'confirmed';
   return 'planned';
 }
 
-export function toProEvent(event: CalendarEventDto): ProCalendarEvent {
+export function toProEvent(event: CalendarEventDto, soloMode = false): ProCalendarEvent {
   return {
     id: event.id,
-    kind: kindForEvent(event),
+    kind: kindForEvent(event, soloMode),
     summary: event.customerName,
-    detail: [event.title, event.employeeName].filter(Boolean).join(' · '),
+    detail: [event.title, soloMode ? null : event.employeeName].filter(Boolean).join(' · '),
     start: event.start,
     end: event.end,
     customerName: event.customerName,
     customerColor: event.customerColor,
     employeeName: event.employeeName,
+    unassigned: !soloMode && !event.employeeId,
     hasConflict: event.hasConflict,
     status: event.status,
   };

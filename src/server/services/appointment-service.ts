@@ -27,6 +27,7 @@ import {
   occurrenceTimes,
   type RecurrenceOptions,
 } from '@/lib/recurrence';
+import { isAppointmentCompletableStatus } from '@/lib/status-maps';
 import { writeAuditLog } from '@/server/audit';
 import { db } from '@/server/db';
 import { AppError } from '@/server/errors';
@@ -80,6 +81,25 @@ function parseDateInput(value: string): { y: number; m: number; d: number } {
   const [y, m, d] = value.split('-').map(Number);
   if (!y || !m || !d) throw new AppError('VALIDATION_FAILED', { message: 'Ungültiges Datum.' });
   return { y, m, d };
+}
+
+function requiredSoloEmployeeId(ctx: OrgContext): string {
+  if (!ctx.employee) {
+    throw new AppError('VALIDATION_FAILED', {
+      message:
+        'Für den Alleine-Modus fehlt dein eigenes Mitarbeiterprofil. Bitte den Modus in den Einstellungen erneut speichern.',
+    });
+  }
+  return ctx.employee.id;
+}
+
+function effectiveAssignedEmployeeId(
+  ctx: OrgContext,
+  requestedEmployeeId: string | null | undefined,
+): string | null {
+  return ctx.organization.soloMode
+    ? requiredSoloEmployeeId(ctx)
+    : (requestedEmployeeId ?? null);
 }
 
 async function requireAppointmentManage(ctx: OrgContext, assignedEmployeeId?: string | null) {
@@ -336,7 +356,8 @@ export async function createAppointment(
   options: { confirmed: boolean },
 ): Promise<ConflictOutcome> {
   const ctx = await requireOrganizationMembership();
-  await requireAppointmentManage(ctx, input.assignedEmployeeId);
+  const assignedEmployeeId = effectiveAssignedEmployeeId(ctx, input.assignedEmployeeId);
+  await requireAppointmentManage(ctx, assignedEmployeeId);
 
   const customer = await db.customer.findUnique({
     where: { id: input.customerId },
@@ -349,8 +370,8 @@ export async function createAppointment(
       message: 'Termine können nur für eigene Kunden geplant werden.',
     });
   }
-  if (input.assignedEmployeeId) {
-    const employee = await db.employee.findUnique({ where: { id: input.assignedEmployeeId } });
+  if (assignedEmployeeId) {
+    const employee = await db.employee.findUnique({ where: { id: assignedEmployeeId } });
     assertSameOrg(ctx, employee);
     if (employee.status !== 'ACTIVE') throw new AppError('RECIPIENT_INACTIVE');
   }
@@ -370,7 +391,7 @@ export async function createAppointment(
 
   const conflicts = await collectConflicts(ctx, {
     customerId: input.customerId,
-    assignedEmployeeId: input.assignedEmployeeId ?? null,
+    assignedEmployeeId,
     startAt,
     endAt,
     durationMinutes: input.durationMinutes,
@@ -383,7 +404,7 @@ export async function createAppointment(
   if (hasErrors(conflicts)) {
     throw new AppError('APPOINTMENT_CONFLICT', { details: { conflicts } });
   }
-  if (hasWarnings(conflicts) && !options.confirmed) {
+  if (hasWarnings(conflicts) && !options.confirmed && !ctx.organization.soloMode) {
     return { requiresConfirmation: true, conflicts };
   }
 
@@ -398,7 +419,7 @@ export async function createAppointment(
         data: {
           organizationId: ctx.organization.id,
           customerId: input.customerId,
-          defaultEmployeeId: input.assignedEmployeeId ?? null,
+          defaultEmployeeId: assignedEmployeeId,
           title: input.title,
           description: input.description,
           recurrenceRule: rule,
@@ -425,7 +446,7 @@ export async function createAppointment(
     });
 
     await materializeSeries(seriesId);
-    await notifyAssignment(ctx, input.assignedEmployeeId ?? null, input.customerId, startAt, true);
+    await notifyAssignment(ctx, assignedEmployeeId, input.customerId, startAt, true);
     return { requiresConfirmation: false, seriesId };
   }
 
@@ -435,14 +456,18 @@ export async function createAppointment(
       data: {
         organizationId: ctx.organization.id,
         customerId: input.customerId,
-        assignedEmployeeId: input.assignedEmployeeId ?? null,
+        assignedEmployeeId,
         title: input.title,
         description: input.description,
         startAt,
         endAt,
         durationMinutes: input.durationMinutes,
-        status: input.status ?? 'PLANNED',
-        assignmentStatus: input.assignedEmployeeId ? 'ASSIGNED' : 'UNASSIGNED',
+        status: ctx.organization.soloMode ? 'PLANNED' : (input.status ?? 'PLANNED'),
+        assignmentStatus: assignedEmployeeId
+          ? ctx.organization.soloMode
+            ? 'ACCEPTED'
+            : 'ASSIGNED'
+          : 'UNASSIGNED',
         isFlexible: input.isFlexible ?? false,
         earliestStartAt,
         latestEndAt,
@@ -465,7 +490,7 @@ export async function createAppointment(
     return created;
   });
 
-  await notifyAssignment(ctx, input.assignedEmployeeId ?? null, input.customerId, startAt, false);
+  await notifyAssignment(ctx, assignedEmployeeId, input.customerId, startAt, false);
   await notifyLeadershipAboutEmployeePlanning(ctx, appointment.id, input.customerId, startAt, 'angelegt');
   return { requiresConfirmation: false, appointmentId: appointment.id };
 }
@@ -510,6 +535,7 @@ export async function materializeSeries(seriesId: string, until?: Date): Promise
     include: {
       customer: { include: { addresses: { take: 1, orderBy: { label: 'asc' } } } },
       exceptions: true,
+      organization: { select: { soloMode: true } },
     },
   });
   if (!series || series.status !== 'ACTIVE') return 0;
@@ -561,7 +587,11 @@ export async function materializeSeries(seriesId: string, until?: Date): Promise
         endAt,
         durationMinutes: series.defaultDurationMinutes,
         status: 'PLANNED',
-        assignmentStatus: series.defaultEmployeeId ? 'ASSIGNED' : 'UNASSIGNED',
+        assignmentStatus: series.defaultEmployeeId
+          ? series.organization.soloMode
+            ? 'ACCEPTED'
+            : 'ASSIGNED'
+          : 'UNASSIGNED',
         locationAddressId,
         routeRelevant: true,
       },
@@ -625,18 +655,18 @@ export async function updateAppointment(
     include: { series: true },
   });
   assertSameOrg(ctx, appointment);
+  const requestedEmployeeId =
+    input.assignedEmployeeId !== undefined
+      ? input.assignedEmployeeId
+      : appointment.assignedEmployeeId;
+  const assignedEmployeeId = effectiveAssignedEmployeeId(ctx, requestedEmployeeId);
   // Mitarbeiter bearbeiten ausschließlich Termine, die ihnen zugewiesen sind.
   if (ctx.membership.role === 'EMPLOYEE' && appointment.assignedEmployeeId !== ctx.employee?.id) {
     throw new AppError('ACCESS_DENIED', {
       message: 'Nur eigene Termine können bearbeitet werden.',
     });
   }
-  await requireAppointmentManage(
-    ctx,
-    input.assignedEmployeeId !== undefined
-      ? input.assignedEmployeeId
-      : appointment.assignedEmployeeId,
-  );
+  await requireAppointmentManage(ctx, assignedEmployeeId);
 
   const timezone = ctx.organization.timezone;
 
@@ -654,11 +684,6 @@ export async function updateAppointment(
   const durationMinutes = input.durationMinutes ?? appointment.durationMinutes;
   const startAt = zonedWallTimeToUtc(dateParts.y, dateParts.m, dateParts.d, startTime, timezone);
   const endAt = new Date(startAt.getTime() + durationMinutes * 60_000);
-  const assignedEmployeeId =
-    input.assignedEmployeeId !== undefined
-      ? input.assignedEmployeeId
-      : appointment.assignedEmployeeId;
-
   if (assignedEmployeeId) {
     const employee = await db.employee.findUnique({ where: { id: assignedEmployeeId } });
     assertSameOrg(ctx, employee);
@@ -693,7 +718,7 @@ export async function updateAppointment(
   if (hasErrors(conflicts)) {
     throw new AppError('APPOINTMENT_CONFLICT', { details: { conflicts } });
   }
-  if (hasWarnings(conflicts) && !options.confirmed) {
+  if (hasWarnings(conflicts) && !options.confirmed && !ctx.organization.soloMode) {
     return { requiresConfirmation: true, conflicts };
   }
 
@@ -711,16 +736,18 @@ export async function updateAppointment(
           description: input.description !== undefined ? input.description : appointment.description,
           assignedEmployeeId,
           assignmentStatus: assignedEmployeeId
-            ? employeeChanged
-              ? 'ASSIGNED'
-              : appointment.assignmentStatus === 'UNASSIGNED'
+            ? ctx.organization.soloMode
+              ? 'ACCEPTED'
+              : employeeChanged
                 ? 'ASSIGNED'
-                : appointment.assignmentStatus
+                : appointment.assignmentStatus === 'UNASSIGNED'
+                  ? 'ASSIGNED'
+                  : appointment.assignmentStatus
             : 'UNASSIGNED',
           startAt,
           endAt,
           durationMinutes,
-          status: input.status ?? appointment.status,
+          status: ctx.organization.soloMode ? appointment.status : (input.status ?? appointment.status),
           isFlexible: input.isFlexible ?? appointment.isFlexible,
           earliestStartAt,
           latestEndAt,
@@ -893,7 +920,7 @@ export async function rescheduleAppointment(
   if (hasErrors(conflicts)) {
     throw new AppError('APPOINTMENT_CONFLICT', { details: { conflicts } });
   }
-  if (hasWarnings(conflicts) && !options.confirmed) {
+  if (hasWarnings(conflicts) && !options.confirmed && !ctx.organization.soloMode) {
     return { requiresConfirmation: true, conflicts };
   }
 
@@ -1085,6 +1112,114 @@ export async function updateAppointmentStatus(
       tx,
     );
   });
+}
+
+export interface CompleteAppointmentResult {
+  alreadyCompleted: boolean;
+  customerId: string;
+}
+
+/**
+ * Ein-Klick-Abschluss für „Mein Tag“ und den vereinfachten Solo-Drawer.
+ *
+ * Die Mutation ist idempotent: ein bereits abgeschlossener Termin bleibt
+ * unverändert (insbesondere completedAt). Legacy-Solo-Termine ohne Zuordnung
+ * werden im selben Schritt dem eigenen Profil zugeordnet, damit geleistete
+ * Minuten und daraus abgeleiteter Verdienst eindeutig beim Benutzer landen.
+ */
+export async function completeAppointment(
+  appointmentId: string,
+): Promise<CompleteAppointmentResult> {
+  const ctx = await requireOrganizationMembership();
+  const appointment = await db.appointment.findUnique({ where: { id: appointmentId } });
+  assertSameOrg(ctx, appointment);
+
+  const ownEmployeeId = ctx.employee?.id ?? null;
+  const isOwn = Boolean(ownEmployeeId && appointment.assignedEmployeeId === ownEmployeeId);
+  const canManage = hasPermission(ctx, 'appointments.manage');
+
+  if (ctx.organization.soloMode) {
+    const soloEmployeeId = requiredSoloEmployeeId(ctx);
+    if (
+      appointment.assignedEmployeeId !== null &&
+      appointment.assignedEmployeeId !== soloEmployeeId
+    ) {
+      throw new AppError('ACCESS_DENIED');
+    }
+    if (canManage) await requireAppointmentManage(ctx, soloEmployeeId);
+    else if (!isOwn) throw new AppError('ACCESS_DENIED');
+  } else if (canManage) {
+    // Beachtet insbesondere den Unterbaum eines Team-Managers.
+    await requireAppointmentManage(ctx, appointment.assignedEmployeeId);
+  } else if (!isOwn) {
+    throw new AppError('ACCESS_DENIED');
+  }
+
+  if (appointment.status === 'COMPLETED') {
+    return { alreadyCompleted: true, customerId: appointment.customerId };
+  }
+  if (!isAppointmentCompletableStatus(appointment.status)) {
+    throw new AppError('VALIDATION_FAILED', {
+      message: 'Abgesagte Termine können nicht abgeschlossen werden.',
+    });
+  }
+
+  const completedAt = new Date();
+  const result = await db.$transaction(async (tx) => {
+    const updated = await tx.appointment.updateMany({
+      where: {
+        id: appointmentId,
+        status: { in: ['DRAFT', 'PLANNED', 'CONFIRMED', 'IN_PROGRESS'] },
+        ...(ctx.organization.soloMode
+          ? {
+              OR: [
+                { assignedEmployeeId: requiredSoloEmployeeId(ctx) },
+                { assignedEmployeeId: null },
+              ],
+            }
+          : {}),
+      },
+      data: {
+        status: 'COMPLETED',
+        completedAt,
+        ...(ctx.organization.soloMode
+          ? {
+              assignedEmployeeId: requiredSoloEmployeeId(ctx),
+              assignmentStatus: 'ACCEPTED' as const,
+            }
+          : {}),
+      },
+    });
+    if (updated.count === 0) return false;
+
+    await writeAuditLog(
+      {
+        organizationId: ctx.organization.id,
+        actorUserId: ctx.user.id,
+        action: 'appointment.statusChanged',
+        entityType: 'Appointment',
+        entityId: appointmentId,
+        metadata: { status: 'COMPLETED', via: 'quickComplete' },
+      },
+      tx,
+    );
+    return true;
+  });
+
+  if (!result) {
+    const current = await db.appointment.findUnique({
+      where: { id: appointmentId },
+      select: { status: true },
+    });
+    if (current?.status === 'COMPLETED') {
+      return { alreadyCompleted: true, customerId: appointment.customerId };
+    }
+    throw new AppError('VALIDATION_FAILED', {
+      message: 'Der Termin wurde zwischenzeitlich geändert und konnte nicht abgeschlossen werden.',
+    });
+  }
+
+  return { alreadyCompleted: false, customerId: appointment.customerId };
 }
 
 export async function assignEmployee(

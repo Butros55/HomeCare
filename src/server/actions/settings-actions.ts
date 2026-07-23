@@ -119,11 +119,40 @@ export async function updateSoloModeAction(
             data: {
               assignedEmployeeId: ownEmployee.id,
               soloReassignedFromEmployeeId: fromId,
-              assignmentStatus: 'ASSIGNED',
+              assignmentStatus: 'ACCEPTED',
             },
           });
           movedCount += result.count;
         }
+
+        // Bereits eigene und bisher unzugewiesene offene Termine brauchen im
+        // Alleine-Modus keinerlei Annahmeschritt. Unzugewiesene Termine werden
+        // dauerhaft dem eigenen Profil zugerechnet; beim späteren Team-Wechsel
+        // dürfen sie dort bleiben.
+        const unassigned = await tx.appointment.updateMany({
+          where: {
+            organizationId: orgId,
+            deletedAt: null,
+            startAt: { gte: now },
+            status: { in: [...REASSIGNABLE_STATUSES] },
+            assignedEmployeeId: null,
+          },
+          data: {
+            assignedEmployeeId: ownEmployee.id,
+            assignmentStatus: 'ACCEPTED',
+          },
+        });
+        movedCount += unassigned.count;
+        await tx.appointment.updateMany({
+          where: {
+            organizationId: orgId,
+            deletedAt: null,
+            startAt: { gte: now },
+            status: { in: [...REASSIGNABLE_STATUSES] },
+            assignedEmployeeId: ownEmployee.id,
+          },
+          data: { assignmentStatus: 'ACCEPTED' },
+        });
 
         // Serien: Standard-Mitarbeiter ebenfalls umziehen (für künftige Vorkommen).
         const seriesRows = await tx.appointmentSeries.findMany({
@@ -144,6 +173,14 @@ export async function updateSoloModeAction(
             },
           });
         }
+        await tx.appointmentSeries.updateMany({
+          where: {
+            organizationId: orgId,
+            status: 'ACTIVE',
+            defaultEmployeeId: null,
+          },
+          data: { defaultEmployeeId: ownEmployee.id },
+        });
       } else {
         // ---- Alleine → Leitung: alte Zuordnungen wiederherstellen ----
         const marked = await tx.appointment.groupBy({

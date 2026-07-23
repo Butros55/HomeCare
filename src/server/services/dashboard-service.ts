@@ -6,6 +6,7 @@ import { dayPeriodInZone, monthPeriodInZone, overlaps, weekPeriodInZone } from '
 import { estimateTravelSeconds } from '@/lib/geo';
 import { formatMinutesAsHours } from '@/lib/duration';
 import { getManagerSelfObligationMinutes } from '@/lib/hours';
+import { isAppointmentCompletableStatus } from '@/lib/status-maps';
 import { db } from '@/server/db';
 import {
   employeeScopeFilter,
@@ -65,6 +66,10 @@ export interface MyDayEntry {
   startAt: Date;
   endAt: Date;
   status: string;
+  /** Termin läuft laut Status oder befindet sich gerade im geplanten Zeitfenster. */
+  isCurrent: boolean;
+  /** Terminale/abgesagte Termine bieten keinen Schnellabschluss mehr an. */
+  canComplete: boolean;
   unassigned: boolean;
   addressLine: string | null;
   latitude: number | null;
@@ -145,6 +150,20 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
     | { latitude?: number | null; longitude?: number | null }
     | null;
   const entries: MyDayEntry[] = [];
+  const explicitCurrent = todayAppointments.find(
+    (appointment) =>
+      appointment.status === 'IN_PROGRESS' &&
+      isAppointmentCompletableStatus(appointment.status),
+  );
+  const currentAppointment =
+    explicitCurrent ??
+    todayAppointments.find(
+      (appointment) =>
+        isAppointmentCompletableStatus(appointment.status) &&
+        appointment.startAt.getTime() <= now.getTime() &&
+        appointment.endAt.getTime() > now.getTime(),
+    ) ??
+    null;
   let previousCoordinate =
     startLocation?.latitude != null && startLocation?.longitude != null
       ? { latitude: startLocation.latitude, longitude: startLocation.longitude }
@@ -170,6 +189,8 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
       startAt: appointment.startAt,
       endAt: appointment.endAt,
       status: appointment.status,
+      isCurrent: currentAppointment?.id === appointment.id,
+      canComplete: isAppointmentCompletableStatus(appointment.status),
       unassigned: appointment.assignedEmployeeId === null,
       addressLine: appointment.locationAddress
         ? `${appointment.locationAddress.street} ${appointment.locationAddress.houseNumber}, ${appointment.locationAddress.postalCode} ${appointment.locationAddress.city}`

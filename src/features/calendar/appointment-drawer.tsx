@@ -29,11 +29,18 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { StatusPill } from '@/components/ui/status-pill';
+import { QuickCompleteButton } from '@/features/appointments/quick-complete-button';
 import { formatDateTime, formatTime, toDateInputValue } from '@/lib/dates';
 import { formatMinutesVerbose } from '@/lib/duration';
 import { googleMapsDirectionsUrl } from '@/lib/geo';
 import { describeRecurrenceRule } from '@/lib/recurrence';
-import { APPOINTMENT_STATUS, ASSIGNMENT_STATUS, statusOf } from '@/lib/status-maps';
+import {
+  APPOINTMENT_STATUS,
+  ASSIGNMENT_STATUS,
+  SIMPLE_APPOINTMENT_STATUS,
+  simpleAppointmentStatus,
+  statusOf,
+} from '@/lib/status-maps';
 import { cn } from '@/lib/utils';
 import {
   assignEmployeeAction,
@@ -58,12 +65,16 @@ export function AppointmentDrawer({
   appointmentId,
   onClose,
   canManage,
+  soloMode = false,
+  ownEmployeeId,
   employees,
   customers,
 }: {
   appointmentId: string;
   onClose: () => void;
   canManage: boolean;
+  soloMode?: boolean;
+  ownEmployeeId?: string | null;
   employees: { id: string; name: string }[];
   customers: { id: string; name: string }[];
 }) {
@@ -217,12 +228,29 @@ export function AppointmentDrawer({
                   {formatMinutesVerbose(detail.durationMinutes)}
                 </p>
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  <StatusPill size="sm" tone={statusOf(APPOINTMENT_STATUS, detail.status).tone}>
-                    {statusOf(APPOINTMENT_STATUS, detail.status).label}
+                  <StatusPill
+                    size="sm"
+                    tone={
+                      soloMode
+                        ? statusOf(
+                            SIMPLE_APPOINTMENT_STATUS,
+                            simpleAppointmentStatus(detail.status),
+                          ).tone
+                        : statusOf(APPOINTMENT_STATUS, detail.status).tone
+                    }
+                  >
+                    {soloMode
+                      ? statusOf(
+                          SIMPLE_APPOINTMENT_STATUS,
+                          simpleAppointmentStatus(detail.status),
+                        ).label
+                      : statusOf(APPOINTMENT_STATUS, detail.status).label}
                   </StatusPill>
-                  <StatusPill size="sm" tone={statusOf(ASSIGNMENT_STATUS, detail.assignmentStatus).tone}>
-                    {statusOf(ASSIGNMENT_STATUS, detail.assignmentStatus).label}
-                  </StatusPill>
+                  {!soloMode ? (
+                    <StatusPill size="sm" tone={statusOf(ASSIGNMENT_STATUS, detail.assignmentStatus).tone}>
+                      {statusOf(ASSIGNMENT_STATUS, detail.assignmentStatus).label}
+                    </StatusPill>
+                  ) : null}
                   {detail.series ? (
                     <StatusPill size="sm" tone="neutral" withDot={false}>
                       <Repeat className="size-3" aria-hidden /> Serie
@@ -307,53 +335,88 @@ export function AppointmentDrawer({
               ) : null}
 
               {/* Mitarbeiter / Zuweisung */}
-              <section>
-                <h3 className="mb-1.5 text-[length:var(--text-2xs)] font-semibold tracking-wider text-[var(--color-ink-subtle)] uppercase">
-                  Mitarbeiter
-                </h3>
-                {canManage ? (
-                  <Select
-                    value={detail.employee?.id ?? 'NONE'}
-                    onValueChange={(value) => assign(value === 'NONE' ? null : value, false)}
-                    disabled={pending}
-                  >
-                    <SelectTrigger aria-label="Mitarbeiter zuweisen">
-                      <SelectValue placeholder="Nicht zugewiesen" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="NONE">Nicht zugewiesen</SelectItem>
-                      {employees.map((employee) => (
-                        <SelectItem key={employee.id} value={employee.id}>
-                          {employee.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <p className="text-[length:var(--text-sm)]">
-                    {detail.employee
-                      ? `${detail.employee.firstName} ${detail.employee.lastName}`
-                      : 'Nicht zugewiesen'}
-                  </p>
-                )}
-                {detail.isOwn && detail.assignmentStatus === 'ASSIGNED' ? (
-                  <div className="mt-2 flex gap-2">
-                    <Button variant="primary" size="sm" onClick={() => respond('ACCEPTED')} disabled={pending}>
-                      <Check aria-hidden /> Annehmen
-                    </Button>
-                    <Button variant="danger" size="sm" onClick={() => respond('DECLINED')} disabled={pending}>
-                      <Ban aria-hidden /> Ablehnen
-                    </Button>
-                  </div>
-                ) : null}
-              </section>
+              {!soloMode ? (
+                <section>
+                  <h3 className="mb-1.5 text-[length:var(--text-2xs)] font-semibold tracking-wider text-[var(--color-ink-subtle)] uppercase">
+                    Mitarbeiter
+                  </h3>
+                  {canManage ? (
+                    <Select
+                      value={detail.employee?.id ?? 'NONE'}
+                      onValueChange={(value) => assign(value === 'NONE' ? null : value, false)}
+                      disabled={pending}
+                    >
+                      <SelectTrigger aria-label="Mitarbeiter zuweisen">
+                        <SelectValue placeholder="Nicht zugewiesen" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="NONE">Nicht zugewiesen</SelectItem>
+                        {employees.map((employee) => (
+                          <SelectItem key={employee.id} value={employee.id}>
+                            {employee.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <p className="text-[length:var(--text-sm)]">
+                      {detail.employee
+                        ? `${detail.employee.firstName} ${detail.employee.lastName}`
+                        : 'Nicht zugewiesen'}
+                    </p>
+                  )}
+                  {detail.isOwn && detail.assignmentStatus === 'ASSIGNED' ? (
+                    <div className="mt-2 flex gap-2">
+                      <Button variant="primary" size="sm" onClick={() => respond('ACCEPTED')} disabled={pending}>
+                        <Check aria-hidden /> Annehmen
+                      </Button>
+                      <Button variant="danger" size="sm" onClick={() => respond('DECLINED')} disabled={pending}>
+                        <Ban aria-hidden /> Ablehnen
+                      </Button>
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
 
               {/* Status */}
               <section>
                 <h3 className="mb-1.5 text-[length:var(--text-2xs)] font-semibold tracking-wider text-[var(--color-ink-subtle)] uppercase">
                   Status
                 </h3>
-                {canManage ? (
+                {soloMode ? (
+                  simpleAppointmentStatus(detail.status) === 'OPEN' ? (
+                    <div className="flex flex-wrap gap-2">
+                      <QuickCompleteButton
+                        appointmentId={appointmentId}
+                        label="Termin abschließen"
+                        size="md"
+                        onCompleted={refresh}
+                      />
+                      <Button
+                        variant="danger"
+                        size="md"
+                        onClick={() => setCancelOpen(true)}
+                        disabled={pending}
+                      >
+                        <Ban aria-hidden /> Absagen
+                      </Button>
+                    </div>
+                  ) : (
+                    <StatusPill
+                      tone={statusOf(
+                        SIMPLE_APPOINTMENT_STATUS,
+                        simpleAppointmentStatus(detail.status),
+                      ).tone}
+                    >
+                      {
+                        statusOf(
+                          SIMPLE_APPOINTMENT_STATUS,
+                          simpleAppointmentStatus(detail.status),
+                        ).label
+                      }
+                    </StatusPill>
+                  )
+                ) : canManage ? (
                   <Select
                     value={detail.status}
                     onValueChange={(value) => changeStatus(value as Parameters<typeof changeStatus>[0])}
@@ -422,17 +485,21 @@ export function AppointmentDrawer({
                   <Button variant="secondary" size="sm" onClick={() => setEditOpen(true)}>
                     <Pencil aria-hidden /> Bearbeiten
                   </Button>
-                  <Button variant="secondary" size="sm" onClick={duplicate} disabled={pending}>
-                    <Copy aria-hidden /> Duplizieren
-                  </Button>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    onClick={() => setCancelOpen(true)}
-                    disabled={detail.status === 'CANCELLED'}
-                  >
-                    <Ban aria-hidden /> Absagen
-                  </Button>
+                  {!soloMode ? (
+                    <>
+                      <Button variant="secondary" size="sm" onClick={duplicate} disabled={pending}>
+                        <Copy aria-hidden /> Duplizieren
+                      </Button>
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        onClick={() => setCancelOpen(true)}
+                        disabled={detail.status === 'CANCELLED'}
+                      >
+                        <Ban aria-hidden /> Absagen
+                      </Button>
+                    </>
+                  ) : null}
                 </div>
               </footer>
             ) : null}
@@ -451,6 +518,8 @@ export function AppointmentDrawer({
           customers={customers}
           employees={employees}
           editTarget={editTarget}
+          fixedEmployeeId={soloMode ? ownEmployeeId : null}
+          soloMode={soloMode}
         />
       ) : null}
 

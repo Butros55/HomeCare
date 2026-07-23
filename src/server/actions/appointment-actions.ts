@@ -4,11 +4,12 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { db } from '@/server/db';
-import { runAction, type ActionResult } from '@/server/errors';
+import { AppError, runAction, type ActionResult } from '@/server/errors';
 import { requireOrganizationMembership } from '@/server/permissions';
 import {
   assignEmployee,
   cancelAppointment,
+  completeAppointment,
   createAppointment,
   rescheduleAppointment,
   respondToAssignment,
@@ -83,6 +84,7 @@ function toServiceInput(data: z.output<typeof appointmentSchema>) {
 function revalidateCalendarPaths(customerId?: string) {
   revalidatePath('/calendar');
   revalidatePath('/dashboard');
+  revalidatePath('/reports');
   if (customerId) revalidatePath(`/customers/${customerId}`);
 }
 
@@ -165,6 +167,19 @@ export async function updateAppointmentStatusAction(
     await updateAppointmentStatus(appointmentId, status);
     revalidateCalendarPaths();
     return { done: true as const };
+  });
+}
+
+export async function completeAppointmentAction(
+  appointmentId: string,
+): Promise<ActionResult<{ done: true; alreadyCompleted: boolean }>> {
+  return runAction(async () => {
+    const result = await completeAppointment(appointmentId);
+    revalidateCalendarPaths(result.customerId);
+    return {
+      done: true as const,
+      alreadyCompleted: result.alreadyCompleted,
+    };
   });
 }
 
@@ -264,6 +279,13 @@ export async function getAppointmentDetailAction(appointmentId: string) {
     });
     if (!appointment || appointment.organizationId !== ctx.organization.id) {
       throw new Error('not found');
+    }
+    if (
+      ctx.organization.soloMode &&
+      appointment.assignedEmployeeId !== null &&
+      appointment.assignedEmployeeId !== ctx.employee?.id
+    ) {
+      throw new AppError('ACCESS_DENIED');
     }
     return {
       id: appointment.id,

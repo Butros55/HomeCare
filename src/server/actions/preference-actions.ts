@@ -3,10 +3,12 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { writeAuditLog } from '@/server/audit';
 import { db } from '@/server/db';
 import { AppError, runAction, type ActionResult } from '@/server/errors';
 import {
   canTogglePersonalView,
+  isLeadershipRole,
   requireAuthenticatedUser,
   requireOrganizationMembership,
 } from '@/server/permissions';
@@ -73,5 +75,88 @@ export async function saveNotificationPrefsAction(
       update: { notificationPrefs: data },
     });
     return { done: true as const };
+  });
+}
+
+const earningsSettingsSchema = z.object({
+  hourlyWageCents: z
+    .number()
+    .int()
+    .min(0, 'Der Stundenlohn darf nicht negativ sein.')
+    .max(1_000_000, 'Der Stundenlohn ist zu hoch.'),
+  employeeCommissionCentsPerHour: z
+    .number()
+    .int()
+    .min(0, 'Die Provision darf nicht negativ sein.')
+    .max(1_000_000, 'Die Provision ist zu hoch.')
+    .optional(),
+});
+
+/**
+ * Persönliche Verdienst-Sätze je Organisation speichern.
+ *
+ * Die Provision ist ausschließlich für Leitungs-Konten im Teammodus
+ * beschreibbar. Im Solo-Modus bleibt ein früherer Satz erhalten, wird aber
+ * weder angezeigt noch in der Auswertung berücksichtigt.
+ */
+export async function saveEarningsSettingsAction(
+  input: z.input<typeof earningsSettingsSchema>,
+): Promise<
+  ActionResult<{
+    hourlyWageCents: number;
+    employeeCommissionCentsPerHour: number;
+  }>
+> {
+  return runAction(async () => {
+    const ctx = await requireOrganizationMembership();
+    const data = earningsSettingsSchema.parse(input);
+    const canSetCommission =
+      isLeadershipRole(ctx.membership.role) && !ctx.organization.soloMode;
+    const updateCommission =
+      canSetCommission &&
+      data.employeeCommissionCentsPerHour !== undefined;
+
+    await db.$transaction(async (tx) => {
+      await tx.organizationMembership.update({
+        where: { id: ctx.membership.id },
+        data: {
+          hourlyWageCents: data.hourlyWageCents,
+          ...(updateCommission
+            ? {
+                employeeCommissionCentsPerHour:
+                  data.employeeCommissionCentsPerHour,
+              }
+            : {}),
+        },
+      });
+      await writeAuditLog(
+        {
+          organizationId: ctx.organization.id,
+          actorUserId: ctx.user.id,
+          action: 'member.earningsSettingsChanged',
+          entityType: 'OrganizationMembership',
+          entityId: ctx.membership.id,
+          // Keine Geldwerte im Audit-Log; nur die bewusst geänderten Felder.
+          metadata: {
+            fields: [
+              'hourlyWageCents',
+              ...(updateCommission
+                ? ['employeeCommissionCentsPerHour']
+                : []),
+            ],
+          },
+        },
+        tx,
+      );
+    });
+
+    revalidatePath('/settings');
+    revalidatePath('/reports');
+    return {
+      hourlyWageCents: data.hourlyWageCents,
+      employeeCommissionCentsPerHour: updateCommission
+        ? data.employeeCommissionCentsPerHour!
+        : ctx.membership.employeeCommissionCentsPerHour,
+    };
   });
 }

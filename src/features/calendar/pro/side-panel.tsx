@@ -13,7 +13,14 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { CalendarBlank, CaretLeft, Check, ListBullets, Plus, Warning } from '@phosphor-icons/react';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from './use-viewport';
-import { PRO_EVENT_KINDS, PRO_KIND_LABELS, type ProCalendarEvent, type ProEventKind } from './types';
+import {
+  PRO_EVENT_KINDS,
+  PRO_KIND_LABELS,
+  SOLO_EVENT_KINDS,
+  SOLO_KIND_LABELS,
+  type ProCalendarEvent,
+  type ProEventKind,
+} from './types';
 
 export type CalendarPanelPage = 'calendars' | 'day';
 
@@ -26,6 +33,7 @@ interface ProCalendarSidePanelProps {
   selectedEvents: ProCalendarEvent[];
   visibleKinds: ReadonlySet<ProEventKind>;
   kindCounts: Record<ProEventKind, number>;
+  soloMode?: boolean;
   onToggleKind: (kind: ProEventKind) => void;
   onOpenEvent: (id: string) => void;
   onCreate: () => void;
@@ -61,11 +69,14 @@ export function ProCalendarSidePanel({
   selectedEvents,
   visibleKinds,
   kindCounts,
+  soloMode = false,
   onToggleKind,
   onOpenEvent,
   onCreate,
 }: ProCalendarSidePanelProps) {
   const isMobile = useIsMobile();
+  const availableKinds = soloMode ? SOLO_EVENT_KINDS : PRO_EVENT_KINDS;
+  const kindLabels = soloMode ? SOLO_KIND_LABELS : PRO_KIND_LABELS;
 
   return (
     <AnimatePresence>
@@ -142,8 +153,11 @@ export function ProCalendarSidePanel({
                   <p className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Ebenen
                   </p>
-                  {PRO_EVENT_KINDS.map((kind) => {
-                    const meta = KIND_META[kind];
+                  {availableKinds.map((kind) => {
+                    const meta =
+                      soloMode && kind === 'open'
+                        ? { ...KIND_META.open, description: 'Offene Termine' }
+                        : KIND_META[kind];
                     const active = visibleKinds.has(kind);
                     return (
                       <button
@@ -161,7 +175,7 @@ export function ProCalendarSidePanel({
                         <span className={cn('size-3 shrink-0 rounded-full', meta.color)} aria-hidden="true" />
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-sm font-semibold">
-                            {PRO_KIND_LABELS[kind]}
+                            {kindLabels[kind]}
                             <span className="ml-1.5 text-[11px] font-medium text-muted-foreground">
                               {kindCounts[kind]}
                             </span>
@@ -210,7 +224,7 @@ export function ProCalendarSidePanel({
                           <span className="block truncate text-[11px] text-muted-foreground">{event.detail}</span>
                           <span className="mt-0.5 block text-[11px] font-semibold text-muted-foreground">
                             {format(new Date(event.start), 'HH:mm')} – {format(new Date(event.end), 'HH:mm')} ·{' '}
-                            {PRO_KIND_LABELS[event.kind]}
+                            {kindLabels[event.kind]}
                           </span>
                         </span>
                       </button>

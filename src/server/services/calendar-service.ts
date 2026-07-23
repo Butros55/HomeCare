@@ -142,8 +142,14 @@ async function buildScopeWhere(
 ): Promise<Prisma.AppointmentWhereInput> {
   const where: Prisma.AppointmentWhereInput = { organizationId: ctx.organization.id };
 
-  // Rollen-Scope.
-  if (!hasPermission(ctx, 'appointments.viewAll')) {
+  // Im Alleine-Modus bleibt auch ein Inhaber mit viewAll konsequent in seiner
+  // persönlichen Planung; Legacy-Termine ohne Zuordnung werden mit angezeigt.
+  if (ctx.organization.soloMode) {
+    where.OR = [
+      ...(ctx.employee ? [{ assignedEmployeeId: ctx.employee.id }] : []),
+      { assignedEmployeeId: null },
+    ];
+  } else if (!hasPermission(ctx, 'appointments.viewAll')) {
     const scope = await getManagedEmployeeIds(ctx);
     const ids = scope === 'ALL' ? null : scope;
     if (ids) {

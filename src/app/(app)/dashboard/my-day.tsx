@@ -14,10 +14,17 @@ import { Button } from '@/components/ui/button';
 import { EntityAvatar } from '@/components/ui/misc';
 import { EmptyState, Panel, PanelBody, PanelHeader, PanelTitle, StatTile } from '@/components/ui/panel';
 import { StatusPill } from '@/components/ui/status-pill';
+import { QuickCompleteButton } from '@/features/appointments/quick-complete-button';
 import { formatDate, formatDateTime, formatTime, formatWeekday, toDateInputValue } from '@/lib/dates';
 import { formatMinutesAsHours } from '@/lib/duration';
 import { formatTravelSeconds, googleMapsDirectionsUrl } from '@/lib/geo';
-import { APPOINTMENT_STATUS, statusOf } from '@/lib/status-maps';
+import {
+  APPOINTMENT_STATUS,
+  SIMPLE_APPOINTMENT_STATUS,
+  simpleAppointmentStatus,
+  statusOf,
+} from '@/lib/status-maps';
+import { cn } from '@/lib/utils';
 import { hasPermission, type OrgContext } from '@/server/permissions';
 import { getMyDayData } from '@/server/services/dashboard-service';
 
@@ -132,16 +139,30 @@ export async function MyDayDashboard({
                 description={canManage ? 'Der Tag ist frei – oder du planst jetzt einen Termin.' : 'Der Tag ist frei.'}
               />
             ) : (
-              <ol className="divide-y divide-[var(--color-line-subtle)]">
-                {data.entries.map((entry) => (
-                  <li key={entry.appointmentId} className="px-4 py-3">
+                <ol className="divide-y divide-[var(--color-line-subtle)]">
+                {data.entries.map((entry) => {
+                  const displayedStatus =
+                    mode === 'solo'
+                      ? statusOf(
+                          SIMPLE_APPOINTMENT_STATUS,
+                          simpleAppointmentStatus(entry.status),
+                        )
+                      : statusOf(APPOINTMENT_STATUS, entry.status);
+                  return (
+                  <li
+                    key={entry.appointmentId}
+                    className={cn(
+                      'px-4 py-3',
+                      entry.isCurrent && 'bg-[var(--color-success-soft)]',
+                    )}
+                  >
                     {entry.travelSeconds != null && entry.departureAt ? (
                       <p className="mb-2 flex items-center gap-1.5 text-[length:var(--text-xs)] font-medium text-[var(--color-brand)]">
                         <Car className="size-3.5" aria-hidden />
                         Abfahrt {formatTime(entry.departureAt, timezone)} · {formatTravelSeconds(entry.travelSeconds)} Fahrt
                       </p>
                     ) : null}
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                       <span className="tabular w-25 shrink-0 text-[length:var(--text-base)] font-semibold">
                         {formatTime(entry.startAt, timezone)}–{formatTime(entry.endAt, timezone)}
                       </span>
@@ -151,6 +172,11 @@ export async function MyDayDashboard({
                         aria-hidden
                       />
                       <span className="min-w-0 flex-1">
+                        {entry.isCurrent ? (
+                          <span className="mb-0.5 block text-[length:var(--text-2xs)] font-semibold tracking-wide text-[var(--color-success)] uppercase">
+                            Aktueller Termin
+                          </span>
+                        ) : null}
                         <Link
                           href={`/calendar?termin=${entry.appointmentId}`}
                           className="block truncate text-[length:var(--text-base)] font-medium hover:text-[var(--color-brand)]"
@@ -160,12 +186,19 @@ export async function MyDayDashboard({
                         <span className="block truncate text-[length:var(--text-sm)] text-[var(--color-ink-subtle)]">
                           {entry.title}
                           {entry.addressLine ? ` · ${entry.addressLine}` : ''}
-                          {entry.unassigned && mode === 'solo' ? ' · keine Zuordnung' : ''}
                         </span>
                       </span>
-                      <StatusPill size="sm" tone={statusOf(APPOINTMENT_STATUS, entry.status).tone}>
-                        {statusOf(APPOINTMENT_STATUS, entry.status).label}
+                      <StatusPill size="sm" tone={displayedStatus.tone}>
+                        {displayedStatus.label}
                       </StatusPill>
+                      {entry.canComplete ? (
+                        <QuickCompleteButton
+                          appointmentId={entry.appointmentId}
+                          label={entry.isCurrent ? 'Jetzt abschließen' : 'Abschließen'}
+                          size="sm"
+                          className="shrink-0"
+                        />
+                      ) : null}
                       {entry.latitude != null && entry.longitude != null ? (
                         <Button asChild variant="secondary" size="icon" aria-label="Navigation starten">
                           <a
@@ -179,7 +212,8 @@ export async function MyDayDashboard({
                       ) : null}
                     </div>
                   </li>
-                ))}
+                  );
+                })}
               </ol>
             )}
           </PanelBody>

@@ -3,9 +3,14 @@ import Link from 'next/link';
 
 import { PageHeader } from '@/components/layout/page-header';
 import { cn } from '@/lib/utils';
-import { hasPermission, requireOrganizationMembership } from '@/server/permissions';
+import {
+  hasPermission,
+  isLeadershipRole,
+  requireOrganizationMembership,
+} from '@/server/permissions';
 import {
   AppearanceSettings,
+  EarningsSettings,
   HomeAddressSettings,
   NotificationPrefsSettings,
   OrganizationSettings,
@@ -122,6 +127,17 @@ export default async function SettingsPage({
                 phone: ctx.user.phone ?? '',
                 email: ctx.user.email,
               }}
+            />
+            <EarningsSettings
+              initial={{
+                hourlyWageCents: ctx.membership.hourlyWageCents,
+                employeeCommissionCentsPerHour:
+                  ctx.membership.employeeCommissionCentsPerHour,
+              }}
+              showCommission={
+                isLeadershipRole(ctx.membership.role) &&
+                !ctx.organization.soloMode
+              }
             />
             {ctx.employee ? <HomeAddressSettings initial={ownHome} /> : null}
             <PasswordSettings />

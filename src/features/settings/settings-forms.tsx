@@ -14,7 +14,10 @@ import { Panel, PanelBody, PanelHeader, PanelTitle } from '@/components/ui/panel
 import { cn } from '@/lib/utils';
 import { changePasswordAction, updateProfileAction } from '@/server/auth/actions';
 import { updateOwnHomeLocationAction } from '@/server/actions/employee-actions';
-import { saveNotificationPrefsAction } from '@/server/actions/preference-actions';
+import {
+  saveEarningsSettingsAction,
+  saveNotificationPrefsAction,
+} from '@/server/actions/preference-actions';
 import { updateOrganizationAction } from '@/server/actions/settings-actions';
 import { AddressAutocomplete } from '@/features/geo/address-autocomplete';
 
@@ -89,6 +92,148 @@ export function ProfileSettings({
           </div>
           <Button type="submit" variant="primary" loading={pending}>
             Profil speichern
+          </Button>
+        </form>
+      </PanelBody>
+    </Panel>
+  );
+}
+
+// -------------------------- Verdienst -------------------------------------
+
+function centsToInputValue(cents: number): string {
+  return (cents / 100).toFixed(2).replace('.', ',');
+}
+
+function inputValueToCents(value: string): number | null {
+  const normalized = value.trim().replace(',', '.');
+  if (!/^\d+(?:\.\d{0,2})?$/.test(normalized)) return null;
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount) || amount < 0) return null;
+  return Math.round(amount * 100);
+}
+
+export function EarningsSettings({
+  initial,
+  showCommission,
+}: {
+  initial: {
+    hourlyWageCents: number;
+    employeeCommissionCentsPerHour: number;
+  };
+  showCommission: boolean;
+}) {
+  const router = useRouter();
+  const [hourlyWage, setHourlyWage] = React.useState(
+    centsToInputValue(initial.hourlyWageCents),
+  );
+  const [commission, setCommission] = React.useState(
+    centsToInputValue(initial.employeeCommissionCentsPerHour),
+  );
+  const [error, setError] = React.useState<string | null>(null);
+  const [pending, startTransition] = React.useTransition();
+
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const hourlyWageCents = inputValueToCents(hourlyWage);
+    const employeeCommissionCentsPerHour =
+      inputValueToCents(commission);
+    if (
+      hourlyWageCents === null ||
+      (showCommission && employeeCommissionCentsPerHour === null)
+    ) {
+      setError('Bitte einen gültigen Betrag mit höchstens zwei Nachkommastellen eingeben.');
+      return;
+    }
+
+    startTransition(async () => {
+      const result = await saveEarningsSettingsAction({
+        hourlyWageCents,
+        ...(showCommission
+          ? { employeeCommissionCentsPerHour: employeeCommissionCentsPerHour! }
+          : {}),
+      });
+      if (result.ok) {
+        setError(null);
+        setHourlyWage(centsToInputValue(result.data.hourlyWageCents));
+        if (showCommission) {
+          setCommission(
+            centsToInputValue(
+              result.data.employeeCommissionCentsPerHour,
+            ),
+          );
+        }
+        toast.success('Verdienst-Einstellungen gespeichert.');
+        router.refresh();
+      } else {
+        setError(result.message);
+      }
+    });
+  };
+
+  return (
+    <Panel>
+      <PanelHeader>
+        <PanelTitle>Verdienst</PanelTitle>
+      </PanelHeader>
+      <PanelBody>
+        <form onSubmit={submit} method="post" className="max-w-xl space-y-4">
+          <FormAlert>{error}</FormAlert>
+          <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+            Diese persönlichen Sätze gelten nur in dieser Organisation. Im Bericht werden
+            ausschließlich abgeschlossene Termine berücksichtigt.
+          </p>
+          <div
+            className={cn(
+              'grid grid-cols-1 gap-3',
+              showCommission && 'sm:grid-cols-2',
+            )}
+          >
+            <div>
+              <Label htmlFor="earnings-hourly-wage">Eigener Stundenlohn</Label>
+              <div className="relative">
+                <Input
+                  id="earnings-hourly-wage"
+                  inputMode="decimal"
+                  value={hourlyWage}
+                  onChange={(event) => setHourlyWage(event.target.value)}
+                  className="pr-12"
+                />
+                <span
+                  className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[length:var(--text-sm)] text-[var(--color-ink-subtle)]"
+                  aria-hidden
+                >
+                  €/Std.
+                </span>
+              </div>
+              <FieldHint>Grundlage für deinen eigenen Verdienst.</FieldHint>
+            </div>
+            {showCommission ? (
+              <div>
+                <Label htmlFor="earnings-commission">Provision je Mitarbeiterstunde</Label>
+                <div className="relative">
+                  <Input
+                    id="earnings-commission"
+                    inputMode="decimal"
+                    value={commission}
+                    onChange={(event) => setCommission(event.target.value)}
+                    className="pr-12"
+                  />
+                  <span
+                    className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[length:var(--text-sm)] text-[var(--color-ink-subtle)]"
+                    aria-hidden
+                  >
+                    €/Std.
+                  </span>
+                </div>
+                <FieldHint>
+                  Gilt für abgeschlossene Stunden deiner Mitarbeiter.
+                </FieldHint>
+              </div>
+            ) : null}
+          </div>
+          <Button type="submit" variant="primary" loading={pending}>
+            Verdienst speichern
           </Button>
         </form>
       </PanelBody>

@@ -1,0 +1,23 @@
+{
+  // CLI-Typecheck ohne .next/dev/types: Der laufende Turbopack-Dev-Server
+  // schreibt dessen validator.ts nebenläufig und hinterlässt unter Windows
+  // regelmäßig halbe Dateien → Phantom-Syntaxfehler, die nichts mit dem
+  // Quellcode zu tun haben. Editor/IDE nutzen weiter tsconfig.json.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": false
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "Coreflow",
+    "StudyMate",
+    "playwright-report",
+    "test-results"
+  ]
+}

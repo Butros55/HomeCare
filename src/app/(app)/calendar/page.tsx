@@ -44,6 +44,7 @@ export default async function CalendarPage({
   ]);
 
   const canManage = hasPermission(ctx, 'appointments.manage');
+  const uiMode = uiModeFor(ctx);
 
   // Portierter StudyMate-Kalender: füllt die Seitenhöhe, App-Sidebar bleibt.
   return (
@@ -51,7 +52,8 @@ export default async function CalendarPage({
       <ProCalendarShell
         canManage={canManage}
         ownEmployeeId={ctx.employee?.id ?? null}
-        simplePlanning={uiModeFor(ctx) !== 'team'}
+        simplePlanning={uiMode !== 'team'}
+        soloMode={uiMode === 'solo'}
         employees={employees.map((e) => ({ id: e.id, name: employeeDisplayName(e, ctx.user.id) }))}
         customers={customers.map((c) => ({ id: c.id, name: `${c.firstName} ${c.lastName}`, color: c.color }))}
         urlParams={{
