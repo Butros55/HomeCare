@@ -13,6 +13,7 @@ import { addMonths, startOfMonth } from 'date-fns';
 import * as React from 'react';
 
 import { CalendarSurfaceSkeleton } from '@/components/layout/page-loading-skeleton';
+import { getCalendarEventsAction } from '@/server/actions/calendar-actions';
 import type { CalendarEventDto } from '@/server/services/calendar-service';
 import { AppointmentDrawer } from '@/features/calendar/appointment-drawer';
 import { AppointmentFormDialog } from '@/features/calendar/appointment-form-dialog';
@@ -122,6 +123,26 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
     const idSet = new Set(ids);
     setEvents((current) => current.filter((event) => !idSet.has(event.id)));
   }, []);
+
+  // Gezielt: nach einer Änderung nur die betroffenen Termine nachladen und im
+  // State ersetzen – nur diese Divs aktualisieren sich, kein kompletter Refetch.
+  const upsertEvents = React.useCallback(
+    (ids: string[]) => {
+      if (ids.length === 0) return;
+      const idSet = new Set(ids);
+      getCalendarEventsAction(ids).then((result) => {
+        if (!result.ok) {
+          refetch();
+          return;
+        }
+        setEvents((current) => [
+          ...current.filter((event) => !idSet.has(event.id)),
+          ...result.data,
+        ]);
+      });
+    },
+    [refetch],
+  );
 
   const proEvents = React.useMemo(
     () => events.map((event) => toProEvent(event, props.soloMode)),
@@ -234,7 +255,14 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
         <AppointmentFormDialog
           open={createOpen}
           onOpenChange={setCreateOpen}
-          onChanged={refetch}
+          onChanged={(opts) => {
+            // Einzelnen neuen Termin gezielt einblenden; neue Serie → Refetch.
+            if (!opts?.seriesWide && opts?.appointmentIds?.length) {
+              upsertEvents(opts.appointmentIds);
+            } else {
+              refetch();
+            }
+          }}
           customers={props.customers}
           employees={props.employees}
           prefill={createPrefill}
@@ -249,6 +277,7 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
           onClose={() => setDrawerAppointmentId(null)}
           onChanged={refetch}
           onDeleted={removeEvents}
+          onUpsert={upsertEvents}
           canManage={props.canManage}
           soloMode={props.soloMode}
           ownEmployeeId={props.ownEmployeeId}

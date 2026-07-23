@@ -96,6 +96,7 @@ export function AppointmentDrawer({
   customers,
   onChanged,
   onDeleted,
+  onUpsert,
 }: {
   appointmentId: string;
   onClose: () => void;
@@ -115,6 +116,11 @@ export function AppointmentDrawer({
    * dem Kalender (ohne Refetch). Fallback: onChanged/router.refresh.
    */
   onDeleted?: (ids: string[]) => void;
+  /**
+   * Nach einer Änderung an einzelnen Terminen: nur diese IDs gezielt im
+   * Kalender aktualisieren (async, kein kompletter Refetch). Fallback: onChanged.
+   */
+  onUpsert?: (ids: string[]) => void;
 }) {
   const router = useRouter();
   const [detail, setDetail] = React.useState<Detail | null>(null);
@@ -172,12 +178,18 @@ export function AppointmentDrawer({
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [onClose]);
 
+  // Kalender gezielt aktualisieren: nur die betroffenen Termin-Divs (async),
+  // niemals ein kompletter Refetch/Reload. Fallback-Kette: upsert → changed → router.
+  const updateCalendar = (ids: string[]) => {
+    if (onUpsert) onUpsert(ids);
+    else if (onChanged) onChanged();
+    else router.refresh();
+  };
+
   const refresh = () => {
     load();
     loadConflicts();
-    // Kalender gezielt aktualisieren (async) statt kompletter Seiten-Reload.
-    if (onChanged) onChanged();
-    else router.refresh();
+    updateCalendar([appointmentId]);
   };
 
   const requestResolution = () => {
@@ -258,7 +270,8 @@ export function AppointmentDrawer({
       const result = await duplicateAppointmentAction(appointmentId);
       if (result.ok) {
         toast.success('Termin dupliziert (als Entwurf am Folgetag).');
-        refresh();
+        // Neuen Termin gezielt einblenden (kein kompletter Refetch).
+        updateCalendar([result.data.appointmentId]);
       } else toast.error(result.message);
     });
   };
@@ -738,7 +751,18 @@ export function AppointmentDrawer({
         <AppointmentFormDialog
           open={editOpen}
           onOpenChange={setEditOpen}
-          onChanged={refresh}
+          onChanged={(opts) => {
+            load();
+            loadConflicts();
+            if (opts?.seriesWide) {
+              // Serienweite Bearbeitung betrifft viele Termine → kompletter
+              // (async) Refetch statt gezieltem Einzel-Upsert.
+              if (onChanged) onChanged();
+              else router.refresh();
+            } else {
+              updateCalendar(opts?.appointmentIds ?? [appointmentId]);
+            }
+          }}
           customers={customers}
           employees={employees}
           editTarget={editTarget}
@@ -803,7 +827,16 @@ export function AppointmentDrawer({
                 else router.refresh();
                 onClose();
               } else {
-                refresh();
+                // Absage: Drawer-Inhalt neu laden (bleibt sichtbar als abgesagt).
+                load();
+                loadConflicts();
+                if (scope === 'single') {
+                  updateCalendar([appointmentId]);
+                } else {
+                  // Serienweite Absage betrifft viele Termine → Refetch.
+                  if (onChanged) onChanged();
+                  else router.refresh();
+                }
               }
             } else toast.error(result.message);
           });

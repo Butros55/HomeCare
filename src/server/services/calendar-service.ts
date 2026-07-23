@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { addDays } from 'date-fns';
+
 import type { AppointmentStatus, Prisma } from '@prisma/client';
 
 import { overlaps } from '@/lib/dates';
@@ -134,6 +136,99 @@ export async function listCalendarEvents(
 
   if (filters.conflictsOnly) events = events.filter((event) => event.hasConflict);
   return events;
+}
+
+/**
+ * Einzelne (bereits sichtbare) Termine als Event-DTO nachladen – für gezielte,
+ * optimistische Kalender-Updates ohne kompletten Refetch. Liefert nur die noch
+ * existierenden, nicht gelöschten Termine (gelöschte fehlen im Ergebnis).
+ */
+export async function listCalendarEventsByIds(ids: string[]): Promise<CalendarEventDto[]> {
+  const ctx = await requireOrganizationMembership();
+  if (ids.length === 0) return [];
+
+  const targets = await db.appointment.findMany({
+    where: { id: { in: ids }, organizationId: ctx.organization.id, deletedAt: null },
+    include: {
+      customer: { select: { id: true, firstName: true, lastName: true, color: true } },
+      assignedEmployee: { select: { id: true, firstName: true, lastName: true } },
+      locationAddress: { select: { city: true } },
+    },
+  });
+  if (targets.length === 0) return [];
+
+  // Konfliktmarkierung: Nachbartermine derselben Mitarbeiter im Zeitfenster laden.
+  const employeeIds = [
+    ...new Set(targets.map((t) => t.assignedEmployeeId).filter((id): id is string => Boolean(id))),
+  ];
+  const conflictIds = new Set<string>();
+  if (employeeIds.length > 0) {
+    const winStart = addDays(
+      new Date(Math.min(...targets.map((t) => t.startAt.getTime()))),
+      -1,
+    );
+    const winEnd = addDays(new Date(Math.max(...targets.map((t) => t.endAt.getTime()))), 1);
+    const [neighbors, absences] = await Promise.all([
+      db.appointment.findMany({
+        where: {
+          organizationId: ctx.organization.id,
+          deletedAt: null,
+          assignedEmployeeId: { in: employeeIds },
+          status: { in: ['PLANNED', 'CONFIRMED', 'IN_PROGRESS'] },
+          startAt: { lt: winEnd },
+          endAt: { gt: winStart },
+        },
+        select: { id: true, assignedEmployeeId: true, startAt: true, endAt: true },
+      }),
+      db.employeeAbsence.findMany({
+        where: {
+          employeeId: { in: employeeIds },
+          status: 'APPROVED',
+          startAt: { lt: winEnd },
+          endAt: { gt: winStart },
+        },
+        select: { employeeId: true, startAt: true, endAt: true },
+      }),
+    ]);
+    for (const target of targets) {
+      if (!target.assignedEmployeeId) continue;
+      if (['CANCELLED', 'NO_SHOW', 'COMPLETED'].includes(target.status)) continue;
+      const clash =
+        neighbors.some(
+          (n) =>
+            n.id !== target.id &&
+            n.assignedEmployeeId === target.assignedEmployeeId &&
+            overlaps(target.startAt, target.endAt, n.startAt, n.endAt),
+        ) ||
+        absences.some(
+          (a) =>
+            a.employeeId === target.assignedEmployeeId &&
+            overlaps(target.startAt, target.endAt, a.startAt, a.endAt),
+        );
+      if (clash) conflictIds.add(target.id);
+    }
+  }
+
+  return targets.map((appointment) => ({
+    id: appointment.id,
+    title: appointment.title,
+    start: appointment.startAt.toISOString(),
+    end: appointment.endAt.toISOString(),
+    customerId: appointment.customer.id,
+    customerName: `${appointment.customer.firstName} ${appointment.customer.lastName}`,
+    customerColor: appointment.customer.color,
+    employeeId: appointment.assignedEmployee?.id ?? null,
+    employeeName: appointment.assignedEmployee
+      ? `${appointment.assignedEmployee.firstName} ${appointment.assignedEmployee.lastName}`
+      : null,
+    status: appointment.status,
+    assignmentStatus: appointment.assignmentStatus,
+    seriesId: appointment.seriesId,
+    isFlexible: appointment.isFlexible,
+    routeRelevant: appointment.routeRelevant,
+    hasConflict: conflictIds.has(appointment.id),
+    city: appointment.locationAddress?.city ?? null,
+  }));
 }
 
 async function buildScopeWhere(

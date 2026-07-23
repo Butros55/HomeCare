@@ -96,8 +96,12 @@ export function AppointmentFormDialog({
    * Wird nach erfolgreichem Speichern aufgerufen – ermöglicht ein gezieltes
    * Aktualisieren (z. B. nur die Kalender-Events neu laden) statt eines
    * kompletten Seiten-Reloads. Ohne Angabe: router.refresh() als Fallback.
+   *
+   * `seriesWide` = true, wenn viele Termine betroffen sind (Serie angelegt oder
+   * serienweit bearbeitet) → Empfänger sollte komplett refetchen. Sonst genügt
+   * ein gezieltes Upsert der in `appointmentIds` genannten Termine.
    */
-  onChanged?: () => void;
+  onChanged?: (opts?: { seriesWide?: boolean; appointmentIds?: string[] }) => void;
 }) {
   const router = useRouter();
   const isEdit = Boolean(editTarget);
@@ -262,8 +266,18 @@ export function AppointmentFormDialog({
       );
       onOpenChange(false);
       // Nur aktualisieren, was nötig ist (async), statt kompletter Reload.
-      if (onChanged) onChanged();
-      else router.refresh();
+      // Serienweite Änderungen (neue Serie oder Scope „alle/folgende") betreffen
+      // viele Termine → der Empfänger refetcht; sonst genügt ein gezieltes Upsert.
+      const seriesWide = isEdit
+        ? Boolean(editTarget?.isSeriesMember) && scope !== 'single'
+        : recurrenceEnabled;
+      const changedId =
+        result.data.appointmentId ?? (isEdit ? editTarget?.appointmentId : undefined);
+      if (onChanged) {
+        onChanged({ seriesWide, appointmentIds: changedId ? [changedId] : undefined });
+      } else {
+        router.refresh();
+      }
     });
   };
 
