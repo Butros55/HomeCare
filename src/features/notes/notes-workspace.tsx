@@ -5,11 +5,13 @@ import {
   CheckCircle2,
   Cloud,
   CloudOff,
+  Expand,
   FilePenLine,
   Loader2,
   Plus,
   Save,
   Trash2,
+  X,
 } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -114,6 +116,7 @@ export function NotesWorkspace({
   const [creating, setCreating] = React.useState(false);
   const [deleteTargetId, setDeleteTargetId] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState(false);
+  const [fullscreen, setFullscreen] = React.useState(false);
   const { preferences, updatePreference } = useNotebookPreferences();
 
   const saveTimersRef = React.useRef<Map<string, number>>(new Map());
@@ -314,9 +317,71 @@ export function NotesWorkspace({
     [],
   );
 
+  // Vollbild nur mit ausgewählter Notiz (abgeleitet – kein Korrektur-Effekt nötig).
+  const inFullscreen = fullscreen && selectedNote !== null;
+
+  // Escape verlässt den Vollbildmodus.
+  React.useEffect(() => {
+    if (!inFullscreen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setFullscreen(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [inFullscreen]);
+
   return (
     <div className="h-[calc(100dvh-9.5rem)] min-h-[36rem] p-4 sm:p-5">
-      <div className="grid h-full min-h-0 gap-4 md:grid-cols-[19rem_minmax(0,1fr)]">
+      {/* Vollbild: der ganze Bildschirm ist das Notizbuch – nur Titel, X und der
+          Stift-Werkzeugkasten (Teil der Canvas). */}
+      {inFullscreen && selectedNote ? (
+        <div className="fixed inset-0 z-50 flex flex-col bg-[var(--color-canvas)]">
+          <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-line)] bg-[var(--color-panel)] px-3 py-2">
+            <FilePenLine className="size-4 shrink-0 text-[var(--color-brand)]" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[length:var(--text-sm)] font-semibold text-[var(--color-ink)]">
+                {selectedNote.title.trim() || 'Unbenannte Notiz'}
+              </div>
+              <SaveIndicator
+                state={selectedSaveState}
+                updatedAt={selectedNote.updatedAt}
+                timezone={timezone}
+              />
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => {
+                normalizeCurrentTitle(selectedNote.id);
+                queueSave(selectedNote.id, 0);
+                setFullscreen(false);
+              }}
+              aria-label="Vollbild verlassen"
+            >
+              <X aria-hidden />
+            </Button>
+          </div>
+          <NotebookCanvas
+            key={`fs-${selectedNote.id}`}
+            initialDocument={selectedNote.document}
+            onDocumentChange={(document: NotebookDocumentV1) =>
+              updateDraft(selectedNote.id, { document })
+            }
+            preferences={preferences}
+            onPreferenceChange={updatePreference}
+            className="min-h-0 flex-1"
+          />
+        </div>
+      ) : null}
+
+      <div
+        className={cn(
+          'grid h-full min-h-0 gap-4 md:grid-cols-[19rem_minmax(0,1fr)]',
+          inFullscreen ? 'hidden' : '',
+        )}
+        aria-hidden={inFullscreen}
+      >
         <Panel
           className={cn(
             'min-h-0 flex-col overflow-hidden',
@@ -478,6 +543,15 @@ export function NotesWorkspace({
                   type="button"
                   variant="ghost"
                   size="icon"
+                  onClick={() => setFullscreen(true)}
+                  aria-label="Vollbild"
+                >
+                  <Expand aria-hidden />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
                   className="text-[var(--color-danger)] hover:text-[var(--color-danger)]"
                   onClick={() => setDeleteTargetId(selectedNote.id)}
                   aria-label="Notiz löschen"
@@ -486,8 +560,10 @@ export function NotesWorkspace({
                 </Button>
               </PanelHeader>
 
+              {/* Beim Verlassen des Vollbilds neu einhängen, damit die im
+                  Vollbild gezeichneten Striche hier erscheinen. */}
               <NotebookCanvas
-                key={selectedNote.id}
+                key={`${selectedNote.id}:${inFullscreen ? 'fs' : 'inline'}`}
                 initialDocument={selectedNote.document}
                 onDocumentChange={(document: NotebookDocumentV1) =>
                   updateDraft(selectedNote.id, { document })

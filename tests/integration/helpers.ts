@@ -14,8 +14,11 @@ export async function resetDatabase(): Promise<void> {
   await db.appointment.deleteMany();
   await db.appointmentSeries.deleteMany();
   await db.hourAllocation.deleteMany();
+  await db.customerHourTopup.deleteMany();
+  await db.customerRecurringHourGrant.deleteMany();
   await db.customerHourAdjustment.deleteMany();
   await db.customerHourBudget.deleteMany();
+  await db.handwrittenNote.deleteMany();
   await db.address.deleteMany();
   await db.customer.deleteMany();
   await db.employeeAbsence.deleteMany();

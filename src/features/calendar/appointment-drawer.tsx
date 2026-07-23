@@ -60,6 +60,21 @@ type Detail = Extract<
   { ok: true }
 >['data'];
 
+/**
+ * Fehlermeldung inkl. konkreter Konfliktgründe: So sieht der Nutzer immer,
+ * WESHALB eine Aktion nicht gespeichert werden konnte (nicht nur „Konflikt").
+ */
+function failureMessage(result: { message: string; details?: unknown }): string {
+  const details = result.details as
+    | { conflicts?: { message: string; severity?: string }[] }
+    | undefined;
+  const reasons = (details?.conflicts ?? [])
+    .filter((conflict) => conflict.severity !== 'INFO')
+    .map((conflict) => conflict.message);
+  if (reasons.length === 0) return result.message;
+  return `${result.message} ${reasons.join(' ')}`;
+}
+
 /** Detail-Drawer eines Termins mit allen Aktionen (Anforderung 13). */
 export function AppointmentDrawer({
   appointmentId,
@@ -123,7 +138,7 @@ export function AppointmentDrawer({
       if (result.ok) {
         toast.success('Status aktualisiert.');
         refresh();
-      } else toast.error(result.message);
+      } else toast.error(failureMessage(result));
     });
   };
 
@@ -131,7 +146,8 @@ export function AppointmentDrawer({
     startTransition(async () => {
       const result = await assignEmployeeAction(appointmentId, employeeId, confirmed);
       if (!result.ok) {
-        toast.error(result.message);
+        // Harte Konfliktgründe (Überschneidung, Abwesenheit …) mit anzeigen.
+        toast.error(failureMessage(result));
         return;
       }
       if (result.data.requiresConfirmation) {

@@ -11,14 +11,12 @@ import {
   isoWeekdayInZone,
   minutesOfDayInZone,
   zonedWallTimeToUtc,
-  type Period,
 } from '@/lib/dates';
 import { haversineMeters } from '@/lib/geo';
-import { validateManagerPoolAllocation, validateOrgPoolAllocation } from '@/lib/hours';
+import { plannableMinutesAt } from '@/lib/hour-account';
 import type { Matrix, RouteStopInput } from '@/lib/route-optimizer';
 import {
   candidateWindows,
-  computeOpenBudgetMinutes,
   evaluateCandidate,
   intersectWindows,
   isReservingStatus,
@@ -49,6 +47,10 @@ import {
   type OllamaCandidateMetrics,
 } from '@/server/providers/ollama';
 import { computeRouteMatrixCached } from '@/server/providers/routing';
+import {
+  ensureRecurringTopupsMaterialized,
+  getPlannableMinutesForDate,
+} from '@/server/services/account-service';
 import { ensureMaterializedUntil } from '@/server/services/appointment-service';
 import { createNotification } from '@/server/services/notification-service';
 import {
@@ -62,8 +64,8 @@ import {
  * Intelligente Terminvorschläge für die Tages- und Teamroutenplanung.
  *
  * Ablauf je Mitarbeiter:
- *  1. Offener Bedarf: Kunden mit Budgetrest am Planungstag (Serien werden
- *     vorher bis zum Budgetende materialisiert), noch ohne Termin an dem Tag.
+ *  1. Offener Bedarf: Kunden mit verplanbarem Stundenguthaben am Planungstag
+ *     (Konto-Modell inkl. wiederkehrender Gutschriften), noch ohne Termin an dem Tag.
  *  2. Harte Filter: Wunschmitarbeiter, Verfügbarkeiten (Kunde ∩ Mitarbeiter),
  *     Abwesenheiten, Tageshöchstarbeitszeit, Mindestdauer 15 Minuten.
  *  3. Geografischer Vorfilter, dann Bewertung mit echten Fahrzeitmatrizen:
@@ -74,8 +76,9 @@ import {
  *
  * Annahme (acceptRouteSuggestion) vertraut weder Client- noch KI-Daten:
  * signiertes Token + vollständige Re-Validierung in einer serialisierbaren
- * Transaktion; Stunden-Zuweisung, PLANNED-Termin und Routenentwurf werden
- * gemeinsam gespeichert.
+ * Transaktion; PLANNED-Termin und Routenentwurf werden gemeinsam gespeichert.
+ * Stunden-Zuweisungen sind reine Leitungs-Buchhaltung und blockieren die
+ * Annahme nicht mehr.
  */
 
 // ---------------------------------------------------------------------------
@@ -85,11 +88,11 @@ import {
 const TOKEN_TTL_MS = 15 * 60 * 1000;
 
 export interface SuggestionTokenPayload {
-  v: 1;
+  /** v2: Konto-Modell – Vorschläge hängen am Kunden, nicht mehr an einem Budget. */
+  v: 2;
   org: string;
   emp: string;
   cust: string;
-  budget: string;
   date: string; // YYYY-MM-DD
   start: string; // ISO
   dur: number; // Minuten
@@ -132,7 +135,7 @@ export function verifySuggestionToken(token: string): SuggestionTokenPayload {
   } catch {
     throw new AppError('SUGGESTION_STALE');
   }
-  if (payload.v !== 1 || typeof payload.exp !== 'number' || payload.exp < Date.now()) {
+  if (payload.v !== 2 || typeof payload.exp !== 'number' || payload.exp < Date.now()) {
     throw new AppError('SUGGESTION_STALE');
   }
   return payload;
@@ -214,8 +217,7 @@ interface DemandCandidate {
   addressLine: string;
   latitude: number;
   longitude: number;
-  budgetId: string;
-  budgetPeriod: Period;
+  /** Verplanbares Stundenguthaben zum Planungstag (Konto-Modell). */
   openMinutes: number;
 }
 
@@ -224,122 +226,66 @@ async function loadOpenDemand(ctx: OrgContext, date: Date): Promise<DemandCandid
   const day = dayPeriodInZone(date, timezone);
   const weekday = isoWeekdayInZone(day.start, timezone);
 
-  const budgets = await db.customerHourBudget.findMany({
-    where: {
-      organizationId: ctx.organization.id,
-      periodStart: { lt: day.end },
-      periodEnd: { gte: day.start },
-      customer: { status: 'ACTIVE', deletedAt: null },
-    },
-    include: {
-      adjustments: true,
-      customer: {
-        include: {
-          addresses: { take: 1, orderBy: { label: 'asc' } },
-          availabilities: true,
-        },
+  // Serien bis über den Planungstag materialisieren, damit geplante
+  // Serieneinsätze als Reservierung zählen und nicht erneut vorgeschlagen werden.
+  await ensureMaterializedUntil(ctx.organization.id, addDays(day.end, 1));
+
+  // Konto-Modell: verplanbares Guthaben je Kunde zum Planungstag
+  // (Gutschriften bis zum Tag inkl. wiederkehrender Aufladungen,
+  // minus Geleistetes, minus Reservierungen bis Tagesende).
+  const plannable = await getPlannableMinutesForDate(ctx.organization.id, timezone, date);
+  const candidateIds = [...plannable.entries()]
+    .filter(([, value]) => value.hasAccount && value.plannableMinutes >= MIN_SUGGESTION_MINUTES)
+    .map(([customerId]) => customerId);
+  if (candidateIds.length === 0) return [];
+
+  const [customers, dayAppointments] = await Promise.all([
+    db.customer.findMany({
+      where: {
+        id: { in: candidateIds },
+        organizationId: ctx.organization.id,
+        status: 'ACTIVE',
+        deletedAt: null,
       },
-    },
-    orderBy: { periodEnd: 'asc' },
-  });
-  if (budgets.length === 0) return [];
+      include: {
+        addresses: { take: 1, orderBy: { label: 'asc' } },
+        availabilities: true,
+      },
+    }),
+    db.appointment.findMany({
+      where: {
+        customerId: { in: candidateIds },
+        deletedAt: null,
+        startAt: { gte: day.start, lt: day.end },
+      },
+      select: { customerId: true, status: true },
+    }),
+  ]);
 
-  // Serien bis zum spätesten relevanten Budgetende materialisieren, damit
-  // bereits geplante Serieneinsätze nicht als „fehlend" vorgeschlagen werden.
-  const maxPeriodEnd = budgets.reduce(
-    (max, b) => (b.periodEnd > max ? b.periodEnd : max),
-    budgets[0]!.periodEnd,
+  // Höchstens ein neuer Vorschlag pro Kunde und Tag – Kunden mit bestehendem
+  // Termin am Planungstag werden nicht erneut vorgeschlagen.
+  const customersWithDayAppointment = new Set(
+    dayAppointments
+      .filter((appointment) => isReservingStatus(appointment.status))
+      .map((appointment) => appointment.customerId),
   );
-  await ensureMaterializedUntil(ctx.organization.id, addDays(maxPeriodEnd, 1));
-
-  const customerIds = [...new Set(budgets.map((b) => b.customerId))];
-  const minStart = budgets.reduce(
-    (min, b) => (b.periodStart < min ? b.periodStart : min),
-    budgets[0]!.periodStart,
-  );
-
-  const appointments = await db.appointment.findMany({
-    where: {
-      customerId: { in: customerIds },
-      deletedAt: null,
-      OR: [
-        { startAt: { gte: minStart, lt: addDays(maxPeriodEnd, 1) } },
-        { customerHourBudgetId: { not: null } },
-      ],
-    },
-    select: {
-      customerId: true,
-      customerHourBudgetId: true,
-      durationMinutes: true,
-      startAt: true,
-      status: true,
-    },
-  });
-
-  // Reservierte Minuten je Budget: explizite Budget-Verknüpfung gewinnt,
-  // sonst zählt der Termin über sein Datum in den (frühesten) passenden Zeitraum.
-  const reservedByBudget = new Map<string, number>();
-  const budgetsByCustomer = new Map<string, typeof budgets>();
-  for (const budget of budgets) {
-    const list = budgetsByCustomer.get(budget.customerId) ?? [];
-    list.push(budget);
-    budgetsByCustomer.set(budget.customerId, list);
-  }
-  const customersWithDayAppointment = new Set<string>();
-  for (const appointment of appointments) {
-    if (!isReservingStatus(appointment.status)) continue;
-    if (appointment.startAt >= day.start && appointment.startAt < day.end) {
-      customersWithDayAppointment.add(appointment.customerId);
-    }
-    if (appointment.customerHourBudgetId) {
-      reservedByBudget.set(
-        appointment.customerHourBudgetId,
-        (reservedByBudget.get(appointment.customerHourBudgetId) ?? 0) + appointment.durationMinutes,
-      );
-      continue;
-    }
-    const target = (budgetsByCustomer.get(appointment.customerId) ?? []).find(
-      (budget) =>
-        appointment.startAt >= budget.periodStart &&
-        appointment.startAt < addDays(budget.periodEnd, 1),
-    );
-    if (target) {
-      reservedByBudget.set(
-        target.id,
-        (reservedByBudget.get(target.id) ?? 0) + appointment.durationMinutes,
-      );
-    }
-  }
 
   const result: DemandCandidate[] = [];
-  const seenCustomer = new Set<string>();
-  for (const budget of budgets) {
-    if (seenCustomer.has(budget.customerId)) continue;
-    // Höchstens ein neuer Vorschlag pro Kunde und Tag – Kunden mit
-    // bestehendem Termin am Planungstag werden nicht erneut vorgeschlagen.
-    if (customersWithDayAppointment.has(budget.customerId)) {
-      seenCustomer.add(budget.customerId);
-      continue;
-    }
-    const corrected =
-      budget.budgetMinutes + budget.adjustments.reduce((sum, a) => sum + a.adjustmentMinutes, 0);
-    const open = computeOpenBudgetMinutes(corrected, reservedByBudget.get(budget.id) ?? 0);
+  for (const customer of customers) {
+    if (customersWithDayAppointment.has(customer.id)) continue;
+    const open = plannable.get(customer.id)?.plannableMinutes ?? 0;
     if (open < MIN_SUGGESTION_MINUTES) continue;
 
-    const address = budget.customer.addresses[0];
-    if (!address || address.latitude == null || address.longitude == null) {
-      seenCustomer.add(budget.customerId);
-      continue;
-    }
+    const address = customer.addresses[0];
+    if (!address || address.latitude == null || address.longitude == null) continue;
 
-    seenCustomer.add(budget.customerId);
     result.push({
-      customerId: budget.customerId,
-      customerName: `${budget.customer.firstName} ${budget.customer.lastName}`,
-      customerColor: budget.customer.color,
-      preferredEmployeeId: budget.customer.preferredEmployeeId,
-      defaultDurationMinutes: budget.customer.defaultAppointmentDurationMinutes,
-      availabilitySlots: budget.customer.availabilities
+      customerId: customer.id,
+      customerName: `${customer.firstName} ${customer.lastName}`,
+      customerColor: customer.color,
+      preferredEmployeeId: customer.preferredEmployeeId,
+      defaultDurationMinutes: customer.defaultAppointmentDurationMinutes,
+      availabilitySlots: customer.availabilities
         .filter((slot) => slot.weekday === weekday)
         .map((slot) => ({ weekday: slot.weekday, startTime: slot.startTime, endTime: slot.endTime })),
       // Kunden MIT Verfügbarkeiten, aber ohne Fenster am Wochentag → nicht verfügbar.
@@ -347,8 +293,6 @@ async function loadOpenDemand(ctx: OrgContext, date: Date): Promise<DemandCandid
       addressLine: `${address.street} ${address.houseNumber}, ${address.postalCode} ${address.city}`,
       latitude: address.latitude,
       longitude: address.longitude,
-      budgetId: budget.id,
-      budgetPeriod: { start: budget.periodStart, end: addDays(budget.periodEnd, 1) },
       openMinutes: open,
     });
   }
@@ -875,11 +819,10 @@ async function buildEmployeePanel(args: {
       : null;
 
     const token = createSuggestionToken({
-      v: 1,
+      v: 2,
       org: ctx.organization.id,
       emp: employee.id,
       cust: entry.candidate.customerId,
-      budget: entry.candidate.budgetId,
       date: input.date,
       start: evaluation.startAt.toISOString(),
       dur: entry.duration,
@@ -979,7 +922,6 @@ async function buildEmployeePanel(args: {
 export interface AcceptSuggestionResult {
   appointmentId: string;
   routePlanId: string;
-  allocationCreated: boolean;
 }
 
 export async function acceptRouteSuggestion(token: string): Promise<AcceptSuggestionResult> {
@@ -1012,20 +954,20 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
   }
 
   // ---- Stammdaten (Scope-Prüfung vor der Transaktion) ---------------------
-  const [employee, customer, budget] = await Promise.all([
+  const [employee, customer] = await Promise.all([
     db.employee.findUnique({ where: { id: payload.emp } }),
     db.customer.findUnique({
       where: { id: payload.cust },
       include: { addresses: { take: 1, orderBy: { label: 'asc' } }, availabilities: true },
     }),
-    db.customerHourBudget.findUnique({ where: { id: payload.budget }, include: { adjustments: true } }),
   ]);
   assertSameOrg(ctx, employee);
   assertSameOrg(ctx, customer);
-  assertSameOrg(ctx, budget);
   if (employee.status !== 'ACTIVE' || employee.deletedAt) throw new AppError('SUGGESTION_STALE');
   if (customer.status !== 'ACTIVE' || customer.deletedAt) throw new AppError('SUGGESTION_STALE');
-  if (budget.customerId !== customer.id) throw new AppError('SUGGESTION_STALE');
+
+  // Wiederkehrende Gutschriften vor der Transaktion buchen (idempotent).
+  await ensureRecurringTopupsMaterialized(ctx.organization.id, timezone);
 
   const address = customer.addresses[0];
   if (!address || address.latitude == null || address.longitude == null) {
@@ -1181,123 +1123,56 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
         if (total > employee.maximumMinutesPerDay) throw new AppError('SUGGESTION_STALE');
       }
 
-      // 6) Budgetrest erneut prüfen (korrigiertes Budget minus Reservierungen).
-      const corrected =
-        budget.budgetMinutes +
-        budget.adjustments.reduce((sum, a) => sum + a.adjustmentMinutes, 0);
-      const reservedRows = await tx.appointment.findMany({
-        where: {
-          customerId: customer.id,
-          deletedAt: null,
-          status: { in: ['DRAFT', 'PLANNED', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED'] },
-          OR: [
-            { customerHourBudgetId: budget.id },
-            {
-              customerHourBudgetId: null,
-              startAt: { gte: budget.periodStart, lt: addDays(budget.periodEnd, 1) },
-            },
-          ],
-        },
-        select: { durationMinutes: true },
-      });
-      const reserved = reservedRows.reduce((sum, a) => sum + a.durationMinutes, 0);
-      if (computeOpenBudgetMinutes(corrected, reserved) < payload.dur) {
-        throw new AppError('SUGGESTION_STALE', {
-          message: 'Das Stundenbudget reicht für diesen Vorschlag nicht mehr aus.',
-        });
-      }
-
-      // 7) Stunden-Zuweisung: vorhandene nutzen, sonst automatisch anlegen.
-      const existingAllocation = await tx.hourAllocation.findFirst({
-        where: {
-          organizationId: ctx.organization.id,
-          customerId: customer.id,
-          allocatedToEmployeeId: payload.emp,
-          status: 'ACTIVE',
-          validFrom: { lt: day.end },
-          validUntil: { gte: day.start },
-        },
-        select: { id: true },
-      });
-      let allocationCreated = false;
-      if (!existingAllocation) {
-        if (!employee.canReceiveHours) {
-          throw new AppError('RECIPIENT_CANNOT_RECEIVE_HOURS');
-        }
-        const budgetAllocations = await tx.hourAllocation.findMany({
-          where: { budgetId: budget.id, status: 'ACTIVE' },
+      // 6) Stundenguthaben erneut prüfen (Konto-Modell): Gutschriften bis zum
+      //    Planungstag minus Geleistetes minus Reservierungen bis Tagesende.
+      //    Keine Zuweisungs-Validierung mehr – Zuweisungen sind reine
+      //    Leitungs-Buchhaltung und blockieren die Annahme nicht (das führte
+      //    früher zu „Budget vollständig zugewiesen"-Fehlern bei jedem Klick).
+      const [topupRows, grantRows, accountAppointments] = await Promise.all([
+        tx.customerHourTopup.findMany({
+          where: { customerId: customer.id },
+          select: { minutes: true, effectiveOn: true },
+        }),
+        tx.customerRecurringHourGrant.findMany({
+          where: { customerId: customer.id, active: true },
+        }),
+        tx.appointment.findMany({
+          where: { customerId: customer.id, deletedAt: null },
           select: {
-            id: true,
-            budgetId: true,
-            allocatedByEmployeeId: true,
-            allocatedToEmployeeId: true,
-            allocatedMinutes: true,
+            startAt: true,
+            durationMinutes: true,
             status: true,
+            timeEntries: { where: { status: 'APPROVED' }, select: { workedMinutes: true } },
           },
+        }),
+      ]);
+      const plannable = plannableMinutesAt({
+        topups: topupRows,
+        grants: grantRows,
+        appointments: accountAppointments.map((a) => ({
+          durationMinutes: a.durationMinutes,
+          status: a.status,
+          startAt: a.startAt,
+          workedMinutes:
+            a.timeEntries.length > 0
+              ? a.timeEntries.reduce((sum, t) => sum + t.workedMinutes, 0)
+              : null,
+        })),
+        date,
+        reservedBefore: day.end,
+      });
+      if (plannable < payload.dur) {
+        throw new AppError('SUGGESTION_STALE', {
+          message: 'Das Stundenguthaben reicht für diesen Vorschlag nicht mehr aus.',
         });
-        const allocationsWithId = budgetAllocations.map((a) => ({
-          ...a,
-          status: a.status as 'ACTIVE' | 'REVOKED',
-        }));
-
-        let allocatedByEmployeeId: string | null = null;
-        if (hasPermission(ctx, 'hours.allocateOrg')) {
-          const validation = validateOrgPoolAllocation({
-            budgets: [{ id: budget.id, budgetMinutes: budget.budgetMinutes }],
-            adjustments: budget.adjustments.map((a) => ({
-              customerHourBudgetId: a.customerHourBudgetId,
-              adjustmentMinutes: a.adjustmentMinutes,
-            })),
-            allocations: allocationsWithId,
-            requestedMinutes: payload.dur,
-          });
-          if (!validation.ok) {
-            throw new AppError('SUGGESTION_STALE', {
-              message: 'Das Budget ist inzwischen vollständig zugewiesen – bitte neu generieren.',
-            });
-          }
-        } else if (hasPermission(ctx, 'hours.allocateOwnPool') && ctx.employee) {
-          // Team-Manager geben ausschließlich aus dem eigenen Pool weiter.
-          const validation = validateManagerPoolAllocation({
-            allocations: allocationsWithId,
-            managerEmployeeId: ctx.employee.id,
-            requestedMinutes: payload.dur,
-          });
-          if (!validation.ok) {
-            throw new AppError('ALLOCATION_POOL_EXCEEDED', {
-              details: { availableMinutes: validation.availableMinutes },
-            });
-          }
-          allocatedByEmployeeId = ctx.employee.id;
-        } else {
-          throw new AppError('ACCESS_DENIED', {
-            message: 'Für die automatische Stundenzuweisung fehlt die Berechtigung.',
-          });
-        }
-
-        await tx.hourAllocation.create({
-          data: {
-            organizationId: ctx.organization.id,
-            customerId: customer.id,
-            budgetId: budget.id,
-            allocatedByEmployeeId,
-            allocatedToEmployeeId: payload.emp,
-            allocatedMinutes: payload.dur,
-            validFrom: budget.periodStart,
-            validUntil: budget.periodEnd,
-            note: 'Automatisch beim Übernehmen eines Routenvorschlags',
-          },
-        });
-        allocationCreated = true;
       }
 
-      // 8) PLANNED-Termin mit Budget-Zuordnung anlegen.
+      // 7) PLANNED-Termin anlegen (Konto: Abzug entsteht beim Abschluss).
       const appointment = await tx.appointment.create({
         data: {
           organizationId: ctx.organization.id,
           customerId: customer.id,
           assignedEmployeeId: payload.emp,
-          customerHourBudgetId: budget.id,
           title: 'Einsatz (Routenvorschlag)',
           startAt,
           endAt,
@@ -1310,7 +1185,7 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
         },
       });
 
-      // 9) Routenentwurf gemeinsam speichern (veröffentlichte Pläne werden
+      // 8) Routenentwurf gemeinsam speichern (veröffentlichte Pläne werden
       //    wieder zum Entwurf und müssen bewusst erneut freigegeben werden).
       await tx.routePlan.deleteMany({ where: { employeeId: payload.emp, routeDate: date } });
       const routePlan = await tx.routePlan.create({
@@ -1360,16 +1235,14 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
           metadata: {
             employeeId: payload.emp,
             customerId: customer.id,
-            budgetId: budget.id,
             date: payload.date,
             durationMinutes: payload.dur,
-            allocationCreated,
           },
         },
         tx,
       );
 
-      return { appointmentId: appointment.id, routePlanId: routePlan.id, allocationCreated };
+      return { appointmentId: appointment.id, routePlanId: routePlan.id };
     },
     { isolationLevel: 'Serializable' },
   );

@@ -65,20 +65,12 @@ describe('Berechtigungs-Scope (Integration)', () => {
     });
 
     // Kunde A ist dem Unterbaum des Managers zugeordnet (Zuweisung an subEmpA).
-    const budget = await db.customerHourBudget.create({
-      data: {
-        organizationId: orgA.id,
-        customerId: customerA.id,
-        periodStart: new Date('2026-07-01'),
-        periodEnd: new Date('2026-07-31'),
-        budgetMinutes: 600,
-      },
-    });
+    // Konto-Modell: Zuweisung ohne Budget-Bezug.
     await db.hourAllocation.create({
       data: {
         organizationId: orgA.id,
         customerId: customerA.id,
-        budgetId: budget.id,
+        budgetId: null,
         allocatedToEmployeeId: subEmpA.id,
         allocatedMinutes: 300,
         validFrom: new Date('2026-07-01'),

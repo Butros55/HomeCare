@@ -25,9 +25,9 @@ import {
 import type { AllocationContext } from '@/server/services/allocation-service';
 
 /**
- * Stundenzuweisung (Anforderung 11): Dialog mit Budgetübersicht,
- * Mitarbeiterhierarchie, Zielstunden-Anzeige, Live-Parser („2,5“ → 150 min)
- * und Bestätigungsschritt mit Vorher/Nachher-Verteilung.
+ * Stundenzuweisung (Anforderung 11) im Konto-Modell: Dialog mit verfügbarem
+ * Kundenguthaben, Mitarbeiterhierarchie, Zielstunden-Anzeige, Live-Parser
+ * („2,5" → 150 min) und Bestätigungsschritt mit Vorher/Nachher-Verteilung.
  */
 export function AllocateHoursButton({
   customerId,
@@ -78,7 +78,6 @@ export function AllocateHoursDialog({
   const [context, setContext] = React.useState<AllocationContext | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [step, setStep] = React.useState<'form' | 'confirm'>('form');
-  const [budgetId, setBudgetId] = React.useState('');
   const [employeeId, setEmployeeId] = React.useState(preselectedEmployeeId ?? '');
   const [durationText, setDurationText] = React.useState('');
   const [note, setNote] = React.useState('');
@@ -92,9 +91,6 @@ export function AllocateHoursDialog({
       setLoading(false);
       if (result.ok) {
         setContext(result.data);
-        const firstWithBudget =
-          result.data.budgets.find((b) => b.availableMinutes > 0) ?? result.data.budgets[0];
-        if (firstWithBudget) setBudgetId(firstWithBudget.id);
       } else {
         toast.error(result.message);
         onOpenChange(false);
@@ -105,24 +101,19 @@ export function AllocateHoursDialog({
     };
   }, [customerId, onOpenChange]);
 
-  const budget = context?.budgets.find((b) => b.id === budgetId) ?? null;
   const recipient = context?.recipients.find((r) => r.id === employeeId) ?? null;
   const parsed = parseDurationInput(durationText);
   const minutes = parsed.ok ? parsed.minutes : null;
 
-  const overBudget = budget !== null && minutes !== null && minutes > budget.availableMinutes;
-  const remainingAfter =
-    budget !== null && minutes !== null ? budget.availableMinutes - minutes : null;
-
-  const budgetLabel = (b: AllocationContext['budgets'][number]) =>
-    `${new Date(b.periodStart).toLocaleDateString('de-DE')} – ${new Date(b.periodEnd).toLocaleDateString('de-DE')} · ${formatMinutesAsHours(b.availableMinutes)} verfügbar`;
+  const available = context?.availableMinutes ?? 0;
+  const overBudget = context !== null && minutes !== null && minutes > available;
+  const remainingAfter = context !== null && minutes !== null ? available - minutes : null;
 
   const submit = () => {
-    if (!minutes || !budget || !recipient) return;
+    if (!minutes || !recipient) return;
     startTransition(async () => {
       const result = await allocateHoursAction({
         customerId,
-        budgetId: budget.id,
         toEmployeeId: recipient.id,
         minutes,
         note: note || undefined,
@@ -147,10 +138,10 @@ export function AllocateHoursDialog({
       >
         {loading || !context ? (
           <DialogDataSkeleton />
-        ) : context.budgets.length === 0 ? (
+        ) : !context.hasAccount && context.mode === 'org' ? (
           <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
-            Für diesen Kunden gibt es noch kein Stundenbudget im aktuellen Zeitraum. Lege zuerst
-            unter „Stunden“ ein Budget an.
+            Für diesen Kunden ist noch kein Stundenkonto eingerichtet. Lade zuerst unter „Stunden“
+            Guthaben auf.
           </p>
         ) : step === 'form' ? (
           <div className="space-y-4">
@@ -160,29 +151,23 @@ export function AllocateHoursDialog({
               </p>
             ) : null}
 
-            <div>
-              <Label htmlFor="alloc-budget" required>
-                Budgetzeitraum
-              </Label>
-              <Select value={budgetId} onValueChange={setBudgetId}>
-                <SelectTrigger id="alloc-budget">
-                  <SelectValue placeholder="Budget wählen" />
-                </SelectTrigger>
-                <SelectContent>
-                  {context.budgets.map((b) => (
-                    <SelectItem key={b.id} value={b.id}>
-                      {budgetLabel(b)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {budget ? (
-                <FieldHint>
-                  Gesamt {formatMinutesAsHours(budget.totalMinutes)} ·{' '}
-                  {formatMinutesAsHours(budget.availableMinutes)}{' '}
-                  {context.mode === 'pool' ? 'in deinem Pool' : 'noch nicht zugewiesen'}
-                </FieldHint>
-              ) : null}
+            <div className="grid grid-cols-2 gap-2 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5 text-center">
+              <div>
+                <div className="text-[10px] text-[var(--color-ink-subtle)] uppercase">
+                  {context.mode === 'pool' ? 'Dein Pool' : 'Verfügbar'}
+                </div>
+                <div className="tabular text-[length:var(--text-sm)] font-semibold">
+                  {formatMinutesAsHours(available)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] text-[var(--color-ink-subtle)] uppercase">
+                  Kontostand
+                </div>
+                <div className="tabular text-[length:var(--text-sm)] font-semibold">
+                  {formatMinutesAsHours(context.balanceMinutes)}
+                </div>
+              </div>
             </div>
 
             <div>
@@ -196,7 +181,7 @@ export function AllocateHoursDialog({
                 <SelectContent>
                   {context.recipients.map((r) => (
                     <SelectItem key={r.id} value={r.id}>
-                      {' '.repeat(r.depth * 2)}
+                      {' '.repeat(r.depth * 2)}
                       {r.name}
                       {r.missingMonthMinutes > 0
                         ? ` · fehlen ${formatMinutesAsHours(r.missingMonthMinutes)}`
@@ -269,11 +254,11 @@ export function AllocateHoursDialog({
               )}
             </div>
 
-            {overBudget && budget ? (
+            {overBudget ? (
               <p className="flex items-start gap-2 rounded-[var(--radius-md)] bg-[var(--color-danger-soft)] px-3 py-2 text-[length:var(--text-sm)] text-[var(--color-danger)]">
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-                Nur noch {formatMinutesAsHours(budget.availableMinutes)} verfügbar. Eine Überziehung
-                ist nur über eine Korrekturbuchung des Budgets möglich.
+                Nur noch {formatMinutesAsHours(available)} verfügbar. Mehr geht nur über eine
+                Aufladung oder Korrekturbuchung des Stundenkontos.
               </p>
             ) : null}
 
@@ -293,7 +278,7 @@ export function AllocateHoursDialog({
               </Button>
               <Button
                 variant="primary"
-                disabled={!minutes || !budget || !recipient || overBudget}
+                disabled={!minutes || !recipient || overBudget}
                 onClick={() => setStep('confirm')}
               >
                 Weiter zur Bestätigung
@@ -304,7 +289,6 @@ export function AllocateHoursDialog({
           <div className="space-y-4">
             <ConfirmSummary
               context={context}
-              budgetId={budgetId}
               recipientName={recipient?.name ?? ''}
               recipientId={recipient?.id ?? ''}
               minutes={minutes ?? 0}
@@ -327,20 +311,18 @@ export function AllocateHoursDialog({
 
 function ConfirmSummary({
   context,
-  budgetId,
   recipientName,
   recipientId,
   minutes,
   remainingAfter,
 }: {
   context: AllocationContext;
-  budgetId: string;
   recipientName: string;
   recipientId: string;
   minutes: number;
   remainingAfter: number;
 }) {
-  const existing = context.currentAllocations.filter((a) => a.budgetId === budgetId);
+  const existing = context.currentAllocations;
   const recipient = context.recipients.find((r) => r.id === recipientId);
   const missingAfter = recipient
     ? Math.max(0, recipient.missingMonthMinutes - minutes)
@@ -353,7 +335,7 @@ function ConfirmSummary({
           Bisherige Verteilung
         </h3>
         {existing.length === 0 ? (
-          <p className="text-[var(--color-ink-muted)]">Noch keine Zuweisungen in diesem Budget.</p>
+          <p className="text-[var(--color-ink-muted)]">Noch keine Zuweisungen für diesen Kunden.</p>
         ) : (
           <ul className="space-y-1">
             {existing.map((a) => (

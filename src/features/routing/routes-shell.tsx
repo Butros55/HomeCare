@@ -442,9 +442,7 @@ function SingleRoutePlanner({
       const result = await acceptRouteSuggestionAction(suggestion.token);
       if (result.ok) {
         toast.success(
-          `Termin für ${suggestion.customerName} übernommen${
-            result.data.allocationCreated ? ' – Stundenzuweisung angelegt' : ''
-          }. Der Routenentwurf wurde aktualisiert.`,
+          `Termin für ${suggestion.customerName} übernommen. Der Routenentwurf wurde aktualisiert.`,
         );
         // Verbleibende Vorschläge gegen die FRISCHE Terminliste neu berechnen.
         const freshIds = await reloadData();
@@ -641,6 +639,30 @@ function SingleRoutePlanner({
           </div>
         </PanelBody>
       </Panel>
+
+      {/* Subtile Kennzahlen-Leiste über Karte & Terminen: Gesamtdauer unterwegs,
+          Fahrt-, Warte- und Kundenzeit auf einen Blick. */}
+      {route ? (
+        <div
+          className="flex flex-wrap items-center gap-x-5 gap-y-1.5 rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] bg-[var(--color-panel)] px-4 py-2 text-[length:var(--text-xs)] shadow-[var(--shadow-panel)]"
+          data-tour="routes-kpi-bar"
+        >
+          <RouteKpiInline label="Unterwegs" value={formatTravelSeconds(route.workdaySeconds)} strong />
+          <RouteKpiInline label="Fahrt" value={formatTravelSeconds(route.totalTravelSeconds)} />
+          <RouteKpiInline
+            label="Wartezeit"
+            value={route.totalWaitSeconds > 0 ? formatTravelSeconds(route.totalWaitSeconds) : 'keine'}
+          />
+          <RouteKpiInline label="Kundenzeit" value={formatMinutesVerbose(route.totalServiceMinutes)} />
+          <RouteKpiInline label="Distanz" value={formatDistance(route.totalDistanceMeters)} />
+          <span className="ml-auto text-[var(--color-ink-subtle)]">
+            Abfahrt {formatTime(new Date(route.departureAt), timezone)}
+            {route.returnArrivalAt
+              ? ` → Rückkehr ${formatTime(new Date(route.returnArrivalAt), timezone)}`
+              : ''}
+          </span>
+        </div>
+      ) : null}
 
       {loading ? (
         <RoutePlanningDataSkeleton />
@@ -1077,11 +1099,7 @@ function TeamPlanner({
     try {
       const response = await acceptRouteSuggestionAction(suggestion.token);
       if (response.ok) {
-        toast.success(
-          `Termin für ${suggestion.customerName} übernommen${
-            response.data.allocationCreated ? ' – Stundenzuweisung angelegt' : ''
-          }.`,
-        );
+        toast.success(`Termin für ${suggestion.customerName} übernommen.`);
         await generate();
       } else {
         toast.error(response.message);
@@ -1300,6 +1318,32 @@ function TeamEmployeePanel({
 }
 
 // ---------------------------------------------------------------------------
+
+/** Ein Kennzahlen-Element der subtilen Routen-Leiste (Label + Wert inline). */
+function RouteKpiInline({
+  label,
+  value,
+  strong = false,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+}) {
+  return (
+    <span className="flex items-baseline gap-1.5">
+      <span className="text-[var(--color-ink-subtle)]">{label}</span>
+      <span
+        className={
+          strong
+            ? 'tabular font-semibold text-[var(--color-ink)]'
+            : 'tabular font-medium text-[var(--color-ink)]'
+        }
+      >
+        {value}
+      </span>
+    </span>
+  );
+}
 
 function CandidateRow({
   candidate,

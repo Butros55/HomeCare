@@ -1,8 +1,6 @@
 'use server';
 
 import { formatDate, formatDateTime, monthPeriodInZone, weekPeriodInZone } from '@/lib/dates';
-import { getCustomerBudgetMinutes } from '@/lib/hours';
-import { BUDGET_SOURCE_LABELS } from '@/lib/status-maps';
 import { employeeDisplayName } from '@/lib/utils';
 import { db } from '@/server/db';
 import { runAction, type ActionResult } from '@/server/errors';
@@ -15,21 +13,18 @@ import {
 
 /**
  * Detail-Aufschlüsselung der Stunden-Kennzahlen (klickbare Kacheln).
- * Liefert vor-formatierte, organisationsgeprüfte Listen für die Dialoge –
- * dieselbe Zeitraum-Semantik wie src/server/services/hours-service.ts.
+ * Kunden-Sicht = Stundenkonto (global), Mitarbeiter-Sicht = Zeitraum.
+ * Liefert vor-formatierte, organisationsgeprüfte Listen für die Dialoge.
  */
 
 export interface CustomerHourDetail {
-  monthLabel: string;
-  /** Gebucht: Budgets inkl. Korrekturen. */
-  budgets: Array<{
+  /** Gutschriften des Stundenkontos (neueste zuerst). */
+  topups: Array<{
     id: string;
-    periodLabel: string;
-    sourceLabel: string;
-    note: string | null;
-    budgetMinutes: number;
-    adjustedMinutes: number;
-    adjustments: Array<{ id: string; reason: string; minutes: number; byName: string }>;
+    dateLabel: string;
+    kind: 'MANUAL' | 'RECURRING' | 'CORRECTION';
+    label: string;
+    minutes: number;
   }>;
   /** Zugewiesen: aktive Zuweisungen an Mitarbeiter. */
   allocations: Array<{
@@ -40,7 +35,7 @@ export interface CustomerHourDetail {
     fromPool: string | null;
     validLabel: string;
   }>;
-  /** Verplant/Geleistet: Termine des Monats. */
+  /** Verplant/Geleistet: Termine des Kunden (neueste zuerst). */
   appointments: Array<{
     id: string;
     title: string;
@@ -55,7 +50,6 @@ export interface CustomerHourDetail {
 
 export async function getCustomerHourDetailAction(
   customerId: string,
-  monthIso: string,
 ): Promise<ActionResult<CustomerHourDetail>> {
   return runAction(async () => {
     const ctx = await requireOrganizationMembership();
@@ -63,26 +57,15 @@ export async function getCustomerHourDetailAction(
       throw new AppError('CUSTOMER_NOT_FOUND', { status: 404 });
     }
     const timezone = ctx.organization.timezone;
-    const match = /^(\d{4})-(\d{2})$/.exec(monthIso.trim());
-    if (!match) throw new AppError('VALIDATION_FAILED', { message: 'Ungültiger Monat.' });
-    const anchor = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, 15));
-    const period = monthPeriodInZone(anchor, timezone);
 
-    const [budgets, allocations, appointments] = await Promise.all([
-      db.customerHourBudget.findMany({
-        where: { customerId, periodStart: { lt: period.end }, periodEnd: { gte: period.start } },
-        include: {
-          adjustments: { include: { createdBy: { select: { firstName: true, lastName: true } } } },
-        },
-        orderBy: { periodStart: 'desc' },
+    const [topups, allocations, appointments] = await Promise.all([
+      db.customerHourTopup.findMany({
+        where: { customerId },
+        orderBy: { effectiveOn: 'desc' },
+        take: 60,
       }),
       db.hourAllocation.findMany({
-        where: {
-          customerId,
-          status: 'ACTIVE',
-          validFrom: { lt: period.end },
-          validUntil: { gte: period.start },
-        },
+        where: { customerId, status: 'ACTIVE' },
         include: {
           allocatedTo: { select: { id: true, firstName: true, lastName: true, userId: true } },
           allocatedBy: { select: { firstName: true, lastName: true } },
@@ -90,40 +73,28 @@ export async function getCustomerHourDetailAction(
         orderBy: { allocatedMinutes: 'desc' },
       }),
       db.appointment.findMany({
-        where: {
-          customerId,
-          deletedAt: null,
-          startAt: { gte: period.start, lt: period.end },
-        },
+        where: { customerId, deletedAt: null },
         include: {
           assignedEmployee: { select: { id: true, firstName: true, lastName: true, userId: true } },
           timeEntries: { where: { status: 'APPROVED' }, select: { workedMinutes: true } },
         },
-        orderBy: { startAt: 'asc' },
+        orderBy: { startAt: 'desc' },
+        take: 100,
       }),
     ]);
 
-    const monthLabel = new Intl.DateTimeFormat('de-DE', {
-      timeZone: timezone,
-      month: 'long',
-      year: 'numeric',
-    }).format(period.start);
-
     return {
-      monthLabel,
-      budgets: budgets.map((budget) => ({
-        id: budget.id,
-        periodLabel: `${formatDate(budget.periodStart, timezone)} – ${formatDate(budget.periodEnd, timezone)}`,
-        sourceLabel: BUDGET_SOURCE_LABELS[budget.sourceType] ?? budget.sourceType,
-        note: budget.note,
-        budgetMinutes: budget.budgetMinutes,
-        adjustedMinutes: getCustomerBudgetMinutes([budget], budget.adjustments),
-        adjustments: budget.adjustments.map((adjustment) => ({
-          id: adjustment.id,
-          reason: adjustment.reason,
-          minutes: adjustment.adjustmentMinutes,
-          byName: `${adjustment.createdBy.firstName} ${adjustment.createdBy.lastName}`,
-        })),
+      topups: topups.map((topup) => ({
+        id: topup.id,
+        dateLabel: formatDate(topup.effectiveOn, timezone),
+        kind: topup.kind,
+        label:
+          topup.kind === 'RECURRING'
+            ? 'Automatische Aufladung'
+            : topup.kind === 'CORRECTION'
+              ? `Korrektur: ${topup.note ?? 'ohne Begründung'}`
+              : (topup.note?.trim() || 'Aufladung'),
+        minutes: topup.minutes,
       })),
       allocations: allocations.map((allocation) => ({
         id: allocation.id,

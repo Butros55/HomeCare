@@ -372,14 +372,16 @@ async function main() {
     customers[c.number] = { id: customer.id, addressId: address.id };
   }
 
-  console.info('Seed: Stundenbudgets & Zuweisungen …');
+  console.info('Seed: Stundenkonten & Zuweisungen …');
   const monthStart = dayParts(0);
   const periodStart = new Date(Date.UTC(monthStart.y, monthStart.m - 1, 1));
   const periodEnd = new Date(Date.UTC(monthStart.y, monthStart.m, 0)); // letzter Tag des Monats
 
-  const budgetMinutesByCustomer: Record<string, number> = {
-    'K-1001': 720, // 12 h
-    'K-1002': 1200, // 20 h
+  // Konto-Modell: Guthaben pro Kunde. Zwei Kunden erhalten eine wiederkehrende
+  // Aufladung (füllt das Konto automatisch), der Rest eine einmalige Aufladung.
+  const creditMinutesByCustomer: Record<string, number> = {
+    'K-1001': 720, // 12 h – wiederkehrend (monatlich)
+    'K-1002': 1200, // 20 h – wiederkehrend (§45b, monatlich)
     'K-1003': 480, // 8 h – komplett offen
     'K-1004': 600, // 10 h
     'K-1005': 480, // 8 h
@@ -387,37 +389,69 @@ async function main() {
     'K-1007': 960, // 16 h
     'K-1008': 480, // 8 h
     'K-1009': 240, // 4 h
-    'K-1010': 600, // 10 h – Budget endet bald (Periodenende!)
+    'K-1010': 600, // 10 h
   };
+  const recurringCustomers = new Set(['K-1001', 'K-1002']);
 
-  const budgets: Record<string, string> = {};
-  for (const [number, minutes] of Object.entries(budgetMinutesByCustomer)) {
-    const budget = await db.customerHourBudget.create({
-      data: {
-        organizationId: org.id,
-        customerId: customers[number]!.id,
-        periodStart,
-        periodEnd,
-        budgetMinutes: minutes,
-        sourceType: number === 'K-1002' ? 'INSURANCE' : 'CONTRACT',
-        note: number === 'K-1002' ? 'Entlastungsbetrag §45b SGB XI' : undefined,
-      },
-    });
-    budgets[number] = budget.id;
+  for (const [number, minutes] of Object.entries(creditMinutesByCustomer)) {
+    if (recurringCustomers.has(number)) {
+      await db.customerRecurringHourGrant.create({
+        data: {
+          organizationId: org.id,
+          customerId: customers[number]!.id,
+          minutes,
+          intervalUnit: 'MONTH',
+          intervalCount: 1,
+          startDate: periodStart,
+          materializedUntil: null,
+          note: number === 'K-1002' ? 'Entlastungsbetrag §45b SGB XI' : 'Monatliche Aufladung',
+          createdByUserId: ownerUser.id,
+        },
+      });
+      // Erste Gutschrift dieses Monats direkt buchen (sonst erst beim ersten Lesen).
+      await db.customerHourTopup.create({
+        data: {
+          organizationId: org.id,
+          customerId: customers[number]!.id,
+          kind: 'RECURRING',
+          minutes,
+          effectiveOn: periodStart,
+          note: number === 'K-1002' ? 'Entlastungsbetrag §45b SGB XI' : 'Monatliche Aufladung',
+        },
+      });
+    } else {
+      await db.customerHourTopup.create({
+        data: {
+          organizationId: org.id,
+          customerId: customers[number]!.id,
+          kind: 'MANUAL',
+          minutes,
+          effectiveOn: periodStart,
+        },
+      });
+    }
   }
+  // Markiere die wiederkehrenden Regeln als bis heute materialisiert.
+  await db.customerRecurringHourGrant.updateMany({
+    where: { organizationId: org.id },
+    data: { materializedUntil: periodStart },
+  });
 
   // Korrekturbuchung: K-1007 wurde um 2 h aufgestockt.
-  await db.customerHourAdjustment.create({
+  await db.customerHourTopup.create({
     data: {
-      customerHourBudgetId: budgets['K-1007']!,
-      adjustmentMinutes: 120,
-      reason: 'Zusätzlicher Bedarf nach Krankenhausaufenthalt',
+      organizationId: org.id,
+      customerId: customers['K-1007']!.id,
+      kind: 'CORRECTION',
+      minutes: 120,
+      effectiveOn: periodStart,
+      note: 'Zusätzlicher Bedarf nach Krankenhausaufenthalt',
       createdByUserId: ownerUser.id,
     },
   });
 
   const allocation = (
-    budgetNumber: string,
+    customerNumber: string,
     toEmployeeId: string,
     minutes: number,
     byEmployeeId: string | null = null,
@@ -425,8 +459,8 @@ async function main() {
     db.hourAllocation.create({
       data: {
         organizationId: org.id,
-        customerId: customers[budgetNumber]!.id,
-        budgetId: budgets[budgetNumber]!,
+        customerId: customers[customerNumber]!.id,
+        budgetId: null,
         allocatedByEmployeeId: byEmployeeId,
         allocatedToEmployeeId: toEmployeeId,
         allocatedMinutes: minutes,

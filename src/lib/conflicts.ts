@@ -238,35 +238,35 @@ export function checkAppointmentConflicts(input: ConflictCheckInput): Conflict[]
 }
 
 /**
- * Kopplung Termin ↔ Kundenbudget (Anfrage Juli 2026): Termine sollen nicht
- * unbemerkt ohne bzw. über das gebuchte Kundenkontingent geplant werden.
+ * Kopplung Termin ↔ Stundenkonto (Konto-Modell, Umbau Juli 2026): Termine
+ * sollen nicht unbemerkt ohne bzw. über das Guthaben des Kunden geplant werden.
  * Warnungen blockieren nicht – Planung bleibt möglich, aber sichtbar begründet.
  */
-export function checkBudgetConflicts(input: {
-  /** Korrigiertes Kundenbudget im Terminzeitraum; null = gar kein Budget angelegt. */
-  budgetMinutes: number | null;
-  /** Bereits geplante Minuten des Kunden im selben Zeitraum (ohne den Kandidaten). */
-  plannedMinutesExcludingCandidate: number;
+export function checkAccountConflicts(input: {
+  /**
+   * Verplanbares Guthaben zum Termindatum (ohne den Kandidaten);
+   * null = für den Kunden ist gar kein Stundenkonto eingerichtet.
+   */
+  plannableMinutes: number | null;
   candidateMinutes: number;
 }): Conflict[] {
   const fmtHours = (minutes: number) => `${Math.round((minutes / 60) * 10) / 10} h`;
-  if (input.budgetMinutes === null) {
+  if (input.plannableMinutes === null) {
     return [
       {
         type: 'NO_HOUR_BUDGET',
         severity: 'WARNING',
         message:
-          'Der Kunde hat im Terminzeitraum kein Stundenbudget – der Termin wäre nicht durch gebuchte Stunden gedeckt.',
+          'Für den Kunden ist kein Stundenkonto eingerichtet – der Termin wäre nicht durch Guthaben gedeckt.',
       },
     ];
   }
-  const total = input.plannedMinutesExcludingCandidate + input.candidateMinutes;
-  if (total > input.budgetMinutes) {
+  if (input.candidateMinutes > input.plannableMinutes) {
     return [
       {
         type: 'HOUR_BUDGET_OVERPLANNED',
         severity: 'WARNING',
-        message: `Mit diesem Termin sind ${fmtHours(total)} verplant – das Kundenbudget beträgt ${fmtHours(input.budgetMinutes)} (${fmtHours(total - input.budgetMinutes)} darüber).`,
+        message: `Der Termin (${fmtHours(input.candidateMinutes)}) überzieht das verplanbare Guthaben von ${fmtHours(input.plannableMinutes)} um ${fmtHours(input.candidateMinutes - input.plannableMinutes)}.`,
       },
     ];
   }

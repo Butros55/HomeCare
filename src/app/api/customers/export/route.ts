@@ -1,12 +1,11 @@
 import { NextResponse } from 'next/server';
 
 import { toCsv } from '@/lib/csv';
-import { monthPeriodInZone, toDateInputValue } from '@/lib/dates';
+import { toDateInputValue } from '@/lib/dates';
 import { formatMinutesAsDecimalHours } from '@/lib/duration';
 import { AppError } from '@/server/errors';
 import { db } from '@/server/db';
 import { customerScopeWhere, hasPermission, requirePermission } from '@/server/permissions';
-import { getCustomerHourStatsBulk } from '@/server/services/hours-service';
 import {
   CUSTOMER_CSV_COLUMNS,
   CUSTOMER_CSV_FILENAME_PREFIX,
@@ -42,16 +41,32 @@ export async function GET() {
       orderBy: [{ customerNumber: 'asc' }],
     });
 
-    const period = monthPeriodInZone(new Date(), ctx.organization.timezone);
-    const statsMap = await getCustomerHourStatsBulk(
-      customers.map((c) => c.id),
-      period,
-    );
+    // „Stunden pro Monat" = aktive monatliche Aufladung (Konto-Modell), auf
+    // ein Monatsäquivalent normiert – so bleibt die Datei re-importierbar.
+    const grants = await db.customerRecurringHourGrant.findMany({
+      where: {
+        customerId: { in: customers.map((c) => c.id) },
+        active: true,
+      },
+      select: { customerId: true, minutes: true, intervalUnit: true, intervalCount: true },
+    });
+    const monthlyMinutesByCustomer = new Map<string, number>();
+    for (const grant of grants) {
+      const count = Math.max(1, grant.intervalCount);
+      const perMonth =
+        grant.intervalUnit === 'MONTH'
+          ? grant.minutes / count
+          : (grant.minutes / count) * (52 / 12); // Wochen → Monatsäquivalent
+      monthlyMinutesByCustomer.set(
+        grant.customerId,
+        (monthlyMinutesByCustomer.get(grant.customerId) ?? 0) + perMonth,
+      );
+    }
 
     const rows: (string | number | null)[][] = [CUSTOMER_CSV_COLUMNS.map((c) => c.label)];
     for (const customer of customers) {
       const address = customer.addresses[0] ?? null;
-      const budgetMinutes = statsMap.get(customer.id)?.budgetMinutes ?? 0;
+      const budgetMinutes = Math.round(monthlyMinutesByCustomer.get(customer.id) ?? 0);
       rows.push(
         CUSTOMER_CSV_COLUMNS.map((column) => {
           switch (column.key) {

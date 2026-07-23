@@ -47,6 +47,8 @@ export interface AccountAppointmentLike {
     | 'NO_SHOW';
   /** Ist-Minuten aus (freigegebener) Zeiterfassung, falls vorhanden. */
   workedMinutes?: number | null;
+  /** Terminbeginn – nur nötig, wenn Reservierungen datumsbegrenzt zählen sollen. */
+  startAt?: Date;
 }
 
 /** Termin-Status, die Guthaben reservieren (aktiv, noch nicht geleistet). */
@@ -144,6 +146,13 @@ export function computeHourAccount(input: {
   until: Date;
   /** Zusätzliche (projizierte) Gutschriften, z. B. für Planungsdaten in der Zukunft. */
   extraCreditMinutes?: number;
+  /**
+   * Optional: Reservierungen nur bis vor diesen Zeitpunkt zählen (exklusiv).
+   * Für Planungsrechnungen zum Tag D gilt: Gutschriften ≤ D und Reservierungen
+   * < Tagesende D – Termine NACH D werden von den Gutschriften nach D gedeckt
+   * und dort geprüft. Ohne Angabe zählen alle aktiven Reservierungen.
+   */
+  reservedBefore?: Date;
 }): HourAccountSummary {
   const creditedMinutes =
     input.topups
@@ -154,6 +163,7 @@ export function computeHourAccount(input: {
     .reduce((sum, a) => sum + (a.workedMinutes ?? a.durationMinutes), 0);
   const reservedMinutes = input.appointments
     .filter(isReserving)
+    .filter((a) => !input.reservedBefore || !a.startAt || a.startAt < input.reservedBefore)
     .reduce((sum, a) => sum + a.durationMinutes, 0);
   const balanceMinutes = creditedMinutes - completedMinutes;
   return {
@@ -176,12 +186,15 @@ export function plannableMinutesAt(input: {
   grants: RecurringGrantLike[];
   appointments: AccountAppointmentLike[];
   date: Date;
+  /** Reservierungen nur vor diesem Zeitpunkt zählen (typisch: Tagesende von `date`). */
+  reservedBefore?: Date;
 }): number {
   const summary = computeHourAccount({
     topups: input.topups,
     appointments: input.appointments,
     until: input.date,
     extraCreditMinutes: projectedGrantMinutes(input.grants, input.date),
+    reservedBefore: input.reservedBefore,
   });
   return Math.max(0, summary.plannableMinutes);
 }

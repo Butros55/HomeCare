@@ -25,18 +25,22 @@ import { AllocateHoursButton } from '@/features/hours/allocate-hours-button';
  * welche Zuweisung) – inklusive Direktaktionen wie „Stunden zuweisen“.
  */
 
-export type CustomerMetric = 'budget' | 'allocated' | 'planned' | 'completed';
+export type CustomerMetric = 'balance' | 'allocated' | 'planned' | 'completed';
 
-export interface CustomerHourStatsSerialized {
-  budgetMinutes: number;
-  allocatedMinutes: number;
-  plannedMinutes: number;
+/** Konto-Kennzahlen des Kunden (siehe hours-service.CustomerAccountStats). */
+export interface CustomerAccountStatsSerialized {
+  creditedMinutes: number;
   completedMinutes: number;
-  unallocatedMinutes: number;
-  unplannedMinutes: number;
+  reservedMinutes: number;
+  balanceMinutes: number;
+  plannableMinutes: number;
+  allocatedMinutes: number;
+  hasAccount: boolean;
 }
 
 const PLANNED_SET = new Set(['PLANNED', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED']);
+/** Offene (reservierende) Termine im Konto-Modell – ohne COMPLETED. */
+const RESERVED_SET = new Set(['DRAFT', 'PLANNED', 'CONFIRMED', 'IN_PROGRESS']);
 
 function TileButton({
   label,
@@ -83,22 +87,27 @@ function TileButton({
   );
 }
 
-/** Funnel: macht die Beziehung der Kennzahlen sichtbar (Solo ohne Zuweisung). */
+/** Funnel: macht die Konto-Beziehungen sichtbar (Solo ohne Zuweisung). */
 export function HourFunnel({
   stats,
   showAllocation = true,
 }: {
-  stats: CustomerHourStatsSerialized;
+  stats: CustomerAccountStatsSerialized;
   showAllocation?: boolean;
 }) {
-  const max = Math.max(stats.budgetMinutes, stats.plannedMinutes, stats.allocatedMinutes, 1);
+  const max = Math.max(
+    stats.creditedMinutes,
+    stats.completedMinutes + stats.reservedMinutes,
+    stats.allocatedMinutes,
+    1,
+  );
   const rows = [
     {
-      key: 'budget',
-      label: 'Gebucht',
-      minutes: stats.budgetMinutes,
+      key: 'credited',
+      label: 'Aufgeladen',
+      minutes: stats.creditedMinutes,
       color: 'var(--color-brand)',
-      explain: 'Kontingent des Kunden (Budget + Korrekturen)',
+      explain: 'alle Gutschriften (einmalig, wiederkehrend, Korrekturen)',
     },
     ...(showAllocation
       ? [
@@ -108,30 +117,30 @@ export function HourFunnel({
             minutes: stats.allocatedMinutes,
             color: 'var(--color-info, #2f80ed)',
             explain:
-              stats.unallocatedMinutes > 0
-                ? `${formatMinutesAsHours(stats.unallocatedMinutes)} noch keinem Mitarbeiter zugeteilt`
+              stats.balanceMinutes - stats.allocatedMinutes > 0
+                ? `${formatMinutesAsHours(stats.balanceMinutes - stats.allocatedMinutes)} noch keinem Mitarbeiter zugeteilt`
                 : 'vollständig an Mitarbeiter verteilt',
           },
         ]
       : []),
     {
-      key: 'planned',
-      label: 'Verplant',
-      minutes: stats.plannedMinutes,
+      key: 'reserved',
+      label: 'Geplant',
+      minutes: stats.reservedMinutes,
       color: 'var(--color-warning)',
       explain:
-        stats.unplannedMinutes > 0
-          ? `${formatMinutesAsHours(stats.unplannedMinutes)} noch nicht in Terminen`
-          : stats.unplannedMinutes < 0
-            ? `${formatMinutesAsHours(-stats.unplannedMinutes)} über dem Budget!`
-            : 'Budget vollständig in Terminen',
+        stats.plannableMinutes > 0
+          ? `${formatMinutesAsHours(stats.plannableMinutes)} verplanbar`
+          : stats.plannableMinutes < 0
+            ? `${formatMinutesAsHours(-stats.plannableMinutes)} über dem Guthaben!`
+            : 'Guthaben vollständig verplant',
     },
     {
       key: 'completed',
       label: 'Geleistet',
       minutes: stats.completedMinutes,
       color: 'var(--color-success)',
-      explain: 'abgeschlossene Einsätze (Ist-Zeit)',
+      explain: 'abgeschlossene Einsätze – vom Konto abgezogen',
     },
   ];
   return (
@@ -155,12 +164,13 @@ export function HourFunnel({
       ))}
       {showAllocation ? (
         <p className="pt-1 text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
-          „Zugewiesen“ (an Mitarbeiter verteilt) und „Verplant“ (in Terminen) sind zwei getrennte Schritte –
-          beide schöpfen aus den gebuchten Stunden.
+          Das Konto wird durch Aufladungen gefüllt; „Zugewiesen“ (an Mitarbeiter) und „Geplant“
+          (in Terminen) schöpfen daraus, abgeschlossene Einsätze ziehen die Stunden ab.
         </p>
       ) : (
         <p className="pt-1 text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
-          Gebuchte Stunden werden über Termine verplant und nach dem Einsatz als geleistet bestätigt.
+          Aufladungen füllen das Konto, Termine reservieren Guthaben und abgeschlossene Einsätze
+          ziehen die Stunden ab.
         </p>
       )}
     </div>
@@ -173,15 +183,13 @@ export function HourFunnel({
 
 export function CustomerHourTiles({
   customerId,
-  monthIso,
   stats,
   canAllocate,
   showFunnel = false,
   showAllocation = true,
 }: {
   customerId: string;
-  monthIso: string;
-  stats: CustomerHourStatsSerialized;
+  stats: CustomerAccountStatsSerialized;
   canAllocate: boolean;
   showFunnel?: boolean;
   /** Solo-Modus: Zuweisungs-Schritt komplett ausblenden. */
@@ -194,7 +202,7 @@ export function CustomerHourTiles({
   React.useEffect(() => {
     if (!metric || detail) return;
     let cancelled = false;
-    getCustomerHourDetailAction(customerId, monthIso).then((result) => {
+    getCustomerHourDetailAction(customerId).then((result) => {
       if (cancelled) return;
       if (result.ok) setDetail(result.data);
       else setError(result.message);
@@ -202,47 +210,47 @@ export function CustomerHourTiles({
     return () => {
       cancelled = true;
     };
-  }, [metric, detail, customerId, monthIso]);
+  }, [metric, detail, customerId]);
 
   const close = () => setMetric(null);
 
   return (
     <>
-      <div className={cn('grid grid-cols-2 gap-3', showAllocation ? 'xl:grid-cols-4' : 'xl:grid-cols-3')}>
+      <div className={cn('grid grid-cols-2 gap-3', showAllocation ? 'xl:grid-cols-4' : 'xl:grid-cols-4')}>
         <TileButton
-          label="Gebuchte Stunden"
-          value={formatMinutesAsHours(stats.budgetMinutes)}
-          hint="Kontingent des Kunden"
-          onClick={() => setMetric('budget')}
+          label="Kontostand"
+          value={formatMinutesAsHours(stats.balanceMinutes)}
+          hint={
+            stats.plannableMinutes >= 0
+              ? `${formatMinutesAsHours(stats.plannableMinutes)} verplanbar`
+              : `${formatMinutesAsHours(-stats.plannableMinutes)} überbucht`
+          }
+          tone={stats.balanceMinutes < 0 || stats.plannableMinutes < 0 ? 'danger' : 'default'}
+          onClick={() => setMetric('balance')}
         />
         {showAllocation ? (
           <TileButton
             label="Zugewiesen"
             value={formatMinutesAsHours(stats.allocatedMinutes)}
             hint={
-              stats.unallocatedMinutes > 0
-                ? `${formatMinutesAsHours(stats.unallocatedMinutes)} offen`
+              stats.balanceMinutes - stats.allocatedMinutes > 0
+                ? `${formatMinutesAsHours(stats.balanceMinutes - stats.allocatedMinutes)} offen`
                 : 'vollständig verteilt'
             }
-            tone={stats.unallocatedMinutes > 0 ? 'warning' : 'success'}
+            tone={stats.balanceMinutes - stats.allocatedMinutes > 0 ? 'warning' : 'success'}
             onClick={() => setMetric('allocated')}
           />
         ) : null}
         <TileButton
-          label="Verplant"
-          value={formatMinutesAsHours(stats.plannedMinutes)}
-          hint={
-            stats.unplannedMinutes >= 0
-              ? `${formatMinutesAsHours(stats.unplannedMinutes)} unverplant`
-              : `${formatMinutesAsHours(-stats.unplannedMinutes)} über Budget`
-          }
-          tone={stats.unplannedMinutes < 0 ? 'danger' : 'default'}
+          label="Geplant"
+          value={formatMinutesAsHours(stats.reservedMinutes)}
+          hint="offene Termine (reserviert)"
           onClick={() => setMetric('planned')}
         />
         <TileButton
           label="Geleistet"
           value={formatMinutesAsHours(stats.completedMinutes)}
-          hint="bestätigte Einsätze"
+          hint="vom Konto abgezogen"
           tone="success"
           onClick={() => setMetric('completed')}
         />
@@ -257,15 +265,14 @@ export function CustomerHourTiles({
       <Dialog open={metric !== null} onOpenChange={(open) => (!open ? close() : null)}>
         <DialogContent
           title={
-            metric === 'budget'
-              ? 'Gebuchte Stunden'
+            metric === 'balance'
+              ? 'Stundenkonto – Gutschriften'
               : metric === 'allocated'
                 ? 'Zugewiesene Stunden'
                 : metric === 'planned'
-                  ? 'Verplante Stunden'
+                  ? 'Geplante Termine'
                   : 'Geleistete Stunden'
           }
-          description={detail ? detail.monthLabel : undefined}
         >
           {error ? (
             <p className="py-6 text-center text-[length:var(--text-sm)] text-[var(--color-danger)]">{error}</p>
@@ -342,41 +349,28 @@ function CustomerMetricDetail({
 }: {
   metric: CustomerMetric;
   detail: CustomerHourDetail;
-  stats: CustomerHourStatsSerialized;
+  stats: CustomerAccountStatsSerialized;
 }) {
-  if (metric === 'budget') {
-    if (detail.budgets.length === 0) {
-      return <EmptyHint icon={<Clock />} text="Kein Stundenbudget in diesem Monat angelegt." />;
+  if (metric === 'balance') {
+    if (detail.topups.length === 0) {
+      return <EmptyHint icon={<Clock />} text="Noch keine Aufladung auf dem Stundenkonto." />;
     }
     return (
       <>
         <ul className="space-y-1.5">
-          {detail.budgets.map((budget) => (
-            <React.Fragment key={budget.id}>
-              <DetailRow
-                primary={budget.periodLabel}
-                secondary={`${budget.sourceLabel}${budget.note ? ` · ${budget.note}` : ''}`}
-                minutes={budget.adjustedMinutes}
-                minutesHint={
-                  budget.adjustedMinutes !== budget.budgetMinutes
-                    ? `Basis ${formatMinutesAsHours(budget.budgetMinutes)}`
-                    : undefined
-                }
-              />
-              {budget.adjustments.map((adjustment) => (
-                <li key={adjustment.id} className="flex items-center justify-between gap-3 pr-3 pl-6 text-[length:var(--text-xs)] text-[var(--color-ink-muted)]">
-                  <span className="truncate">↳ {adjustment.reason} · {adjustment.byName}</span>
-                  <span className="tabular shrink-0" style={{ color: adjustment.minutes >= 0 ? 'var(--color-success)' : 'var(--color-danger)' }}>
-                    {adjustment.minutes >= 0 ? '+' : ''}{formatMinutesAsHours(adjustment.minutes)}
-                  </span>
-                </li>
-              ))}
-            </React.Fragment>
+          {detail.topups.map((topup) => (
+            <DetailRow
+              key={topup.id}
+              primary={topup.label}
+              secondary={topup.dateLabel}
+              minutes={topup.minutes}
+            />
           ))}
         </ul>
         <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-          Summe im Monat: <strong className="tabular">{formatMinutesAsHours(stats.budgetMinutes)}</strong> – davon{' '}
-          {formatMinutesAsHours(stats.allocatedMinutes)} zugewiesen und {formatMinutesAsHours(stats.plannedMinutes)} verplant.
+          Aufgeladen gesamt: <strong className="tabular">{formatMinutesAsHours(stats.creditedMinutes)}</strong> –
+          davon {formatMinutesAsHours(stats.completedMinutes)} geleistet, Kontostand{' '}
+          <strong className="tabular">{formatMinutesAsHours(stats.balanceMinutes)}</strong>.
         </p>
       </>
     );
@@ -386,6 +380,7 @@ function CustomerMetricDetail({
     if (detail.allocations.length === 0) {
       return <EmptyHint icon={<Users />} text="Noch keine Stunden an Mitarbeiter zugewiesen." />;
     }
+    const unallocated = stats.balanceMinutes - stats.allocatedMinutes;
     return (
       <>
         <ul className="space-y-1.5">
@@ -397,14 +392,14 @@ function CustomerMetricDetail({
                   {allocation.employeeName}
                 </Link>
               }
-              secondary={`${allocation.fromPool ? `weitergegeben von ${allocation.fromPool}` : 'aus dem Kundenbudget'} · gültig ${allocation.validLabel}`}
+              secondary={`${allocation.fromPool ? `weitergegeben von ${allocation.fromPool}` : 'aus dem Stundenkonto'} · gültig ${allocation.validLabel}`}
               minutes={allocation.minutes}
             />
           ))}
         </ul>
-        {stats.unallocatedMinutes > 0 ? (
+        {unallocated > 0 ? (
           <p className="rounded-[var(--radius-md)] bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)] px-3 py-2 text-[length:var(--text-xs)]">
-            Noch <strong className="tabular">{formatMinutesAsHours(stats.unallocatedMinutes)}</strong> ohne Mitarbeiter –
+            Noch <strong className="tabular">{formatMinutesAsHours(unallocated)}</strong> ohne Mitarbeiter –
             unten direkt zuweisen.
           </p>
         ) : null}
@@ -412,15 +407,15 @@ function CustomerMetricDetail({
     );
   }
 
-  const planned = detail.appointments.filter((appointment) => PLANNED_SET.has(appointment.status));
+  const reserved = detail.appointments.filter((appointment) => RESERVED_SET.has(appointment.status));
   const completed = detail.appointments.filter((appointment) => appointment.status === 'COMPLETED');
-  const list = metric === 'planned' ? planned : completed;
+  const list = metric === 'planned' ? reserved : completed;
 
   if (list.length === 0) {
     return (
       <EmptyHint
         icon={metric === 'planned' ? <CalendarDays /> : <CheckCircle2 />}
-        text={metric === 'planned' ? 'Keine Termine in diesem Monat geplant.' : 'Noch keine abgeschlossenen Einsätze in diesem Monat.'}
+        text={metric === 'planned' ? 'Keine offenen Termine geplant.' : 'Noch keine abgeschlossenen Einsätze.'}
       />
     );
   }
@@ -455,10 +450,10 @@ function CustomerMetricDetail({
           />
         ))}
       </ul>
-      {metric === 'planned' && stats.unplannedMinutes < 0 ? (
+      {metric === 'planned' && stats.plannableMinutes < 0 ? (
         <p className="rounded-[var(--radius-md)] bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] px-3 py-2 text-[length:var(--text-xs)]">
-          <strong className="tabular">{formatMinutesAsHours(-stats.unplannedMinutes)}</strong> mehr verplant als gebucht –
-          Budget prüfen oder Termine reduzieren.
+          <strong className="tabular">{formatMinutesAsHours(-stats.plannableMinutes)}</strong> mehr geplant als
+          Guthaben – Konto aufladen oder Termine reduzieren.
         </p>
       ) : null}
     </>
@@ -526,7 +521,7 @@ export function EmployeeHourTiles({
           hint={
             stats.forwardedMinutes > 0
               ? `${formatMinutesAsHours(stats.forwardedMinutes)} weitergegeben`
-              : 'aus Kundenbudgets'
+              : 'aus Kunden-Stundenkonten'
           }
           onClick={() => setMetric('allocated')}
         />
@@ -611,7 +606,7 @@ function EmployeeMetricDetail({
                     {allocation.customerName}
                   </Link>
                 }
-                secondary={`${allocation.fromPool ? `weitergegeben von ${allocation.fromPool}` : 'aus dem Kundenbudget'} · gültig ${allocation.validLabel}`}
+                secondary={`${allocation.fromPool ? `weitergegeben von ${allocation.fromPool}` : 'aus dem Stundenkonto'} · gültig ${allocation.validLabel}`}
                 minutes={allocation.minutes}
               />
             ))}

@@ -145,12 +145,12 @@ export default async function CustomersPage({
                           className="tabular block text-[length:var(--text-sm)] font-semibold"
                           style={{
                             color:
-                              stats.unallocatedMinutes > 0
+                              stats.balanceMinutes - stats.allocatedMinutes > 0
                                 ? 'var(--color-warning)'
                                 : 'var(--color-success)',
                           }}
                         >
-                          {formatMinutesAsHours(stats.unallocatedMinutes)}
+                          {formatMinutesAsHours(stats.balanceMinutes - stats.allocatedMinutes)}
                         </span>
                         <span className="block text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
                           offen
@@ -195,15 +195,18 @@ export default async function CustomersPage({
                   </div>
                   <dl className="mt-3 grid grid-cols-3 gap-2 text-center">
                     <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-2 py-1.5">
-                      <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">Gebucht</dt>
-                      <dd className="tabular text-[length:var(--text-sm)] font-semibold">
-                        {formatMinutesAsHours(stats.budgetMinutes)}
+                      <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">Kontostand</dt>
+                      <dd
+                        className="tabular text-[length:var(--text-sm)] font-semibold"
+                        style={{ color: stats.balanceMinutes < 0 ? 'var(--color-danger)' : undefined }}
+                      >
+                        {formatMinutesAsHours(stats.balanceMinutes)}
                       </dd>
                     </div>
                     <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-2 py-1.5">
                       <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">Geplant</dt>
                       <dd className="tabular text-[length:var(--text-sm)] font-semibold">
-                        {formatMinutesAsHours(stats.plannedMinutes)}
+                        {formatMinutesAsHours(stats.reservedMinutes)}
                       </dd>
                     </div>
                     <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-2 py-1.5">
@@ -212,12 +215,12 @@ export default async function CustomersPage({
                         className="tabular text-[length:var(--text-sm)] font-semibold"
                         style={{
                           color:
-                            stats.unallocatedMinutes > 0
+                            stats.balanceMinutes - stats.allocatedMinutes > 0
                               ? 'var(--color-warning)'
                               : 'var(--color-success)',
                         }}
                       >
-                        {formatMinutesAsHours(stats.unallocatedMinutes)}
+                        {formatMinutesAsHours(stats.balanceMinutes - stats.allocatedMinutes)}
                       </dd>
                     </div>
                   </dl>
@@ -247,7 +250,7 @@ export default async function CustomersPage({
                   </Th>
                   <Th>Telefon</Th>
                   <Th>Zuständig</Th>
-                  <Th className="text-right">Gebucht</Th>
+                  <Th className="text-right">Kontostand</Th>
                   <Th className="text-right">Zugewiesen</Th>
                   <Th className="text-right">Geplant</Th>
                   <Th className="text-right">
@@ -290,21 +293,26 @@ export default async function CustomersPage({
                           ? `${customer.preferredEmployee.firstName} ${customer.preferredEmployee.lastName}`
                           : '—'}
                       </Td>
-                      <Td className="tabular text-right">{formatMinutesAsHours(stats.budgetMinutes)}</Td>
+                      <Td
+                        className="tabular text-right"
+                        style={{ color: stats.balanceMinutes < 0 ? 'var(--color-danger)' : undefined }}
+                      >
+                        {formatMinutesAsHours(stats.balanceMinutes)}
+                      </Td>
                       <Td className="tabular text-right">
                         {formatMinutesAsHours(stats.allocatedMinutes)}
                       </Td>
-                      <Td className="tabular text-right">{formatMinutesAsHours(stats.plannedMinutes)}</Td>
+                      <Td className="tabular text-right">{formatMinutesAsHours(stats.reservedMinutes)}</Td>
                       <Td
                         className="tabular text-right font-medium"
                         style={{
                           color:
-                            stats.unallocatedMinutes > 0
+                            stats.balanceMinutes - stats.allocatedMinutes > 0
                               ? 'var(--color-warning)'
                               : 'var(--color-success)',
                         }}
                       >
-                        {formatMinutesAsHours(stats.unallocatedMinutes)}
+                        {formatMinutesAsHours(stats.balanceMinutes - stats.allocatedMinutes)}
                       </Td>
                       <Td className="whitespace-nowrap text-[var(--color-ink-muted)]">
                         {nextAppointmentAt ? formatDateTime(nextAppointmentAt, timezone) : '—'}

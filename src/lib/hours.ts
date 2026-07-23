@@ -30,7 +30,8 @@ export interface AdjustmentLike {
 }
 
 export interface AllocationLike {
-  budgetId: string;
+  /** Konto-Modell: neue Zuweisungen haben keinen Budget-Bezug mehr (null). */
+  budgetId: string | null;
   allocatedByEmployeeId: string | null;
   allocatedToEmployeeId: string;
   allocatedMinutes: number;

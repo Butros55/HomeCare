@@ -143,6 +143,21 @@ describe('plannableMinutesAt', () => {
     expect(value).toBe(120 + 240 - 120 - 60);
   });
 
+  it('zählt Reservierungen nach dem Planungstag nicht (reservedBefore)', () => {
+    const value = plannableMinutesAt({
+      topups: [{ minutes: 240, effectiveOn: utc(2026, 7, 1) }],
+      grants: [],
+      appointments: [
+        { durationMinutes: 60, status: 'PLANNED', startAt: new Date('2026-07-23T09:00:00Z') },
+        // Termin im Folgemonat wird von späteren Gutschriften gedeckt.
+        { durationMinutes: 120, status: 'PLANNED', startAt: new Date('2026-08-05T09:00:00Z') },
+      ],
+      date: utc(2026, 7, 23),
+      reservedBefore: new Date('2026-07-23T22:00:00Z'),
+    });
+    expect(value).toBe(240 - 60);
+  });
+
   it('klemmt bei 0 (nie negativ für Kapazitätsrechnungen)', () => {
     expect(
       plannableMinutesAt({

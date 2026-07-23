@@ -141,7 +141,7 @@ export default async function ReportsPage({
         <PersonalEarningsDashboard data={earnings} />
 
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-5" data-tour="reports-stats">
-          <StatTile label="Kundenstunden (Budget)" value={formatMinutesAsHours(data.totals.budgetMinutes)} />
+          <StatTile label="Kundenstunden (Konto)" value={formatMinutesAsHours(data.totals.budgetMinutes)} />
           <StatTile label="Zugewiesen" value={formatMinutesAsHours(data.totals.allocatedMinutes)} />
           <StatTile label="Geplant" value={formatMinutesAsHours(data.totals.plannedMinutes)} />
           <StatTile label="Geleistet" value={formatMinutesAsHours(data.totals.completedMinutes)} tone="success" />
@@ -249,7 +249,7 @@ export default async function ReportsPage({
               <THead>
                 <Tr>
                   <Th>Kunde</Th>
-                  <Th className="text-right">Budget</Th>
+                  <Th className="text-right">Aufgeladen</Th>
                   <Th className="text-right">Zugewiesen</Th>
                   <Th className="text-right">Geplant</Th>
                   <Th className="text-right">Geleistet</Th>

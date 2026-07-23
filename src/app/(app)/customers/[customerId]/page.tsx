@@ -6,16 +6,15 @@ import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
 import { EntityAvatar } from '@/components/ui/misc';
-import { EmptyState, Panel, PanelBody, PanelHeader, PanelTitle, ProgressBar } from '@/components/ui/panel';
+import { EmptyState, Panel, PanelBody, PanelHeader, PanelTitle } from '@/components/ui/panel';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Table, TableWrapper, TBody, Td, Th, THead, Tr } from '@/components/ui/table';
-import { formatDate, formatDateTime, monthPeriodInZone, toDateInputValue } from '@/lib/dates';
+import { formatDate, formatDateTime, toDateInputValue } from '@/lib/dates';
 import { formatMinutesAsHours, formatMinutesVerbose } from '@/lib/duration';
 import { formatLocationLine } from '@/lib/geo';
 import {
   APPOINTMENT_STATUS,
   ASSIGNMENT_STATUS,
-  BUDGET_SOURCE_LABELS,
   CUSTOMER_STATUS,
   statusOf,
 } from '@/lib/status-maps';
@@ -25,11 +24,18 @@ import { AppError } from '@/server/errors';
 import { db } from '@/server/db';
 import { hasPermission, uiModeFor } from '@/server/permissions';
 import { getCustomerDetail } from '@/server/services/customer-service';
-import { getCustomerHourStats } from '@/server/services/hours-service';
+import { getCustomerHourAccount } from '@/server/services/account-service';
+import { getCustomerAccountStats } from '@/server/services/hours-service';
 import { ContactActions } from '@/features/customers/contact-actions';
 import { CustomerLocationMap } from '@/features/map/location-map';
 import { AllocateHoursButton } from '@/features/hours/allocate-hours-button';
-import { AdjustBudgetButton, CreateBudgetButton } from '@/features/hours/budget-dialogs';
+import {
+  CorrectionButton,
+  CreateRecurringGrantButton,
+  EditRecurringGrantButton,
+  GrantActiveToggle,
+  TopupButton,
+} from '@/features/hours/account-dialogs';
 import { CustomerHourTiles } from '@/features/hours/hour-detail-tiles';
 import { CustomerAppointmentButtons } from '@/features/appointments/create-appointment-button';
 
@@ -52,10 +58,10 @@ export default async function CustomerDetailPage({
   searchParams,
 }: {
   params: Promise<{ customerId: string }>;
-  searchParams: Promise<{ tab?: string; monat?: string }>;
+  searchParams: Promise<{ tab?: string }>;
 }) {
   const { customerId } = await params;
-  const { tab: rawTab, monat } = await searchParams;
+  const { tab: rawTab } = await searchParams;
   let tab: TabKey = (TABS.some((t) => t.key === rawTab) ? rawTab : 'uebersicht') as TabKey;
 
   let detail: Awaited<ReturnType<typeof getCustomerDetail>>;
@@ -76,14 +82,8 @@ export default async function CustomerDetailPage({
   if (!visibleTabs.some((t) => t.key === tab)) tab = 'uebersicht';
 
   const timezone = ctx.organization.timezone;
-  // ?monat=YYYY-MM erlaubt den Blick auf andere Zeiträume (Stunden-Tab).
-  const monthMatch = /^(\d{4})-(\d{2})$/.exec(monat ?? '');
-  const anchor = monthMatch
-    ? new Date(Date.UTC(Number(monthMatch[1]), Number(monthMatch[2]) - 1, 15))
-    : new Date();
-  const period = monthPeriodInZone(anchor, timezone);
-  const monthIso = toDateInputValue(period.start, timezone).slice(0, 7);
-  const stats = await getCustomerHourStats(customerId, period);
+  // Stundenkonto ist global (kein Monats-Zeitraum mehr).
+  const stats = await getCustomerAccountStats(ctx.organization.id, timezone, customerId);
   const name = `${customer.firstName} ${customer.lastName}`;
   const address = customer.addresses[0] ?? null;
   const addressLine = address ? formatLocationLine(address) : null;
@@ -147,7 +147,6 @@ export default async function CustomerDetailPage({
             address={address}
             stats={stats}
             timezone={timezone}
-            monthIso={monthIso}
             canAllocate={canAllocate}
             showAllocation={!solo}
           />
@@ -160,8 +159,6 @@ export default async function CustomerDetailPage({
             canAllocate={canAllocate}
             canManageBudgets={hasPermission(ctx, 'budgets.manage')}
             stats={stats}
-            monthIso={monthIso}
-            period={period}
             showAllocation={!solo}
           />
         ) : null}
@@ -186,7 +183,6 @@ async function OverviewTab({
   addressLine,
   stats,
   timezone,
-  monthIso,
   canAllocate,
   showAllocation,
 }: {
@@ -195,9 +191,8 @@ async function OverviewTab({
   customer: NonNullable<Awaited<ReturnType<typeof getCustomerDetail>>['customer']>;
   address: { latitude: number | null; longitude: number | null } | null;
   addressLine: string | null;
-  stats: Awaited<ReturnType<typeof getCustomerHourStats>>;
+  stats: Awaited<ReturnType<typeof getCustomerAccountStats>>;
   timezone: string;
-  monthIso: string;
   canAllocate: boolean;
   showAllocation: boolean;
 }) {
@@ -224,7 +219,6 @@ async function OverviewTab({
     <>
       <CustomerHourTiles
         customerId={customerId}
-        monthIso={monthIso}
         stats={stats}
         canAllocate={canAllocate}
         showAllocation={showAllocation}
@@ -490,65 +484,28 @@ async function HoursTab({
   canAllocate,
   canManageBudgets,
   stats,
-  monthIso,
-  period,
   showAllocation,
 }: {
   customerId: string;
   timezone: string;
   canAllocate: boolean;
   canManageBudgets: boolean;
-  stats: Awaited<ReturnType<typeof getCustomerHourStats>>;
-  monthIso: string;
-  period: { start: Date; end: Date };
+  stats: Awaited<ReturnType<typeof getCustomerAccountStats>>;
   showAllocation: boolean;
 }) {
-  const budgets = await db.customerHourBudget.findMany({
-    where: { customerId },
-    orderBy: { periodStart: 'desc' },
-    take: 12,
-    include: {
-      adjustments: { include: { createdBy: { select: { firstName: true, lastName: true } } } },
-      allocations: {
-        where: { status: 'ACTIVE' },
-        include: {
-          allocatedTo: { select: { id: true, firstName: true, lastName: true } },
-          allocatedBy: { select: { id: true, firstName: true, lastName: true } },
-        },
-      },
-    },
-  });
+  const account = await getCustomerHourAccount(customerId);
+  const todayInput = toDateInputValue(new Date(), timezone);
 
-  // Monatswahl: ‹ vorheriger / nächster › Monat als Links (?monat=YYYY-MM).
-  const monthLabel = new Intl.DateTimeFormat('de-DE', {
-    timeZone: timezone,
-    month: 'long',
-    year: 'numeric',
-  }).format(period.start);
-  const shiftMonth = (offset: number) => {
-    const [y, m] = monthIso.split('-').map(Number);
-    const shifted = new Date(Date.UTC(y!, m! - 1 + offset, 15));
-    const iso = `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}`;
-    return `/customers/${customerId}?tab=stunden&monat=${iso}`;
+  const intervalLabel = (grant: (typeof account.grants)[number]) => {
+    const unit = grant.intervalUnit === 'WEEK' ? 'Woche' : 'Monat';
+    const unitPlural = grant.intervalUnit === 'WEEK' ? 'Wochen' : 'Monate';
+    return grant.intervalCount === 1 ? `jede(n) ${unit}` : `alle ${grant.intervalCount} ${unitPlural}`;
   };
 
   return (
     <>
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-[length:var(--text-base)] font-semibold">{monthLabel}</h2>
-        <div className="flex items-center gap-1">
-          <Button asChild variant="outline" size="sm" aria-label="Vorheriger Monat">
-            <Link href={shiftMonth(-1)}>‹</Link>
-          </Button>
-          <Button asChild variant="outline" size="sm" aria-label="Nächster Monat">
-            <Link href={shiftMonth(1)}>›</Link>
-          </Button>
-        </div>
-      </div>
-
       <CustomerHourTiles
         customerId={customerId}
-        monthIso={monthIso}
         stats={stats}
         canAllocate={canAllocate}
         showFunnel
@@ -558,11 +515,11 @@ async function HoursTab({
       {canAllocate || canManageBudgets ? (
         <div className="flex flex-wrap justify-end gap-2">
           {canManageBudgets ? (
-            <CreateBudgetButton
-              customerId={customerId}
-              defaultPeriodStart={toDateInputValue(period.start, timezone)}
-              defaultPeriodEnd={toDateInputValue(new Date(period.end.getTime() - 1), timezone)}
-            />
+            <>
+              <TopupButton customerId={customerId} defaultDate={todayInput} />
+              <CreateRecurringGrantButton customerId={customerId} defaultStartDate={todayInput} />
+              <CorrectionButton customerId={customerId} />
+            </>
           ) : null}
           {canAllocate ? (
             <AllocateHoursButton customerId={customerId} label="Stunden zuweisen" icon="clock" />
@@ -570,127 +527,107 @@ async function HoursTab({
         </div>
       ) : null}
 
-      {budgets.length === 0 ? (
-        <EmptyState
-          icon={<Clock />}
-          title="Noch kein Stundenbudget"
-          description="Lege ein Budget für einen Zeitraum an, um Stunden an Mitarbeiter zu verteilen."
-        />
-      ) : (
-        budgets.map((budget) => {
-          const adjusted =
-            budget.budgetMinutes + budget.adjustments.reduce((sum, a) => sum + a.adjustmentMinutes, 0);
-          const allocated = budget.allocations
-            .filter((a) => a.allocatedByEmployeeId === null)
-            .reduce((sum, a) => sum + a.allocatedMinutes, 0);
-          return (
-            <Panel key={budget.id}>
-              <PanelHeader>
-                <div>
-                  <PanelTitle>
-                    {formatDate(budget.periodStart, timezone)} – {formatDate(budget.periodEnd, timezone)}
-                  </PanelTitle>
-                  <p className="mt-0.5 text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                    {BUDGET_SOURCE_LABELS[budget.sourceType] ?? budget.sourceType}
-                    {budget.note ? ` · ${budget.note}` : ''}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="tabular text-right">
-                    <div className="font-semibold">{formatMinutesAsHours(adjusted)}</div>
-                    <div className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                      {formatMinutesAsHours(allocated)} zugewiesen
-                    </div>
+      {/* Wiederkehrende Aufladungen */}
+      {account.grants.length > 0 ? (
+        <Panel>
+          <PanelHeader>
+            <PanelTitle>Wiederkehrende Aufladungen</PanelTitle>
+          </PanelHeader>
+          <PanelBody className="space-y-2">
+            {account.grants.map((grant) => (
+              <div
+                key={grant.id}
+                className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 text-[length:var(--text-sm)] font-medium">
+                    <span className="tabular">{formatMinutesAsHours(grant.minutes)}</span>
+                    <span className="text-[var(--color-ink-muted)]">· {intervalLabel(grant)}</span>
+                    {!grant.active ? (
+                      <StatusPill tone="neutral" size="sm">
+                        Pausiert
+                      </StatusPill>
+                    ) : null}
                   </div>
-                  {canManageBudgets ? (
-                    <AdjustBudgetButton
-                      budgetId={budget.id}
-                      customerId={customerId}
-                      budgetLabel={`${formatDate(budget.periodStart, timezone)} – ${formatDate(budget.periodEnd, timezone)}`}
-                    />
-                  ) : null}
+                  <div className="truncate text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                    {grant.nextOccurrenceIso && grant.active
+                      ? `Nächste Aufladung: ${formatDate(new Date(grant.nextOccurrenceIso), timezone)}`
+                      : 'Keine weiteren Aufladungen'}
+                    {grant.note ? ` · ${grant.note}` : ''}
+                  </div>
                 </div>
-              </PanelHeader>
-              <PanelBody className="space-y-3">
-                <ProgressBar
-                  value={allocated}
-                  max={adjusted}
-                  tone={allocated >= adjusted ? 'success' : 'brand'}
-                />
-                {budget.adjustments.length > 0 ? (
-                  <div>
-                    <h3 className="mb-1 text-[length:var(--text-xs)] font-semibold text-[var(--color-ink-subtle)] uppercase">
-                      Korrekturen
-                    </h3>
-                    <ul className="space-y-1 text-[length:var(--text-sm)]">
-                      {budget.adjustments.map((adjustment) => (
-                        <li key={adjustment.id} className="flex justify-between gap-3">
-                          <span>
-                            {adjustment.reason}
-                            <span className="text-[var(--color-ink-subtle)]">
-                              {' '}· {adjustment.createdBy.firstName} {adjustment.createdBy.lastName}
-                            </span>
-                          </span>
-                          <span
-                            className="tabular font-medium"
-                            style={{
-                              color:
-                                adjustment.adjustmentMinutes >= 0
-                                  ? 'var(--color-success)'
-                                  : 'var(--color-danger)',
-                            }}
-                          >
-                            {adjustment.adjustmentMinutes >= 0 ? '+' : ''}
-                            {formatMinutesAsHours(adjustment.adjustmentMinutes)}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
+                {canManageBudgets ? (
+                  <div className="flex shrink-0 items-center gap-1">
+                    <EditRecurringGrantButton customerId={customerId} grant={grant} />
+                    <GrantActiveToggle
+                      customerId={customerId}
+                      grantId={grant.id}
+                      active={grant.active}
+                    />
                   </div>
                 ) : null}
-                {!showAllocation ? null : (
-                <div>
-                  <h3 className="mb-1 text-[length:var(--text-xs)] font-semibold text-[var(--color-ink-subtle)] uppercase">
-                    Zuweisungen
-                  </h3>
-                  {budget.allocations.length === 0 ? (
-                    <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
-                      Noch keine Stunden zugewiesen.
-                    </p>
-                  ) : (
-                    <ul className="space-y-1 text-[length:var(--text-sm)]">
-                      {budget.allocations.map((allocation) => (
-                        <li key={allocation.id} className="flex justify-between gap-3">
-                          <span>
-                            <Link
-                              href={`/employees/${allocation.allocatedTo.id}`}
-                              className="font-medium hover:text-[var(--color-brand)]"
-                            >
-                              {allocation.allocatedTo.firstName} {allocation.allocatedTo.lastName}
-                            </Link>
-                            {allocation.allocatedBy ? (
-                              <span className="text-[var(--color-ink-subtle)]">
-                                {' '}· weitergegeben von {allocation.allocatedBy.firstName}{' '}
-                                {allocation.allocatedBy.lastName}
-                              </span>
-                            ) : (
-                              <span className="text-[var(--color-ink-subtle)]"> · aus Org-Budget</span>
-                            )}
-                          </span>
-                          <span className="tabular font-medium">
-                            {formatMinutesAsHours(allocation.allocatedMinutes)}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-                )}
-              </PanelBody>
-            </Panel>
-          );
-        })
-      )}
+              </div>
+            ))}
+          </PanelBody>
+        </Panel>
+      ) : null}
+
+      {/* Kontobewegungen */}
+      <Panel>
+        <PanelHeader>
+          <PanelTitle>Kontobewegungen</PanelTitle>
+        </PanelHeader>
+        <PanelBody>
+          {account.history.length === 0 ? (
+            <EmptyState
+              icon={<Clock />}
+              title="Noch keine Bewegungen"
+              description="Lade Stunden auf, um das Konto des Kunden zu füllen."
+            />
+          ) : (
+            <ul className="divide-y divide-[var(--color-line-subtle)]">
+              {account.history.map((entry) => (
+                <li key={entry.id} className="flex items-center justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-[length:var(--text-sm)]">
+                      {entry.appointmentId ? (
+                        <Link
+                          href={`/calendar?termin=${entry.appointmentId}`}
+                          className="hover:text-[var(--color-brand)]"
+                        >
+                          {entry.label}
+                        </Link>
+                      ) : (
+                        entry.label
+                      )}
+                      {entry.pending ? (
+                        <span className="text-[var(--color-ink-subtle)]"> · vorgemerkt</span>
+                      ) : null}
+                    </div>
+                    <div className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                      {formatDate(new Date(entry.dateIso), timezone)}
+                    </div>
+                  </div>
+                  <span
+                    className="tabular shrink-0 font-semibold"
+                    style={{
+                      color:
+                        entry.minutes > 0
+                          ? 'var(--color-success)'
+                          : entry.minutes < 0
+                            ? 'var(--color-danger)'
+                            : 'var(--color-ink)',
+                    }}
+                  >
+                    {entry.minutes >= 0 ? '+' : '−'}
+                    {formatMinutesAsHours(Math.abs(entry.minutes))}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </PanelBody>
+      </Panel>
     </>
   );
 }

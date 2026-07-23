@@ -21,7 +21,7 @@ import { AllocateHoursDialog } from '@/features/hours/allocate-hours-button';
 
 /**
  * Einstieg „Stunden zuweisen“ von der Mitarbeiterseite: zuerst den Kunden
- * wählen (mit verfügbarem Budget), dann öffnet sich der Zuweisungsdialog mit
+ * wählen (mit verfügbarem Guthaben), dann öffnet sich der Zuweisungsdialog mit
  * vorausgewähltem Mitarbeiter.
  */
 export function AllocateFromEmployeeButton({ employeeId }: { employeeId: string }) {
@@ -60,13 +60,13 @@ export function AllocateFromEmployeeButton({ employeeId }: { employeeId: string 
       <Dialog open={chooserOpen} onOpenChange={setChooserOpen}>
         <DialogContent
           title="Kunde wählen"
-          description="Aus welchem Kundenbudget sollen Stunden übertragen werden?"
+          description="Aus welchem Kunden-Stundenkonto sollen Stunden übertragen werden?"
         >
           {customers === null ? (
             <DialogDataSkeleton />
           ) : customers.length === 0 ? (
             <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
-              Keine Kunden mit Stundenbudget im aktuellen Monat gefunden.
+              Keine Kunden mit verfügbarem Stundenguthaben gefunden.
             </p>
           ) : (
             <div>

@@ -23,7 +23,7 @@ import {
   type OrgContext,
 } from '@/server/permissions';
 import { geocodeAddressCached, getGeocodingProvider } from '@/server/providers/geocoding';
-import { getCustomerHourStatsBulk } from '@/server/services/hours-service';
+import { getCustomerAccountStatsBulk } from '@/server/services/hours-service';
 import {
   customerFormSchema,
   type CustomerFormData,
@@ -111,7 +111,7 @@ export async function listCustomers(params: CustomerListParams) {
   const period = monthPeriodInZone(now, ctx.organization.timezone);
   const ids = customers.map((c) => c.id);
   const [statsMap, nextAppointments] = await Promise.all([
-    getCustomerHourStatsBulk(ids, period),
+    getCustomerAccountStatsBulk(ctx.organization.id, ctx.organization.timezone, ids),
     db.appointment.groupBy({
       by: ['customerId'],
       where: {
@@ -129,24 +129,29 @@ export async function listCustomers(params: CustomerListParams) {
     customer,
     address: customer.addresses[0] ?? null,
     stats: statsMap.get(customer.id) ?? {
-      budgetMinutes: 0,
-      allocatedMinutes: 0,
-      plannedMinutes: 0,
+      creditedMinutes: 0,
       completedMinutes: 0,
-      unallocatedMinutes: 0,
-      unplannedMinutes: 0,
+      reservedMinutes: 0,
+      balanceMinutes: 0,
+      plannableMinutes: 0,
+      allocatedMinutes: 0,
+      hasAccount: false,
     },
     nextAppointmentAt: nextByCustomer.get(customer.id) ?? null,
   }));
 
+  // „Offen" = Guthaben, das noch keinem Mitarbeiter zugewiesen ist.
+  const openOf = (stats: { balanceMinutes: number; allocatedMinutes: number }) =>
+    stats.balanceMinutes - stats.allocatedMinutes;
+
   if (params.openHours) {
-    rows = rows.filter((row) => row.stats.unallocatedMinutes > 0);
+    rows = rows.filter((row) => openOf(row.stats) > 0);
   }
   if (params.sort === 'openMinutes') {
     rows.sort((a, b) =>
       params.dir === 'asc'
-        ? a.stats.unallocatedMinutes - b.stats.unallocatedMinutes
-        : b.stats.unallocatedMinutes - a.stats.unallocatedMinutes,
+        ? openOf(a.stats) - openOf(b.stats)
+        : openOf(b.stats) - openOf(a.stats),
     );
   } else if (params.sort === 'nextAppointment') {
     const value = (d: Date | null) => (d ? d.getTime() : Number.POSITIVE_INFINITY);
@@ -769,7 +774,6 @@ export async function importCustomersCsv(input: {
 
   const today = calendarDayInZone(new Date(), ctx.organization.timezone);
   const monthStart = utcDate(today.year, today.month, 1);
-  const monthEnd = utcDate(today.year, today.month, new Date(Date.UTC(today.year, today.month, 0)).getUTCDate());
 
   for (const row of rows) {
     const existing = row.customerNumber
@@ -957,15 +961,18 @@ export async function importCustomersCsv(input: {
           });
           if (row.monthlyHours && row.monthlyHours > 0) {
             if (canBudgets) {
-              await tx.customerHourBudget.create({
+              // Konto-Modell: „Stunden pro Monat" → monatlich wiederkehrende
+              // Aufladung ab Monatsanfang (füllt das Stundenkonto automatisch).
+              await tx.customerRecurringHourGrant.create({
                 data: {
                   organizationId: orgId,
                   customerId: createdCustomer.id,
-                  periodStart: monthStart,
-                  periodEnd: monthEnd,
-                  budgetMinutes: Math.round(row.monthlyHours * 60),
-                  sourceType: 'CONTRACT',
+                  minutes: Math.round(row.monthlyHours * 60),
+                  intervalUnit: 'MONTH',
+                  intervalCount: 1,
+                  startDate: monthStart,
                   note: 'CSV-Import',
+                  createdByUserId: ctx.user.id,
                 },
               });
             } else if (!budgetPermissionWarned) {

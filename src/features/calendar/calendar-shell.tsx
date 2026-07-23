@@ -46,6 +46,20 @@ const VIEWS = [
   { key: 'listWeek', label: 'Liste' },
 ] as const;
 
+/**
+ * Fehlermeldung beim Verschieben inkl. konkreter Konfliktgründe – der Nutzer
+ * sieht immer, WESHALB der Termin nicht verschoben werden konnte.
+ */
+function rescheduleFailureMessage(result: { message: string; details?: unknown }): string {
+  const details = result.details as
+    | { conflicts?: { message: string; severity?: string }[] }
+    | undefined;
+  const reasons = (details?.conflicts ?? [])
+    .filter((conflict) => conflict.severity !== 'INFO')
+    .map((conflict) => conflict.message);
+  return reasons.length > 0 ? `${result.message} ${reasons.join(' ')}` : result.message;
+}
+
 const STATUS_COLORS: Record<string, string> = {
   DRAFT: 'var(--color-status-hold)',
   PLANNED: 'var(--color-status-todo)',
@@ -246,7 +260,8 @@ export function CalendarShell(props: CalendarShellProps) {
       false,
     );
     if (!result.ok) {
-      toast.error(result.message);
+      // Grund der Ablehnung mit anzeigen (nicht nur „Konflikt").
+      toast.error(rescheduleFailureMessage(result));
       info.revert();
       return;
     }
@@ -649,7 +664,7 @@ export function CalendarShell(props: CalendarShellProps) {
             setPendingMove(null);
             refetch();
           } else {
-            toast.error(result.ok ? 'Unerwarteter Zustand.' : result.message);
+            toast.error(result.ok ? 'Unerwarteter Zustand.' : rescheduleFailureMessage(result));
             pendingMove.revert();
             setPendingMove(null);
           }

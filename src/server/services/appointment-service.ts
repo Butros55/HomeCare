@@ -4,8 +4,8 @@ import { addDays } from 'date-fns';
 
 import { SERIES_MATERIALIZATION_DAYS } from '@/lib/app-config';
 import {
+  checkAccountConflicts,
   checkAppointmentConflicts,
-  checkBudgetConflicts,
   hasErrors,
   hasWarnings,
   type Conflict,
@@ -13,12 +13,10 @@ import {
 import {
   calendarDayInZone,
   dayPeriodInZone,
-  monthPeriodInZone,
   toUtcDateOnly,
   utcDate,
   zonedWallTimeToUtc,
 } from '@/lib/dates';
-import { getCustomerBudgetMinutes, PLANNED_STATUSES } from '@/lib/hours';
 import { estimateTravelSeconds } from '@/lib/geo';
 import {
   buildRecurrenceRule,
@@ -40,6 +38,7 @@ import {
   scopeContains,
   type OrgContext,
 } from '@/server/permissions';
+import { getPlannableMinutesForDate } from '@/server/services/account-service';
 import {
   createNotification,
   createNotificationsForUsers,
@@ -307,39 +306,23 @@ export async function collectConflicts(
     timezone,
   });
 
-  // Kopplung Termin ↔ Kundenbudget: warnt, wenn der Termin ohne bzw. über dem
-  // gebuchten Kontingent des Monats liegt (Zeitraum-Semantik wie hours-service).
-  const month = monthPeriodInZone(candidate.startAt, timezone);
-  const [budgets, plannedAppointments] = await Promise.all([
-    db.customerHourBudget.findMany({
-      where: {
-        customerId: candidate.customerId,
-        periodStart: { lt: month.end },
-        periodEnd: { gte: month.start },
-      },
-      include: { adjustments: true },
-    }),
-    db.appointment.findMany({
-      where: {
-        customerId: candidate.customerId,
-        deletedAt: null,
-        status: { in: [...PLANNED_STATUSES] },
-        startAt: { gte: month.start, lt: month.end },
-        ...(candidate.id ? { id: { not: candidate.id } } : {}),
-      },
-      select: { durationMinutes: true },
-    }),
-  ]);
+  // Kopplung Termin ↔ Stundenkonto: warnt, wenn der Termin ohne Konto bzw.
+  // über dem verplanbaren Guthaben zum Termindatum liegt (Konto-Modell).
+  const dayParts = calendarDayInZone(candidate.startAt, timezone);
+  const candidateDay = utcDate(dayParts.year, dayParts.month, dayParts.day);
+  const plannableByCustomer = await getPlannableMinutesForDate(
+    ctx.organization.id,
+    timezone,
+    candidateDay,
+    {
+      customerIds: [candidate.customerId],
+      ...(candidate.id ? { excludeAppointmentId: candidate.id } : {}),
+    },
+  );
+  const account = plannableByCustomer.get(candidate.customerId);
   conflicts.push(
-    ...checkBudgetConflicts({
-      budgetMinutes:
-        budgets.length === 0
-          ? null
-          : getCustomerBudgetMinutes(budgets, budgets.flatMap((b) => b.adjustments)),
-      plannedMinutesExcludingCandidate: plannedAppointments.reduce(
-        (sum, a) => sum + a.durationMinutes,
-        0,
-      ),
+    ...checkAccountConflicts({
+      plannableMinutes: account?.hasAccount ? account.plannableMinutes : null,
       candidateMinutes: candidate.durationMinutes,
     }),
   );

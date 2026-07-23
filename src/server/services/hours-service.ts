@@ -1,29 +1,39 @@
 import 'server-only';
 
 import type { Period } from '@/lib/dates';
+import { computeHourAccount } from '@/lib/hour-account';
 import {
-  computeCustomerHourStats,
   computeEmployeeHourStats,
-  type CustomerHourStats,
+  getCustomerAllocatedMinutes,
   type EmployeeHourStats,
 } from '@/lib/hours';
 import { db } from '@/server/db';
+import {
+  ensureRecurringTopupsMaterialized,
+  todayUtcDate,
+} from '@/server/services/account-service';
 
 /**
- * Stunden-Service: lädt die Datensätze eines Zeitraums und delegiert die
- * Berechnung an die reinen Funktionen in src/lib/hours.ts.
+ * Stunden-Service: lädt die Datensätze und delegiert die Berechnung an die
+ * reinen Funktionen (src/lib/hour-account.ts für das Kunden-Stundenkonto,
+ * src/lib/hours.ts für die Mitarbeiter-Sicht).
  *
- * Zeitraum-Semantik:
- *  - Budgets/Zuweisungen zählen, wenn ihr Gültigkeitszeitraum den
- *    Abfragezeitraum überlappt (periodEnd/validUntil sind inklusive Daten).
- *  - Termine zählen nach startAt im halboffenen Zeitraum [start, end).
+ * Kunden-Sicht (Konto-Modell): global statt zeitraumbezogen –
+ * Kontostand = Gutschriften − Geleistet, Verplanbar = Kontostand − Reserviert.
+ * Mitarbeiter-Sicht: weiterhin zeitraumbezogen (Woche/Monat, Zielstunden).
  */
 
-function periodOverlapFilter(period: Period) {
-  return {
-    periodStart: { lt: period.end },
-    periodEnd: { gte: period.start },
-  };
+/** Kunden-Kennzahlen im Konto-Modell. */
+export interface CustomerAccountStats {
+  creditedMinutes: number;
+  completedMinutes: number;
+  reservedMinutes: number;
+  balanceMinutes: number;
+  plannableMinutes: number;
+  /** Aktive Org-Zuweisungen an Mitarbeiter (Leitungs-Buchhaltung). */
+  allocatedMinutes: number;
+  /** Konto eingerichtet (mindestens eine Gutschrift oder Aufladungsregel). */
+  hasAccount: boolean;
 }
 
 function allocationOverlapFilter(period: Period) {
@@ -33,76 +43,56 @@ function allocationOverlapFilter(period: Period) {
   };
 }
 
-async function loadCustomerHourData(customerId: string, period: Period) {
-  const [budgets, allocations, appointments] = await Promise.all([
-    db.customerHourBudget.findMany({
-      where: { customerId, ...periodOverlapFilter(period) },
-      include: { adjustments: true },
-    }),
-    db.hourAllocation.findMany({
-      where: { customerId, ...allocationOverlapFilter(period) },
-    }),
-    db.appointment.findMany({
-      where: { customerId, deletedAt: null, startAt: { gte: period.start, lt: period.end } },
-      select: {
-        assignedEmployeeId: true,
-        durationMinutes: true,
-        status: true,
-        timeEntries: {
-          where: { status: 'APPROVED' },
-          select: { workedMinutes: true },
-        },
-      },
-    }),
-  ]);
-  return {
-    budgets,
-    adjustments: budgets.flatMap((b) => b.adjustments),
-    allocations,
-    appointments: appointments.map((a) => ({
-      assignedEmployeeId: a.assignedEmployeeId,
-      durationMinutes: a.durationMinutes,
-      status: a.status,
-      workedMinutes:
-        a.timeEntries.length > 0
-          ? a.timeEntries.reduce((sum, t) => sum + t.workedMinutes, 0)
-          : null,
-    })),
-  };
-}
-
-export async function getCustomerHourStats(
+export async function getCustomerAccountStats(
+  organizationId: string,
+  timezone: string,
   customerId: string,
-  period: Period,
-): Promise<CustomerHourStats> {
-  const data = await loadCustomerHourData(customerId, period);
-  return computeCustomerHourStats(data);
+): Promise<CustomerAccountStats> {
+  const map = await getCustomerAccountStatsBulk(organizationId, timezone, [customerId]);
+  return (
+    map.get(customerId) ?? {
+      creditedMinutes: 0,
+      completedMinutes: 0,
+      reservedMinutes: 0,
+      balanceMinutes: 0,
+      plannableMinutes: 0,
+      allocatedMinutes: 0,
+      hasAccount: false,
+    }
+  );
 }
 
 /** Kennzahlen für mehrere Kunden in einem Rutsch (Kundenliste, keine N+1). */
-export async function getCustomerHourStatsBulk(
+export async function getCustomerAccountStatsBulk(
+  organizationId: string,
+  timezone: string,
   customerIds: string[],
-  period: Period,
-): Promise<Map<string, CustomerHourStats>> {
-  if (customerIds.length === 0) return new Map();
+): Promise<Map<string, CustomerAccountStats>> {
+  const result = new Map<string, CustomerAccountStats>();
+  if (customerIds.length === 0) return result;
 
-  const [budgets, allocations, appointments] = await Promise.all([
-    db.customerHourBudget.findMany({
-      where: { customerId: { in: customerIds }, ...periodOverlapFilter(period) },
-      include: { adjustments: true },
+  await ensureRecurringTopupsMaterialized(organizationId, timezone);
+  const today = todayUtcDate(timezone);
+
+  const [topups, grants, allocations, appointments] = await Promise.all([
+    db.customerHourTopup.findMany({
+      where: { customerId: { in: customerIds } },
+      select: { customerId: true, minutes: true, effectiveOn: true },
+    }),
+    db.customerRecurringHourGrant.findMany({
+      where: { customerId: { in: customerIds } },
+      select: { customerId: true },
     }),
     db.hourAllocation.findMany({
-      where: { customerId: { in: customerIds }, ...allocationOverlapFilter(period) },
+      where: { customerId: { in: customerIds }, status: 'ACTIVE' },
     }),
     db.appointment.findMany({
       where: {
         customerId: { in: customerIds },
         deletedAt: null,
-        startAt: { gte: period.start, lt: period.end },
       },
       select: {
         customerId: true,
-        assignedEmployeeId: true,
         durationMinutes: true,
         status: true,
         timeEntries: { where: { status: 'APPROVED' }, select: { workedMinutes: true } },
@@ -110,28 +100,38 @@ export async function getCustomerHourStatsBulk(
     }),
   ]);
 
-  const result = new Map<string, CustomerHourStats>();
+  const grantCustomers = new Set(grants.map((g) => g.customerId));
   for (const customerId of customerIds) {
-    const customerBudgets = budgets.filter((b) => b.customerId === customerId);
-    result.set(
-      customerId,
-      computeCustomerHourStats({
-        budgets: customerBudgets,
-        adjustments: customerBudgets.flatMap((b) => b.adjustments),
-        allocations: allocations.filter((a) => a.customerId === customerId),
-        appointments: appointments
+    const customerTopups = topups.filter((t) => t.customerId === customerId);
+    const summary = computeHourAccount({
+      topups: customerTopups,
+      appointments: appointments
+        .filter((a) => a.customerId === customerId)
+        .map((a) => ({
+          durationMinutes: a.durationMinutes,
+          status: a.status,
+          workedMinutes:
+            a.timeEntries.length > 0
+              ? a.timeEntries.reduce((sum, t) => sum + t.workedMinutes, 0)
+              : null,
+        })),
+      until: today,
+    });
+    result.set(customerId, {
+      ...summary,
+      allocatedMinutes: getCustomerAllocatedMinutes(
+        allocations
           .filter((a) => a.customerId === customerId)
           .map((a) => ({
-            assignedEmployeeId: a.assignedEmployeeId,
-            durationMinutes: a.durationMinutes,
-            status: a.status,
-            workedMinutes:
-              a.timeEntries.length > 0
-                ? a.timeEntries.reduce((sum, t) => sum + t.workedMinutes, 0)
-                : null,
+            budgetId: a.budgetId ?? '',
+            allocatedByEmployeeId: a.allocatedByEmployeeId,
+            allocatedToEmployeeId: a.allocatedToEmployeeId,
+            allocatedMinutes: a.allocatedMinutes,
+            status: a.status as 'ACTIVE' | 'REVOKED',
           })),
-      }),
-    );
+      ),
+      hasAccount: customerTopups.length > 0 || grantCustomers.has(customerId),
+    });
   }
   return result;
 }

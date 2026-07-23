@@ -4,7 +4,7 @@ import { utcDate } from '@/lib/dates';
 import { writeAuditLog } from '@/server/audit';
 import { db } from '@/server/db';
 import { materializeSeries } from '@/server/services/appointment-service';
-import { getCustomerHourStatsBulk } from '@/server/services/hours-service';
+import { getCustomerAccountStatsBulk } from '@/server/services/hours-service';
 
 import { createEmployee, createOrg, resetDatabase } from './helpers';
 
@@ -37,36 +37,34 @@ describe('Stunden & Serien (Integration)', () => {
     await db.$disconnect();
   });
 
-  it('berechnet Kundenstunden korrekt (Budget, Korrektur, Pool-Weitergabe, Soft Delete)', async () => {
-    const period = { start: utcDate(2026, 7, 1), end: utcDate(2026, 8, 1) };
-    const budget = await db.customerHourBudget.create({
+  it('berechnet das Stundenkonto korrekt (Aufladung, Korrektur, Pool-Weitergabe, Soft Delete)', async () => {
+    // Konto-Modell: Aufladung 600 + Korrektur 120 = 720 gutgeschrieben.
+    await db.customerHourTopup.create({
       data: {
         organizationId: orgId,
         customerId,
-        periodStart: utcDate(2026, 7, 1),
-        periodEnd: utcDate(2026, 7, 31),
-        budgetMinutes: 600,
+        kind: 'MANUAL',
+        minutes: 600,
+        effectiveOn: utcDate(2026, 1, 1),
       },
     });
-    await db.customerHourAdjustment.create({
+    await db.customerHourTopup.create({
       data: {
-        customerHourBudgetId: budget.id,
-        adjustmentMinutes: 120,
-        reason: 'Aufstockung',
-        createdByUserId: (
-          await db.user.create({
-            data: { email: 'adm@test.example', passwordHash: 'x', firstName: 'A', lastName: 'B' },
-          })
-        ).id,
+        organizationId: orgId,
+        customerId,
+        kind: 'CORRECTION',
+        minutes: 120,
+        effectiveOn: utcDate(2026, 1, 2),
+        note: 'Aufstockung',
       },
     });
-    // Org-Pool → Manager 480; Manager → Worker 240 (zählt NICHT gegen das Kundenbudget).
+    // Org-Pool → Manager 480; Manager → Worker 240 (zählt NICHT gegen das Kundenkonto).
     await db.hourAllocation.createMany({
       data: [
         {
           organizationId: orgId,
           customerId,
-          budgetId: budget.id,
+          budgetId: null,
           allocatedToEmployeeId: managerId,
           allocatedMinutes: 480,
           validFrom: utcDate(2026, 7, 1),
@@ -75,7 +73,7 @@ describe('Stunden & Serien (Integration)', () => {
         {
           organizationId: orgId,
           customerId,
-          budgetId: budget.id,
+          budgetId: null,
           allocatedByEmployeeId: managerId,
           allocatedToEmployeeId: employeeId,
           allocatedMinutes: 240,
@@ -138,12 +136,16 @@ describe('Stunden & Serien (Integration)', () => {
       },
     });
 
-    const stats = (await getCustomerHourStatsBulk([customerId], period)).get(customerId)!;
-    expect(stats.budgetMinutes).toBe(720); // 600 + 120 Korrektur
-    expect(stats.allocatedMinutes).toBe(480); // nur Org-Pool
-    expect(stats.unallocatedMinutes).toBe(240);
-    expect(stats.plannedMinutes).toBe(180); // 120 + 60 (abgesagt/gelöscht zählen nicht)
+    const org = await db.organization.findUniqueOrThrow({ where: { id: orgId } });
+    const stats = (
+      await getCustomerAccountStatsBulk(orgId, org.timezone, [customerId])
+    ).get(customerId)!;
+    expect(stats.creditedMinutes).toBe(720); // 600 Aufladung + 120 Korrektur
     expect(stats.completedMinutes).toBe(55); // Ist-Zeit vor Plan-Dauer
+    expect(stats.reservedMinutes).toBe(120); // nur der PLANNED-Termin (abgesagt/gelöscht zählen nicht)
+    expect(stats.balanceMinutes).toBe(665); // 720 − 55 geleistet
+    expect(stats.allocatedMinutes).toBe(480); // nur Org-Pool
+    expect(stats.hasAccount).toBe(true);
   });
 
   it('materialisiert Serien idempotent und respektiert Ausnahmen', async () => {

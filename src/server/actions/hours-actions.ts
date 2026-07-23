@@ -26,7 +26,6 @@ export async function getAllocationContextAction(
 
 const allocateSchema = z.object({
   customerId: z.string().min(1),
-  budgetId: z.string().min(1),
   toEmployeeId: z.string().min(1),
   minutes: z.number().int().positive('Die Minutenanzahl muss größer als 0 sein.'),
   note: z.string().trim().max(500).optional(),

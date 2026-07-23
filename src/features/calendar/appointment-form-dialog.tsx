@@ -124,10 +124,12 @@ export function AppointmentFormDialog({
   // Serien-Bearbeitungsumfang.
   const [scope, setScope] = React.useState<'single' | 'following' | 'all'>('single');
 
-  // Konflikt-Bestätigung.
+  // Konflikt-Bestätigung (WARNING: „trotzdem speichern?").
   const [conflicts, setConflicts] = React.useState<{ message: string; severity: string }[] | null>(
     null,
   );
+  // Harte Fehler (ERROR): Speichern nicht möglich – Gründe werden gelistet.
+  const [blockingErrors, setBlockingErrors] = React.useState<string[] | null>(null);
 
   const buildValues = (): AppointmentFormValues => ({
     customerId,
@@ -181,16 +183,31 @@ export function AppointmentFormDialog({
         : await createAppointmentAction(values, confirmed);
 
       if (!result.ok) {
-        const details = result.details as { conflicts?: { message: string; severity: string }[] } | undefined;
-        const warnings = details?.conflicts?.filter(
-          (conflict) => conflict.severity === 'WARNING',
-        );
-        if (warnings && warnings.length > 0) {
-          setConflicts(warnings);
+        const details = result.details as
+          | { conflicts?: { message: string; severity: string }[] }
+          | undefined;
+        const allConflicts = details?.conflicts ?? [];
+        const errors = allConflicts.filter((conflict) => conflict.severity === 'ERROR');
+        const warnings = allConflicts.filter((conflict) => conflict.severity === 'WARNING');
+
+        // Harte Konflikte → Speichern nicht möglich, Gründe klar auflisten.
+        if (errors.length > 0) {
+          setConflicts(null);
+          setBlockingErrors(errors.map((conflict) => conflict.message));
+          return;
         }
+        // Nur Warnungen → Bestätigungsschritt „trotzdem speichern".
+        if (warnings.length > 0) {
+          setBlockingErrors(null);
+          setConflicts(warnings);
+          return;
+        }
+        // Sonstige Fehler (Validierung, Berechtigung …): Grund immer anzeigen.
+        setBlockingErrors([result.message]);
         toast.error(result.message);
         return;
       }
+      setBlockingErrors(null);
       if (result.data.requiresConfirmation) {
         setConflicts(result.data.conflicts);
         return;
@@ -221,7 +238,29 @@ export function AppointmentFormDialog({
         }
         wide
       >
-        {conflicts ? (
+        {blockingErrors ? (
+          <div className="space-y-4">
+            <p className="text-[length:var(--text-sm)] font-medium text-[var(--color-danger)]">
+              Der Termin konnte nicht gespeichert werden:
+            </p>
+            <ul className="space-y-1.5">
+              {blockingErrors.map((message, index) => (
+                <li
+                  key={index}
+                  className="flex items-start gap-2 rounded-[var(--radius-md)] bg-[var(--color-danger-soft)] px-3 py-2 text-[length:var(--text-sm)] text-[var(--color-danger)]"
+                >
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+                  {message}
+                </li>
+              ))}
+            </ul>
+            <DialogFooter>
+              <Button variant="primary" onClick={() => setBlockingErrors(null)} disabled={pending}>
+                Zurück zum Formular
+              </Button>
+            </DialogFooter>
+          </div>
+        ) : conflicts ? (
           <div className="space-y-4">
             <p className="text-[length:var(--text-sm)] font-medium">
               Es gibt Warnungen – trotzdem speichern?

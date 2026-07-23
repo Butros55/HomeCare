@@ -10,7 +10,7 @@ import {
   requirePermission,
   scopeContains,
 } from '@/server/permissions';
-import { getCustomerHourStatsBulk, getEmployeeHourStatsBulk } from '@/server/services/hours-service';
+import { getCustomerAccountStatsBulk, getEmployeeHourStatsBulk } from '@/server/services/hours-service';
 
 /**
  * Auswertungen (Anforderung 20): belastbare Kennzahlen über gebündelte
@@ -111,9 +111,10 @@ export async function getReportData(filters: ReportFilters) {
     },
     select: { id: true, firstName: true, lastName: true },
   });
-  const customerStats = await getCustomerHourStatsBulk(
+  const customerStats = await getCustomerAccountStatsBulk(
+    orgId,
+    ctx.organization.timezone,
     customers.map((c) => c.id),
-    period,
   );
 
   const totals = {
@@ -124,11 +125,12 @@ export async function getReportData(filters: ReportFilters) {
     openMinutes: 0,
   };
   for (const stats of customerStats.values()) {
-    totals.budgetMinutes += stats.budgetMinutes;
+    // „Budget" = auf dem Konto insgesamt gutgeschrieben; „geplant" = reserviert.
+    totals.budgetMinutes += stats.creditedMinutes;
     totals.allocatedMinutes += stats.allocatedMinutes;
-    totals.plannedMinutes += stats.plannedMinutes;
+    totals.plannedMinutes += stats.reservedMinutes;
     totals.completedMinutes += stats.completedMinutes;
-    totals.openMinutes += Math.max(0, stats.unallocatedMinutes);
+    totals.openMinutes += Math.max(0, stats.balanceMinutes - stats.allocatedMinutes);
   }
 
   const cancelled = appointments.filter((a) => a.status === 'CANCELLED' || a.status === 'NO_SHOW');
@@ -177,11 +179,11 @@ export async function getReportData(filters: ReportFilters) {
         return {
           id: customer.id,
           name: `${customer.firstName} ${customer.lastName}`,
-          budgetMinutes: stats.budgetMinutes,
+          budgetMinutes: stats.creditedMinutes,
           allocatedMinutes: stats.allocatedMinutes,
-          plannedMinutes: stats.plannedMinutes,
+          plannedMinutes: stats.reservedMinutes,
           completedMinutes: stats.completedMinutes,
-          openMinutes: Math.max(0, stats.unallocatedMinutes),
+          openMinutes: Math.max(0, stats.balanceMinutes - stats.allocatedMinutes),
         };
       })
       .filter((row) => row.budgetMinutes > 0 || row.plannedMinutes > 0)

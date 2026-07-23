@@ -14,7 +14,7 @@ import {
   hasPermission,
   type OrgContext,
 } from '@/server/permissions';
-import { getCustomerHourStatsBulk } from '@/server/services/hours-service';
+import { getCustomerAccountStatsBulk } from '@/server/services/hours-service';
 import { effectiveMonthTarget } from '@/server/services/allocation-service';
 
 /**
@@ -203,7 +203,7 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
     if (coordinate) previousCoordinate = coordinate;
   }
 
-  // Offene Stunden: Solo = unverplante Kundenstunden; Mitarbeiter = zugewiesen minus verplant.
+  // Offene Stunden: Solo = verplanbares Kundenguthaben; Mitarbeiter = zugewiesen minus verplant.
   let openMinutes = 0;
   let openHint: string;
   if (options.includeUnassigned) {
@@ -211,12 +211,16 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
       where: { organizationId: orgId, deletedAt: null, status: 'ACTIVE' },
       select: { id: true },
     });
-    const stats = await getCustomerHourStatsBulk(customers.map((c) => c.id), month);
+    const stats = await getCustomerAccountStatsBulk(
+      orgId,
+      timezone,
+      customers.map((c) => c.id),
+    );
     openMinutes = [...stats.values()].reduce(
-      (sum, stat) => sum + Math.max(0, stat.unplannedMinutes),
+      (sum, stat) => sum + Math.max(0, stat.plannableMinutes),
       0,
     );
-    openHint = 'gebuchte Kundenstunden ohne Termin (Monat)';
+    openHint = 'verplanbares Kundenguthaben (Konto)';
   } else {
     const allocations = ownEmployeeId
       ? await db.hourAllocation.findMany({
@@ -360,16 +364,21 @@ export async function getDashboardData(ctx: OrgContext) {
       where: { organizationId: orgId, deletedAt: null, status: 'ACTIVE' },
       select: { id: true, firstName: true, lastName: true },
     });
-    const stats = await getCustomerHourStatsBulk(
+    const stats = await getCustomerAccountStatsBulk(
+      orgId,
+      timezone,
       customers.map((c) => c.id),
-      month,
     );
     openHoursCustomers = customers
-      .map((customer) => ({
-        id: customer.id,
-        name: `${customer.firstName} ${customer.lastName}`,
-        openMinutes: stats.get(customer.id)?.unallocatedMinutes ?? 0,
-      }))
+      .map((customer) => {
+        const stat = stats.get(customer.id);
+        return {
+          id: customer.id,
+          name: `${customer.firstName} ${customer.lastName}`,
+          // „Offen" = auf dem Konto, aber noch keinem Mitarbeiter zugewiesen.
+          openMinutes: stat ? Math.max(0, stat.balanceMinutes - stat.allocatedMinutes) : 0,
+        };
+      })
       .filter((entry) => entry.openMinutes > 0)
       .sort((a, b) => b.openMinutes - a.openMinutes);
   }
@@ -425,7 +434,7 @@ export async function getDashboardData(ctx: OrgContext) {
   const ownObligationMinutes = ctx.employee
     ? getManagerSelfObligationMinutes(
         monthAllocations.map((a) => ({
-          budgetId: a.budgetId,
+          budgetId: a.budgetId ?? '',
           allocatedByEmployeeId: a.allocatedByEmployeeId,
           allocatedToEmployeeId: a.allocatedToEmployeeId,
           allocatedMinutes: a.allocatedMinutes,
@@ -657,21 +666,23 @@ export async function getDashboardData(ctx: OrgContext) {
     });
   }
   if (isPlanner) {
-    const endingBudgets = await db.customerHourBudget.findMany({
+    // Konto-Modell: wiederkehrende Aufladungen, die bald auslaufen.
+    const endingGrants = await db.customerRecurringHourGrant.findMany({
       where: {
         organizationId: orgId,
-        periodEnd: { gte: now, lt: addDays(now, 7) },
+        active: true,
+        endDate: { gte: now, lt: addDays(now, 7) },
         customer: { deletedAt: null, status: 'ACTIVE' },
       },
       include: { customer: { select: { id: true, firstName: true, lastName: true } } },
       take: 3,
     });
-    for (const budget of endingBudgets) {
+    for (const grant of endingGrants) {
       actionItems.push({
         kind: 'BUDGET_ENDING',
-        title: `Budget von ${budget.customer.firstName} ${budget.customer.lastName} endet bald`,
-        detail: `Zeitraum endet am ${new Intl.DateTimeFormat('de-DE', { timeZone: timezone }).format(budget.periodEnd)}`,
-        href: `/customers/${budget.customer.id}?tab=stunden`,
+        title: `Aufladung von ${grant.customer.firstName} ${grant.customer.lastName} läuft aus`,
+        detail: `Letzte automatische Aufladung bis ${new Intl.DateTimeFormat('de-DE', { timeZone: timezone }).format(grant.endDate!)}`,
+        href: `/customers/${grant.customer.id}?tab=stunden`,
       });
     }
   }

@@ -6,8 +6,7 @@ import { employeeDisplayName } from '@/lib/utils';
 import {
   getEmployeeAllocatedMinutes,
   getEmployeeMissingTargetMinutes,
-  validateManagerPoolAllocation,
-  validateOrgPoolAllocation,
+  getManagerSelfObligationMinutes,
 } from '@/lib/hours';
 import { writeAuditLog } from '@/server/audit';
 import { db } from '@/server/db';
@@ -18,14 +17,21 @@ import {
   hasPermission,
   requireOrganizationMembership,
 } from '@/server/permissions';
+import {
+  getCustomerAccountStatsBulk,
+} from '@/server/services/hours-service';
 import { createNotification } from '@/server/services/notification-service';
 
 /**
  * Stundenzuweisung (Anforderung 11): Kundenstunden an Mitarbeiter übertragen.
  *
- * Modus 'org':  Owner/Admin/Disponent verteilen aus dem Kundenbudget.
+ * Konto-Modell: Zuweisungen hängen nicht mehr an einem Budget-Zeitraum,
+ * sondern am Stundenkonto des Kunden.
+ *
+ * Modus 'org':  Owner/Admin/Disponent verteilen aus dem Kundenguthaben
+ *               (Kontostand minus bereits aktive Org-Zuweisungen).
  * Modus 'pool': Team-Manager reichen aus dem eigenen erhaltenen Pool an ihren
- *               Unterbaum weiter (verbraucht nicht erneut das Kundenbudget).
+ *               Unterbaum weiter (verbraucht nicht erneut das Kundenguthaben).
  */
 
 export interface AllocationRecipient {
@@ -38,25 +44,18 @@ export interface AllocationRecipient {
   canReceiveHours: boolean;
 }
 
-export interface AllocationBudgetOption {
-  id: string;
-  periodStart: Date;
-  periodEnd: Date;
-  totalMinutes: number;
-  /** Verfügbare Minuten im gewählten Modus (Org-Rest bzw. eigener Pool). */
-  availableMinutes: number;
-  sourceType: string;
-  note: string | null;
-}
-
 export interface AllocationContext {
   mode: 'org' | 'pool';
   customer: { id: string; name: string };
-  budgets: AllocationBudgetOption[];
+  /** Verfügbare Minuten im gewählten Modus (Konto-Rest bzw. eigener Pool). */
+  availableMinutes: number;
+  /** Kontostand des Kunden (Anzeige). */
+  balanceMinutes: number;
+  /** Konto eingerichtet (Gutschrift oder Aufladungsregel vorhanden). */
+  hasAccount: boolean;
   recipients: AllocationRecipient[];
   currentAllocations: Array<{
     id: string;
-    budgetId: string;
     minutes: number;
     toId: string;
     toName: string;
@@ -82,6 +81,57 @@ async function resolveMode(ctx: Awaited<ReturnType<typeof requireOrganizationMem
   throw new AppError('ACCESS_DENIED');
 }
 
+function toAllocationLike(a: {
+  id: string;
+  budgetId: string | null;
+  allocatedByEmployeeId: string | null;
+  allocatedToEmployeeId: string;
+  allocatedMinutes: number;
+  status: string;
+}) {
+  return {
+    id: a.id,
+    budgetId: a.budgetId ?? '',
+    allocatedByEmployeeId: a.allocatedByEmployeeId,
+    allocatedToEmployeeId: a.allocatedToEmployeeId,
+    allocatedMinutes: a.allocatedMinutes,
+    status: a.status as 'ACTIVE' | 'REVOKED',
+  };
+}
+
+/** Verfügbare Minuten im Modus: Org = Konto-Rest, Pool = erhalten − weitergegeben. */
+async function availableMinutesFor(
+  ctx: Awaited<ReturnType<typeof requireOrganizationMembership>>,
+  mode: 'org' | 'pool',
+  customerId: string,
+): Promise<{ availableMinutes: number; balanceMinutes: number; hasAccount: boolean }> {
+  const stats = (
+    await getCustomerAccountStatsBulk(ctx.organization.id, ctx.organization.timezone, [customerId])
+  ).get(customerId);
+  const balanceMinutes = stats?.balanceMinutes ?? 0;
+  const hasAccount = stats?.hasAccount ?? false;
+
+  if (mode === 'org') {
+    return {
+      availableMinutes: Math.max(0, balanceMinutes - (stats?.allocatedMinutes ?? 0)),
+      balanceMinutes,
+      hasAccount,
+    };
+  }
+
+  const allocations = await db.hourAllocation.findMany({
+    where: { customerId, status: 'ACTIVE' },
+  });
+  return {
+    availableMinutes: Math.max(
+      0,
+      getManagerSelfObligationMinutes(allocations.map(toAllocationLike), ctx.employee!.id),
+    ),
+    balanceMinutes,
+    hasAccount,
+  };
+}
+
 export async function getAllocationContext(customerId: string): Promise<AllocationContext> {
   const ctx = await requireOrganizationMembership();
   const mode = await resolveMode(ctx);
@@ -96,15 +146,6 @@ export async function getAllocationContext(customerId: string): Promise<Allocati
   assertSameOrg(ctx, customer);
 
   const period = monthPeriodInZone(new Date(), ctx.organization.timezone);
-  const budgets = await db.customerHourBudget.findMany({
-    where: {
-      customerId,
-      periodStart: { lt: period.end },
-      periodEnd: { gte: new Date(period.start.getTime() - 45 * 24 * 3600 * 1000) },
-    },
-    orderBy: { periodStart: 'desc' },
-    include: { adjustments: true, allocations: true },
-  });
 
   // Alle (nicht gelöschten) Mitarbeiter für Hierarchie & Empfängerliste.
   const employees = await db.employee.findMany({
@@ -142,12 +183,13 @@ export async function getAllocationContext(customerId: string): Promise<Allocati
       validUntil: { gte: period.start },
     },
   });
+  const monthAllocationLikes = monthAllocations.map(toAllocationLike);
 
   const recipients: AllocationRecipient[] = recipientIds
     .map((id) => {
       const employee = employees.find((e) => e.id === id)!;
       const target = effectiveMonthTarget(employee);
-      const received = getEmployeeAllocatedMinutes(monthAllocations, id);
+      const received = getEmployeeAllocatedMinutes(monthAllocationLikes, id);
       return {
         id,
         // Eigenes Profil markieren – die Leitung kann sich selbst Stunden zuweisen.
@@ -162,32 +204,11 @@ export async function getAllocationContext(customerId: string): Promise<Allocati
     .filter((r) => r.canReceiveHours)
     .sort((a, b) => a.depth - b.depth || a.name.localeCompare(b.name));
 
-  const budgetOptions: AllocationBudgetOption[] = budgets.map((budget) => {
-    const total =
-      budget.budgetMinutes + budget.adjustments.reduce((sum, a) => sum + a.adjustmentMinutes, 0);
-    const orgAllocated = budget.allocations
-      .filter((a) => a.status === 'ACTIVE' && a.allocatedByEmployeeId === null)
-      .reduce((sum, a) => sum + a.allocatedMinutes, 0);
-    let available = total - orgAllocated;
-    if (mode === 'pool') {
-      const received = budget.allocations
-        .filter((a) => a.status === 'ACTIVE' && a.allocatedToEmployeeId === ctx.employee!.id)
-        .reduce((sum, a) => sum + a.allocatedMinutes, 0);
-      const forwarded = budget.allocations
-        .filter((a) => a.status === 'ACTIVE' && a.allocatedByEmployeeId === ctx.employee!.id)
-        .reduce((sum, a) => sum + a.allocatedMinutes, 0);
-      available = received - forwarded;
-    }
-    return {
-      id: budget.id,
-      periodStart: budget.periodStart,
-      periodEnd: budget.periodEnd,
-      totalMinutes: total,
-      availableMinutes: Math.max(0, available),
-      sourceType: budget.sourceType,
-      note: budget.note,
-    };
-  });
+  const { availableMinutes, balanceMinutes, hasAccount } = await availableMinutesFor(
+    ctx,
+    mode,
+    customerId,
+  );
 
   const employeeName = (id: string | null) => {
     if (!id) return null;
@@ -195,72 +216,70 @@ export async function getAllocationContext(customerId: string): Promise<Allocati
     return employee ? `${employee.firstName} ${employee.lastName}` : null;
   };
 
+  const customerAllocations = await db.hourAllocation.findMany({
+    where: { customerId, status: 'ACTIVE' },
+    orderBy: { createdAt: 'asc' },
+  });
+
   return {
     mode,
     customer: { id: customer.id, name: `${customer.firstName} ${customer.lastName}` },
-    budgets: budgetOptions,
+    availableMinutes,
+    balanceMinutes,
+    hasAccount,
     recipients,
-    currentAllocations: budgets.flatMap((budget) =>
-      budget.allocations
-        .filter((a) => a.status === 'ACTIVE')
-        .map((a) => ({
-          id: a.id,
-          budgetId: budget.id,
-          minutes: a.allocatedMinutes,
-          toId: a.allocatedToEmployeeId,
-          toName: employeeName(a.allocatedToEmployeeId) ?? 'Unbekannt',
-          byName: employeeName(a.allocatedByEmployeeId),
-        })),
-    ),
+    currentAllocations: customerAllocations.map((a) => ({
+      id: a.id,
+      minutes: a.allocatedMinutes,
+      toId: a.allocatedToEmployeeId,
+      toName: employeeName(a.allocatedToEmployeeId) ?? 'Unbekannt',
+      byName: employeeName(a.allocatedByEmployeeId),
+    })),
   };
 }
 
 // ---------------------------------------------------------------------------
 
-/** Kunden mit Budget im aktuellen Monat (für den Einstieg über die Mitarbeiterseite). */
+/** Kunden mit verfügbarem Guthaben (für den Einstieg über die Mitarbeiterseite). */
 export async function listAllocatableCustomers(): Promise<
   Array<{ id: string; name: string; availableMinutes: number }>
 > {
   const ctx = await requireOrganizationMembership();
   await resolveMode(ctx);
-  const period = monthPeriodInZone(new Date(), ctx.organization.timezone);
 
-  const budgets = await db.customerHourBudget.findMany({
+  const customers = await db.customer.findMany({
     where: {
       organizationId: ctx.organization.id,
-      periodStart: { lt: period.end },
-      periodEnd: { gte: period.start },
-      customer: { deletedAt: null, status: { not: 'ARCHIVED' } },
+      deletedAt: null,
+      status: { not: 'ARCHIVED' },
     },
-    include: {
-      adjustments: true,
-      allocations: { where: { status: 'ACTIVE' } },
-      customer: { select: { id: true, firstName: true, lastName: true } },
-    },
+    select: { id: true, firstName: true, lastName: true },
   });
+  const stats = await getCustomerAccountStatsBulk(
+    ctx.organization.id,
+    ctx.organization.timezone,
+    customers.map((c) => c.id),
+  );
 
-  const byCustomer = new Map<string, { name: string; availableMinutes: number }>();
-  for (const budget of budgets) {
-    const total =
-      budget.budgetMinutes + budget.adjustments.reduce((sum, a) => sum + a.adjustmentMinutes, 0);
-    const orgAllocated = budget.allocations
-      .filter((a) => a.allocatedByEmployeeId === null)
-      .reduce((sum, a) => sum + a.allocatedMinutes, 0);
-    const entry = byCustomer.get(budget.customer.id) ?? {
-      name: `${budget.customer.firstName} ${budget.customer.lastName}`,
-      availableMinutes: 0,
-    };
-    entry.availableMinutes += Math.max(0, total - orgAllocated);
-    byCustomer.set(budget.customer.id, entry);
-  }
-  return [...byCustomer.entries()]
-    .map(([id, value]) => ({ id, ...value }))
+  return customers
+    .map((customer) => {
+      const stat = stats.get(customer.id);
+      return {
+        id: customer.id,
+        name: `${customer.firstName} ${customer.lastName}`,
+        availableMinutes: stat
+          ? Math.max(0, stat.balanceMinutes - stat.allocatedMinutes)
+          : 0,
+        hasAccount: stat?.hasAccount ?? false,
+      };
+    })
+    .filter((entry) => entry.hasAccount && entry.availableMinutes > 0)
+    .map(({ id, name, availableMinutes }) => ({ id, name, availableMinutes }))
     .sort((a, b) => b.availableMinutes - a.availableMinutes || a.name.localeCompare(b.name));
 }
 
 export async function allocateHours(input: {
   customerId: string;
-  budgetId: string;
   toEmployeeId: string;
   minutes: number;
   note?: string;
@@ -272,86 +291,59 @@ export async function allocateHours(input: {
     throw new AppError('VALIDATION_FAILED', { message: 'Die Minutenanzahl muss größer als 0 sein.' });
   }
 
-  const budget = await db.customerHourBudget.findUnique({
-    where: { id: input.budgetId },
-    include: { adjustments: true, allocations: { where: { status: 'ACTIVE' } } },
-  });
-  if (!budget) throw new AppError('BUDGET_NOT_FOUND');
-  assertSameOrg(ctx, budget);
-  if (budget.customerId !== input.customerId) {
-    throw new AppError('ORGANIZATION_SCOPE_VIOLATION', {
-      message: 'Das Budget gehört nicht zu diesem Kunden.',
-    });
-  }
+  const customer = await db.customer.findUnique({ where: { id: input.customerId } });
+  assertSameOrg(ctx, customer);
 
-  const recipient = await db.employee.findUnique({ where: { id: input.toEmployeeId } });
-  assertSameOrg(ctx, recipient);
   const recipientRecord = await db.employee.findUnique({
     where: { id: input.toEmployeeId },
     include: { user: { select: { id: true } } },
   });
+  assertSameOrg(ctx, recipientRecord);
   if (!recipientRecord || recipientRecord.deletedAt) throw new AppError('EMPLOYEE_NOT_FOUND');
   if (recipientRecord.status !== 'ACTIVE') throw new AppError('RECIPIENT_INACTIVE');
   if (!recipientRecord.canReceiveHours) throw new AppError('RECIPIENT_CANNOT_RECEIVE_HOURS');
 
-  const allocationsWithId = budget.allocations.map((a) => ({
-    id: a.id,
-    budgetId: a.budgetId,
-    allocatedByEmployeeId: a.allocatedByEmployeeId,
-    allocatedToEmployeeId: a.allocatedToEmployeeId,
-    allocatedMinutes: a.allocatedMinutes,
-    status: a.status as 'ACTIVE' | 'REVOKED',
-  }));
-
-  let allocatedByEmployeeId: string | null = null;
-  if (mode === 'org') {
-    const validation = validateOrgPoolAllocation({
-      budgets: [{ id: budget.id, budgetMinutes: budget.budgetMinutes }],
-      adjustments: budget.adjustments.map((a) => ({
-        customerHourBudgetId: a.customerHourBudgetId,
-        adjustmentMinutes: a.adjustmentMinutes,
-      })),
-      allocations: allocationsWithId,
-      requestedMinutes: input.minutes,
-    });
-    if (!validation.ok) {
-      throw new AppError(validation.code, { details: { availableMinutes: validation.availableMinutes } });
-    }
-  } else {
-    const manager = ctx.employee!;
+  if (mode === 'pool') {
     // Scope: Empfänger muss im eigenen Unterbaum liegen (nicht man selbst).
     const nodes = await db.employee.findMany({
       where: { organizationId: ctx.organization.id, deletedAt: null },
       select: { id: true, managerEmployeeId: true },
     });
-    const subtree = collectSubtree(nodes, manager.id);
+    const subtree = collectSubtree(nodes, ctx.employee!.id);
     if (!subtree.includes(input.toEmployeeId)) {
       throw new AppError('ACCESS_DENIED', {
         message: 'Stunden können nur an eigene (untergeordnete) Mitarbeiter weitergegeben werden.',
       });
     }
-    const validation = validateManagerPoolAllocation({
-      allocations: allocationsWithId,
-      managerEmployeeId: manager.id,
-      requestedMinutes: input.minutes,
-    });
-    if (!validation.ok) {
-      throw new AppError(validation.code, { details: { availableMinutes: validation.availableMinutes } });
-    }
-    allocatedByEmployeeId = manager.id;
   }
+
+  const { availableMinutes, hasAccount } = await availableMinutesFor(ctx, mode, input.customerId);
+  if (mode === 'org' && !hasAccount) {
+    throw new AppError('HOUR_BUDGET_EXCEEDED', {
+      message: 'Für den Kunden ist noch kein Stundenkonto eingerichtet.',
+      details: { availableMinutes: 0 },
+    });
+  }
+  if (input.minutes > availableMinutes) {
+    throw new AppError(mode === 'org' ? 'HOUR_BUDGET_EXCEEDED' : 'ALLOCATION_POOL_EXCEEDED', {
+      details: { availableMinutes },
+    });
+  }
+
+  // Gültigkeit: aktueller Monat (Kennzahlen der Mitarbeiter sind monatsbezogen).
+  const period = monthPeriodInZone(new Date(), ctx.organization.timezone);
 
   const allocation = await db.$transaction(async (tx) => {
     const created = await tx.hourAllocation.create({
       data: {
         organizationId: ctx.organization.id,
         customerId: input.customerId,
-        budgetId: input.budgetId,
-        allocatedByEmployeeId,
+        budgetId: null,
+        allocatedByEmployeeId: mode === 'pool' ? ctx.employee!.id : null,
         allocatedToEmployeeId: input.toEmployeeId,
         allocatedMinutes: input.minutes,
-        validFrom: budget.periodStart,
-        validUntil: budget.periodEnd,
+        validFrom: period.start,
+        validUntil: new Date(period.end.getTime() - 1),
         note: input.note || null,
       },
     });
@@ -376,16 +368,12 @@ export async function allocateHours(input: {
 
   // Benachrichtigung an den Empfänger (falls er ein Benutzerkonto hat).
   if (recipientRecord.user) {
-    const customer = await db.customer.findUnique({
-      where: { id: input.customerId },
-      select: { firstName: true, lastName: true },
-    });
     await createNotification({
       organizationId: ctx.organization.id,
       userId: recipientRecord.user.id,
       type: 'HOURS_ALLOCATED',
       title: 'Stunden erhalten',
-      message: `Dir wurden ${Math.round(input.minutes / 60 * 100) / 100} Std. für ${customer?.firstName ?? ''} ${customer?.lastName ?? ''} übertragen.`,
+      message: `Dir wurden ${Math.round(input.minutes / 60 * 100) / 100} Std. für ${customer.firstName} ${customer.lastName} übertragen.`,
       targetUrl: `/customers/${input.customerId}?tab=stunden`,
     });
   }
