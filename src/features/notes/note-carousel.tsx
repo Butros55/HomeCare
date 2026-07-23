@@ -25,11 +25,43 @@ const MAX_TILT = 1.4;
 const TILT_DEGREES = 7;
 const DROP_PIXELS = 26;
 
+/**
+ * Höhe der eingeblendeten Bildschirmtastatur. Auf iPad/iPhone schrumpft nur
+ * das visuelle Viewport – das Karussell rückt um diesen Betrag nach oben,
+ * damit das Namensfeld beim Tippen sichtbar bleibt.
+ */
+function useKeyboardInset(): number {
+  const [inset, setInset] = React.useState(0);
+
+  React.useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const update = () => {
+      const covered = window.innerHeight - (viewport.height + viewport.offsetTop);
+      // Kleine Abweichungen (Browserleisten) sind keine Tastatur.
+      setInset(covered > 80 ? Math.round(covered) : 0);
+    };
+    const initial = window.requestAnimationFrame(update);
+    viewport.addEventListener('resize', update);
+    viewport.addEventListener('scroll', update);
+    return () => {
+      window.cancelAnimationFrame(initial);
+      viewport.removeEventListener('resize', update);
+      viewport.removeEventListener('scroll', update);
+    };
+  }, []);
+
+  return inset;
+}
+
 /** Einflug: von links nach rechts nacheinander, mit leichtem Überschwingen. */
 const ENTER_STAGGER_MS = 45;
 const LEAVE_STAGGER_MS = 30;
-const ENTER_EASING = 'cubic-bezier(0.34, 1.56, 0.64, 1)';
+/** Dezentes Überschwingen – stärkere Kurven würden oben sichtbar anschlagen. */
+const ENTER_EASING = 'cubic-bezier(0.21, 1.11, 0.35, 1)';
 const LEAVE_EASING = 'cubic-bezier(0.4, 0, 1, 1)';
+/** Luft über den Karten, damit das Überschwingen nicht abgeschnitten wird. */
+const OVERSHOOT_HEADROOM = '2.5rem';
 
 /**
  * Blätter-Karussell: die Seiten liegen als hochkante Papier-Karten direkt auf
@@ -73,6 +105,7 @@ export function NoteCarousel({
   const cardRefs = React.useRef<Map<string, HTMLElement>>(new Map());
   const frameRef = React.useRef<number | null>(null);
   const [editingId, setEditingId] = React.useState<string | null>(null);
+  const keyboardInset = useKeyboardInset();
 
   // Index 0 ist das leere „+"-Blatt ganz links – es fliegt als Erstes herein.
   const total = notes.length + 1;
@@ -124,10 +157,18 @@ export function NoteCarousel({
     };
   }, [applyFan, notes.length, open]);
 
+  // Aktive Seite mittig einfahren – bewusst nur waagerecht im Karussell selbst,
+  // damit scrollIntoView nicht nebenbei die Seite darunter verschiebt.
   React.useEffect(() => {
     if (!open || !selectedId) return;
+    const scroller = scrollerRef.current;
     const node = cardRefs.current.get(selectedId);
-    node?.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+    if (!scroller || !node) return;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    const delta =
+      nodeRect.left + nodeRect.width / 2 - (scrollerRect.left + scrollerRect.width / 2);
+    if (Math.abs(delta) > 1) scroller.scrollBy({ left: delta, behavior: 'smooth' });
   }, [open, selectedId]);
 
   React.useEffect(() => {
@@ -184,13 +225,18 @@ export function NoteCarousel({
       className={cn(
         // Kein eigenes Panel: die Karten liegen direkt auf dem Papier – und
         // oberhalb des Stift-Docks, damit dieses frei bedienbar bleibt.
-        'absolute inset-x-0 bottom-16 z-40 overflow-hidden pointer-coarse:bottom-20',
+        // Bewusst ohne overflow-hidden: sonst würde der Einflug oben anschlagen
+        // (verborgen wird über die Deckkraft, geclippt wird vom Elternbereich).
+        'absolute inset-x-0 bottom-16 z-40 pointer-coarse:bottom-20',
         open ? 'pointer-events-auto' : 'pointer-events-none',
       )}
       style={
         {
           '--sheet-h': SHEET_HEIGHT,
-          height: `calc(${SHEET_HEIGHT} + 8.5rem)`,
+          height: `calc(${SHEET_HEIGHT} + 8.5rem + ${OVERSHOOT_HEADROOM})`,
+          // Mit der Bildschirmtastatur nach oben wandern und wieder zurück.
+          transform: keyboardInset > 0 ? `translateY(-${keyboardInset}px)` : undefined,
+          transition: 'transform 220ms ease-out',
         } as React.CSSProperties
       }
       aria-hidden={!open}
@@ -219,8 +265,11 @@ export function NoteCarousel({
       <div
         ref={scrollerRef}
         onScroll={scheduleFan}
-        className="scrollbar-none flex snap-x snap-proximity items-end gap-3 overflow-x-auto overflow-y-hidden pt-3 pb-8"
-        style={{ paddingInline: `max(1rem, calc(50% - var(--sheet-h) / ${SHEET_RATIO * 2}))` }}
+        className="scrollbar-none flex snap-x snap-proximity items-end gap-3 overflow-x-auto overflow-y-hidden pb-8"
+        style={{
+          paddingTop: OVERSHOOT_HEADROOM,
+          paddingInline: `max(1rem, calc(50% - var(--sheet-h) / ${SHEET_RATIO * 2}))`,
+        }}
       >
         {/* Leeres Blatt: ein Tipp darauf legt sofort eine neue Seite an. */}
         <div className="shrink-0" style={flightStyle(0)}>
@@ -245,11 +294,7 @@ export function NoteCarousel({
           const state = saveStates[note.id] ?? 'saved';
           const editing = editingId === note.id;
           return (
-            <div
-              key={note.id}
-              className={cn('shrink-0 will-change-transform', flightClass)}
-              style={flightStyle(index + 1)}
-            >
+            <div key={note.id} className="shrink-0" style={flightStyle(index + 1)}>
               <SheetColumn ref={(node) => registerCard(note.id, node)}>
                 <SheetShell
                   onClick={() => onSelect(note.id)}
