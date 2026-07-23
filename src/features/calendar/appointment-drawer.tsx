@@ -95,6 +95,7 @@ export function AppointmentDrawer({
   employees,
   customers,
   onChanged,
+  onDeleted,
 }: {
   appointmentId: string;
   onClose: () => void;
@@ -109,6 +110,11 @@ export function AppointmentDrawer({
    * router.refresh().
    */
   onChanged?: () => void;
+  /**
+   * Nach dem Löschen aufgerufen: die IDs verschwinden sofort optimistisch aus
+   * dem Kalender (ohne Refetch). Fallback: onChanged/router.refresh.
+   */
+  onDeleted?: (ids: string[]) => void;
 }) {
   const router = useRouter();
   const [detail, setDetail] = React.useState<Detail | null>(null);
@@ -787,9 +793,18 @@ export function AppointmentDrawer({
               toast.success(cancelMode === 'delete' ? 'Termin gelöscht.' : 'Termin abgesagt.');
               setCancelOpen(false);
               setCancelMode('cancel');
-              // Beim Löschen ist der Termin weg → Drawer schließen.
-              if (cancelMode === 'delete') onClose();
-              else refresh();
+              if (cancelMode === 'delete') {
+                // Optimistisch: gelöschte Events sofort per Listener entfernen
+                // (kein Refetch/Reload) und Drawer schließen.
+                const deletedIds =
+                  'deletedIds' in result.data ? (result.data as { deletedIds: string[] }).deletedIds : [];
+                if (onDeleted) onDeleted(deletedIds);
+                else if (onChanged) onChanged();
+                else router.refresh();
+                onClose();
+              } else {
+                refresh();
+              }
             } else toast.error(result.message);
           });
         }}
@@ -853,6 +868,15 @@ export function AppointmentDrawer({
                 </button>
               ))}
             </div>
+          ) : null}
+
+          {/* Hinweis: Löschen einer abgesagten Serie betrifft nur die bereits
+              abgesagten Vorkommen (Abgeschlossene bleiben erhalten). */}
+          {isCancelled && cancelMode === 'delete' && detail?.series && cancelScope !== 'single' ? (
+            <p className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+              Betrifft nur die bereits abgesagten Termine dieser Serie – abgeschlossene Einsätze
+              bleiben als Historie erhalten.
+            </p>
           ) : null}
 
           {cancelMode === 'cancel' ? (

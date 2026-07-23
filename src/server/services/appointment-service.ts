@@ -1080,7 +1080,7 @@ export async function cancelAppointment(
 export async function deleteAppointment(
   appointmentId: string,
   options: { scope: EditScope },
-): Promise<void> {
+): Promise<{ deletedIds: string[] }> {
   const ctx = await requireOrganizationMembership();
   const appointment = await db.appointment.findUnique({
     where: { id: appointmentId },
@@ -1127,7 +1127,7 @@ export async function deleteAppointment(
         tx,
       );
     });
-    return;
+    return { deletedIds: [appointment.id] };
   }
 
   // Serie: „ganze Serie" oder „dieser und folgende" – künftige Vorkommen löschen.
@@ -1136,20 +1136,29 @@ export async function deleteAppointment(
       ? null
       : (appointment.occurrenceDate ?? toUtcDateOnly(appointment.startAt));
 
+    // Löscht man von einem bereits abgesagten Termin aus, betrifft es NUR die
+    // abgesagten Vorkommen der Serie. Von einem aktiven Termin aus werden die
+    // geplanten UND abgesagten gelöscht – Abgeschlossene bleiben immer erhalten.
+    const triggerCancelled =
+      appointment.status === 'CANCELLED' || appointment.status === 'NO_SHOW';
+    const deletableStatuses = triggerCancelled
+      ? (['CANCELLED', 'NO_SHOW'] as const)
+      : (['DRAFT', 'PLANNED', 'CONFIRMED', 'IN_PROGRESS', 'CANCELLED', 'NO_SHOW'] as const);
+
+  let deletedIds: string[] = [];
   await db.$transaction(async (tx) => {
     const targets = await tx.appointment.findMany({
       where: {
         seriesId: appointment.seriesId!,
         deletedAt: null,
-        // Abgeschlossene Einsätze bleiben als Historie erhalten – gelöscht werden
-        // die geplanten UND die bereits abgesagten Vorkommen der Serie.
-        status: { not: 'COMPLETED' },
+        status: { in: [...deletableStatuses] },
         ...(fromDate ? { occurrenceDate: { gte: fromDate } } : {}),
       },
       select: { id: true },
     });
+    deletedIds = targets.map((a) => a.id);
     await tx.appointment.updateMany({
-      where: { id: { in: targets.map((a) => a.id) } },
+      where: { id: { in: deletedIds } },
       data: { deletedAt: now },
     });
     await tx.appointmentSeries.update({
@@ -1166,11 +1175,12 @@ export async function deleteAppointment(
         action: 'series.deleted',
         entityType: 'AppointmentSeries',
         entityId: appointment.seriesId!,
-        metadata: { scope: options.scope, deletedCount: targets.length },
+        metadata: { scope: options.scope, deletedCount: deletedIds.length },
       },
       tx,
     );
   });
+  return { deletedIds };
 }
 
 /**

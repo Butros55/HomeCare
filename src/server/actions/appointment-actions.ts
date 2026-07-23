@@ -225,11 +225,11 @@ export async function cancelAppointmentAction(
 export async function deleteAppointmentAction(
   appointmentId: string,
   scope: 'single' | 'following' | 'all',
-): Promise<ActionResult<{ done: true }>> {
+): Promise<ActionResult<{ deletedIds: string[] }>> {
   return runAction(async () => {
-    await deleteAppointment(appointmentId, { scope });
+    const result = await deleteAppointment(appointmentId, { scope });
     revalidateCalendarPaths();
-    return { done: true as const };
+    return result;
   });
 }
 

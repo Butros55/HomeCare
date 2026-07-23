@@ -115,6 +115,14 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
     setReloadToken((token) => token + 1);
   }, []);
 
+  // Optimistisch: gelöschte Termine sofort aus der lokalen Liste entfernen –
+  // die Divs verschwinden per State-Update, ganz ohne Refetch/Reload.
+  const removeEvents = React.useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    setEvents((current) => current.filter((event) => !idSet.has(event.id)));
+  }, []);
+
   const proEvents = React.useMemo(
     () => events.map((event) => toProEvent(event, props.soloMode)),
     [events, props.soloMode],
@@ -240,6 +248,7 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
           appointmentId={drawerAppointmentId}
           onClose={() => setDrawerAppointmentId(null)}
           onChanged={refetch}
+          onDeleted={removeEvents}
           canManage={props.canManage}
           soloMode={props.soloMode}
           ownEmployeeId={props.ownEmployeeId}
