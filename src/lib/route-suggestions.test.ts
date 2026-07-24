@@ -4,6 +4,7 @@ import type { Matrix, RouteStopInput } from './route-optimizer';
 import {
   candidateWindows,
   computeOpenBudgetMinutes,
+  enclosingFlexWindow,
   evaluateCandidate,
   intersectWindows,
   minutesToTime,
@@ -116,6 +117,43 @@ describe('Budget & Vorschlagsdauer', () => {
       suggestionDurationMinutes({ defaultDurationMinutes: 120, openMinutes: 10, windows }),
     ).toBeNull();
     expect(suggestionDurationMinutes({ defaultDurationMinutes: 120, openMinutes: 60, windows: [] })).toBeNull();
+  });
+});
+
+describe('enclosingFlexWindow', () => {
+  it('liefert das Verfügbarkeitsfenster, das den Einsatz enthält', () => {
+    const window = enclosingFlexWindow({
+      customerSlots: [
+        { startTime: '08:00', endTime: '10:00' },
+        { startTime: '13:00', endTime: '17:00' },
+      ],
+      employeeSlots: [{ startTime: '09:00', endTime: '18:00' }],
+      startMinute: timeToMinutes('14:00'),
+      endMinute: timeToMinutes('15:00'),
+    });
+    expect(window).toEqual({ startMinute: timeToMinutes('13:00'), endMinute: timeToMinutes('17:00') });
+  });
+
+  it('nutzt ohne gepflegte Fenster das Standard-Planungsfenster', () => {
+    const fallback = { startMinute: 6 * 60, endMinute: 22 * 60 };
+    const window = enclosingFlexWindow({
+      customerSlots: [],
+      employeeSlots: [],
+      startMinute: timeToMinutes('10:45'),
+      endMinute: timeToMinutes('12:45'),
+      fallbackWindow: fallback,
+    });
+    expect(window).toEqual(fallback);
+  });
+
+  it('fällt auf den Einsatz selbst zurück, wenn kein Fenster ihn umschließt', () => {
+    const window = enclosingFlexWindow({
+      customerSlots: [{ startTime: '08:00', endTime: '09:00' }],
+      employeeSlots: [],
+      startMinute: timeToMinutes('10:00'),
+      endMinute: timeToMinutes('11:00'),
+    });
+    expect(window).toEqual({ startMinute: timeToMinutes('10:00'), endMinute: timeToMinutes('11:00') });
   });
 });
 

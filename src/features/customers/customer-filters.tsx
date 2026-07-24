@@ -57,8 +57,14 @@ export function CustomerFilters({
   const city = searchParams.get('city') ?? '';
   const employeeId = searchParams.get('employeeId') ?? '';
   const openHours = searchParams.get('openHours') === '1';
+  const withoutNext = searchParams.get('withoutNext') === '1';
   const hasFilters =
-    Boolean(searchParams.get('q')) || status !== 'ACTIVE' || city || employeeId || openHours;
+    Boolean(searchParams.get('q')) ||
+    status !== 'ACTIVE' ||
+    city ||
+    employeeId ||
+    openHours ||
+    withoutNext;
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -123,6 +129,15 @@ export function CustomerFilters({
           aria-label="Nur Kunden mit offenen Stunden"
         />
         Offene Stunden
+      </label>
+
+      <label className="hidden h-9 pointer-coarse:h-11 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-line)] bg-[var(--color-panel-sunken)] px-3 text-[length:var(--text-sm)] text-[var(--color-ink-muted)] md:flex">
+        <Checkbox
+          checked={withoutNext}
+          onCheckedChange={(checked) => setParam('withoutNext', checked ? '1' : null)}
+          aria-label="Nur Kunden ohne nächste Planung"
+        />
+        Ohne nächste Planung
       </label>
 
       {hasFilters ? (

@@ -141,7 +141,7 @@ export default async function CustomerDetailPage({
         </nav>
       </PageHeader>
 
-      <div className="space-y-4 p-4 sm:p-5">
+      <div className="mx-auto w-full max-w-[var(--page-max)] space-y-4 p-4 sm:p-5">
         {tab === 'uebersicht' ? (
           <OverviewTab
             customerId={customerId}

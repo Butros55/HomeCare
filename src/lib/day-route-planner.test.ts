@@ -41,7 +41,7 @@ const baseOptions = {
 };
 
 describe('buildDayVariants', () => {
-  it('füllt aus leerer Basis bis zur Zielarbeitszeit auf', () => {
+  it('legt bei Zielarbeitszeit Routen möglichst genau auf das Ziel (nicht volle Auslastung)', () => {
     // Matrix: [Start, K1, K2, K3, Ziel]
     const candidates = [candidate('a'), candidate('b'), candidate('c')];
     const variants = buildDayVariants({
@@ -51,18 +51,16 @@ describe('buildDayVariants', () => {
       options: { ...baseOptions, targetWorkMinutes: 120 },
     });
 
-    const compact = variants.find((v) => v.objective === 'compact')!;
-    expect(compact.route.feasible).toBe(true);
-    // Ziel 120 Min. → zwei 60-Minuten-Einsätze reichen.
-    expect(compact.selectedCandidateIds).toHaveLength(2);
-    expect(compact.route.totalServiceMinutes).toBe(120);
-
-    // „Volle Auslastung" nimmt alles Machbare mit.
-    const full = variants.find((v) => v.objective === 'full');
-    if (full) {
-      expect(full.selectedCandidateIds).toHaveLength(3);
-      expect(full.route.totalServiceMinutes).toBe(180);
+    expect(variants.length).toBeGreaterThanOrEqual(1);
+    for (const variant of variants) {
+      expect(variant.route.feasible).toBe(true);
+      // Ziel 120 = zwei 60-Minuten-Einsätze; nie deutlich darüber (kein 180).
+      expect(variant.route.totalServiceMinutes).toBeLessThanOrEqual(120);
     }
+    // Mindestens eine Variante trifft das Ziel exakt.
+    expect(variants.some((v) => v.route.totalServiceMinutes === 120)).toBe(true);
+    // Jede Variante trägt einen beschreibenden Namen.
+    expect(variants.every((v) => v.label.startsWith('Ziel'))).toBe(true);
   });
 
   it('respektiert die späteste Rückkehr als harte Grenze', () => {

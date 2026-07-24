@@ -107,7 +107,7 @@ export default async function EmployeesPage({
         </div>
       </PageHeader>
 
-      <div className="p-4 sm:p-5" data-tour="employees-list">
+      <div className="mx-auto w-full max-w-[var(--page-max)] p-4 sm:p-5" data-tour="employees-list">
         {rows.length === 0 ? (
           <EmptyState
             icon={<UsersRound />}

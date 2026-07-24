@@ -37,6 +37,10 @@ interface ProTimelineCalendarProps {
   onMonthChange: (month: Date) => void;
   eventsByDay: Map<string, ProCalendarEvent[]>;
   today: Date;
+  /** Verwaltungsansicht: Mitarbeiter-Initialen am Block zeigen. */
+  showEmployee?: boolean;
+  /** Termin, der nach dem Anspringen kurz hervorgehoben wird. */
+  highlightEventId?: string | null;
   onOpenEvent: (id: string) => void;
   onOpenPanel: (page: 'calendars' | 'day') => void;
   onCreate: (key: string) => void;
@@ -55,6 +59,8 @@ interface ScheduleEntry {
   subtitle: string;
   hasConflict: boolean;
   isSeries: boolean;
+  isFlexible: boolean;
+  employeeName: string | null;
   customerColor: string;
   startMinutes: number;
   endMinutes: number;
@@ -164,6 +170,16 @@ function timelineHeight(startMinutes: number, endMinutes: number): string {
   return `${Math.max(4.2, end - start)}%`;
 }
 
+/** Initialen aus einem Namen ("Sofia Lorenz" → "SL"). */
+function initialsOf(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word[0]!.toUpperCase())
+    .join('');
+}
+
 function eventToScheduleEntry(event: ProCalendarEvent): ScheduleEntry {
   const start = new Date(event.start);
   const end = new Date(event.end);
@@ -174,6 +190,8 @@ function eventToScheduleEntry(event: ProCalendarEvent): ScheduleEntry {
     subtitle: event.detail || 'Termin',
     hasConflict: event.hasConflict,
     isSeries: event.isSeries,
+    isFlexible: event.isFlexible,
+    employeeName: event.employeeName,
     customerColor: event.customerColor,
     startMinutes: minutesOfDay(start),
     endMinutes: Math.max(minutesOfDay(start) + 30, minutesOfDay(end)),
@@ -193,6 +211,8 @@ export function ProTimelineCalendar({
   onMonthChange,
   eventsByDay,
   today,
+  showEmployee = false,
+  highlightEventId = null,
   onOpenEvent,
   onOpenPanel,
   onCreate,
@@ -384,8 +404,32 @@ export function ProTimelineCalendar({
       if (innerRaf) cancelAnimationFrame(innerRaf);
       window.clearTimeout(timer);
     };
-     
+
   }, [viewMode]);
+
+  // Deep-Link: den hervorgehobenen Termin in den sichtbaren Bereich scrollen
+  // (überschreibt das „auf jetzt scrollen" oben, indem es etwas später läuft).
+  useEffect(() => {
+    if (!highlightEventId) return;
+    const target = (eventsByDay.get(selectedKey) ?? []).find(
+      (event) => event.id === highlightEventId,
+    );
+    if (!target) return;
+    const minutes = minutesOfDay(new Date(target.start));
+    const scrollToEvent = () => {
+      const el = scrollRef.current;
+      if (!el) return;
+      const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
+      const top = el.scrollHeight * (minutes / (24 * 60));
+      el.scrollTop = Math.min(maxScroll, Math.max(0, top - el.clientHeight * 0.4));
+    };
+    const raf = requestAnimationFrame(() => requestAnimationFrame(scrollToEvent));
+    const timer = window.setTimeout(scrollToEvent, 220);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+    };
+  }, [highlightEventId, selectedKey, eventsByDay]);
 
   const clampDayOffset = (offset: number) => Math.max(-MAX_MOMENTUM_DAYS, Math.min(MAX_MOMENTUM_DAYS, offset));
 
@@ -802,7 +846,8 @@ export function ProTimelineCalendar({
               className={cn(
                 'absolute z-10 overflow-hidden rounded-md border px-2 py-1.5 text-left shadow-sm transition-[filter] hover:brightness-[0.97]',
                 style.block,
-                entry.hasConflict && 'ring-2 ring-red-500/70',
+                entry.hasConflict && 'ring-2 ring-[var(--color-danger)]',
+                entry.id === highlightEventId && 'z-20 animate-pulse ring-2 ring-[var(--color-brand)]',
               )}
               style={{
                 top: timelinePosition(entry.startMinutes),
@@ -813,15 +858,20 @@ export function ProTimelineCalendar({
               }}
             >
               <span className={cn('absolute bottom-1.5 left-1 top-1.5 w-1 rounded-full', style.rail)} />
-              {/* Marker oben rechts: Konflikt (rote Plakette) + Serie (subtil). */}
-              {(entry.hasConflict || entry.isSeries) && (
+              {/* Marker oben rechts: Konflikt (rote Plakette), flexibel (↔), Serie (↻). */}
+              {(entry.hasConflict || entry.isSeries || entry.isFlexible) && (
                 <span className="pointer-events-none absolute right-1 top-1 flex items-center gap-1">
                   {entry.hasConflict && (
                     <span
                       className="grid size-4 place-items-center rounded-full bg-[var(--color-danger)] text-[9px] font-bold text-white shadow-sm"
-                      title="Terminkonflikt"
+                      title="Hinweis: bitte prüfen"
                     >
                       !
+                    </span>
+                  )}
+                  {entry.isFlexible && (
+                    <span className="text-xs leading-none opacity-70" title="Flexibler Termin" aria-hidden>
+                      ↔
                     </span>
                   )}
                   {entry.isSeries && (
@@ -831,8 +881,18 @@ export function ProTimelineCalendar({
                   )}
                 </span>
               )}
-              <div className={cn('min-w-0 pl-2', (entry.hasConflict || entry.isSeries) && 'pr-5')}>
-                <p className={cn('truncate text-sm font-bold leading-tight', style.title)}>{entry.title}</p>
+              <div className={cn('min-w-0 pl-2', (entry.hasConflict || entry.isSeries || entry.isFlexible) && 'pr-6')}>
+                <p className={cn('flex items-center gap-1 truncate text-sm font-bold leading-tight', style.title)}>
+                  {showEmployee && entry.employeeName ? (
+                    <span
+                      className="grid size-4 shrink-0 place-items-center rounded-full bg-black/25 text-[8px] font-bold leading-none"
+                      title={entry.employeeName}
+                    >
+                      {initialsOf(entry.employeeName)}
+                    </span>
+                  ) : null}
+                  <span className="min-w-0 flex-1 truncate">{entry.title}</span>
+                </p>
                 <p className="mt-0.5 line-clamp-2 text-[11px] font-medium leading-tight opacity-75">{entry.subtitle}</p>
                 <p className="mt-0.5 text-[11px] font-semibold leading-tight opacity-75">
                   {formatMinutes(entry.startMinutes)} - {formatMinutes(entry.endMinutes)}

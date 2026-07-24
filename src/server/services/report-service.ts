@@ -71,18 +71,23 @@ export async function getReportData(filters: ReportFilters) {
   });
   const employeeIds = employees.map((e) => e.id);
 
-  const [employeeStats, appointments, routePlans] = await Promise.all([
+  // Termine/Zeiterfassung werden nach Mitarbeiter/Team/Kunde/Status gefiltert –
+  // so ändern sich die Kennzahlen mit jedem Filter, nicht nur mit dem Zeitraum.
+  const scopeEmployees =
+    employeeIds.length > 0 && (filters.employeeId || filters.teamId || scope !== 'ALL');
+  const appointmentFilter = {
+    ...(filters.customerId ? { customerId: filters.customerId } : {}),
+    ...(filters.status ? { status: filters.status as never } : {}),
+  };
+  const [employeeStats, appointments, timeEntries] = await Promise.all([
     getEmployeeHourStatsBulk(employees, period, 'month'),
     db.appointment.findMany({
       where: {
         organizationId: orgId,
         deletedAt: null,
         startAt: { gte: period.start, lt: period.end },
-        ...(filters.customerId ? { customerId: filters.customerId } : {}),
-        ...(employeeIds.length > 0 && (filters.employeeId || filters.teamId || scope !== 'ALL')
-          ? { assignedEmployeeId: { in: employeeIds } }
-          : {}),
-        ...(filters.status ? { status: filters.status as never } : {}),
+        ...(scopeEmployees ? { assignedEmployeeId: { in: employeeIds } } : {}),
+        ...appointmentFilter,
       },
       select: {
         assignedEmployeeId: true,
@@ -91,13 +96,18 @@ export async function getReportData(filters: ReportFilters) {
         durationMinutes: true,
       },
     }),
-    db.routePlan.findMany({
+    // Tatsächliche Fahrzeit aus der Zeiterfassung (belastbarer als geplante
+    // Routen, die es nur für einzelne Tage gibt) – gleiche Filter wie Termine.
+    db.timeEntry.findMany({
       where: {
         organizationId: orgId,
-        routeDate: { gte: period.start, lt: period.end },
-        ...(employeeIds.length > 0 ? { employeeId: { in: employeeIds } } : {}),
+        startedAt: { gte: period.start, lt: period.end },
+        ...(scopeEmployees ? { employeeId: { in: employeeIds } } : {}),
+        ...(filters.customerId || filters.status
+          ? { appointment: { is: { deletedAt: null, ...appointmentFilter } } }
+          : {}),
       },
-      select: { totalTravelSeconds: true, totalDistanceMeters: true },
+      select: { travelMinutes: true, workedMinutes: true },
     }),
   ]);
 
@@ -117,26 +127,29 @@ export async function getReportData(filters: ReportFilters) {
     customers.map((c) => c.id),
   );
 
-  const totals = {
-    budgetMinutes: 0,
-    allocatedMinutes: 0,
-    plannedMinutes: 0,
-    completedMinutes: 0,
-    openMinutes: 0,
-  };
+  // Kundenkonto-Kennzahlen (kundenbezogen – folgen dem Kundenfilter).
+  let budgetMinutes = 0;
+  let openMinutes = 0;
   for (const stats of customerStats.values()) {
-    // „Budget" = auf dem Konto insgesamt gutgeschrieben; „geplant" = reserviert.
-    totals.budgetMinutes += stats.creditedMinutes;
-    totals.allocatedMinutes += stats.allocatedMinutes;
-    totals.plannedMinutes += stats.reservedMinutes;
-    totals.completedMinutes += stats.completedMinutes;
-    totals.openMinutes += Math.max(0, stats.balanceMinutes - stats.allocatedMinutes);
+    budgetMinutes += stats.creditedMinutes;
+    openMinutes += Math.max(0, stats.balanceMinutes - stats.allocatedMinutes);
   }
+
+  // Mitarbeiterbezogene Kennzahlen (folgen dem Mitarbeiter-/Team-Filter und
+  // stimmen mit der Mitarbeitertabelle überein) – zuvor org-weit aus dem
+  // Kundenkonto, daher unabhängig vom Mitarbeiterfilter.
+  const employeeStatList = [...employeeStats.values()];
+  const allocatedMinutes = employeeStatList.reduce((sum, s) => sum + s.allocatedMinutes, 0);
+  const plannedByEmployees = employeeStatList.reduce((sum, s) => sum + s.plannedMinutes, 0);
+  const completedByEmployees = employeeStatList.reduce((sum, s) => sum + s.completedMinutes, 0);
 
   const cancelled = appointments.filter((a) => a.status === 'CANCELLED' || a.status === 'NO_SHOW');
   const unassigned = appointments.filter((a) => a.assignedEmployeeId === null);
-  const travelSeconds = routePlans.reduce((sum, p) => sum + p.totalTravelSeconds, 0);
-  const distanceMeters = routePlans.reduce((sum, p) => sum + p.totalDistanceMeters, 0);
+  // Fahrzeit = tatsächlich erfasste Fahrminuten. Entfernung daraus geschätzt
+  // (~25 km/h Stadtschnitt) – belastbarer als die nur tageweise geplanten Routen.
+  const travelMinutes = timeEntries.reduce((sum, e) => sum + (e.travelMinutes ?? 0), 0);
+  const travelSeconds = travelMinutes * 60;
+  const distanceMeters = Math.round((travelMinutes / 60) * 25_000);
 
   // Auslastung: geplante Minuten vs. Zielminuten (Monatsäquivalent über Zeitraum).
   const days = Math.max(1, Math.round((period.end.getTime() - period.start.getTime()) / 86_400_000));
@@ -146,15 +159,15 @@ export async function getReportData(filters: ReportFilters) {
       (employee.targetMinutesPerWeek ? Math.round(employee.targetMinutesPerWeek * 4.33) : 0);
     return sum + Math.round((monthly / 30.44) * days);
   }, 0);
-  const plannedByEmployees = [...employeeStats.values()].reduce(
-    (sum, stats) => sum + stats.plannedMinutes,
-    0,
-  );
 
   return {
     period: { from: filters.from, to: filters.to },
     totals: {
-      ...totals,
+      budgetMinutes,
+      allocatedMinutes,
+      plannedMinutes: plannedByEmployees,
+      completedMinutes: completedByEmployees,
+      openMinutes,
       travelSeconds,
       distanceMeters,
       utilizationPercent: targetTotal > 0 ? Math.round((plannedByEmployees / targetTotal) * 100) : null,

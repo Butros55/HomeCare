@@ -107,6 +107,8 @@ export const customerListParamsSchema = z.object({
   employeeId: z.string().trim().max(50).optional(),
   /** Nur Kunden mit offenen (nicht zugewiesenen) Stunden. */
   openHours: z.enum(['1']).optional(),
+  /** Nur aktive Kunden ohne nächsten geplanten Termin. */
+  withoutNext: z.enum(['1']).optional(),
   sort: z.enum(['name', 'city', 'openMinutes', 'nextAppointment']).default('name'),
   dir: z.enum(['asc', 'desc']).default('asc'),
   page: z.coerce.number().int().min(1).default(1),

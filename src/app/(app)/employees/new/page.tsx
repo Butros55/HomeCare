@@ -27,7 +27,7 @@ export default async function NewEmployeePage() {
         title="Mitarbeiter anlegen"
         breadcrumbs={[{ label: 'Mitarbeiter', href: '/employees' }, { label: 'Neu' }]}
       />
-      <div className="mx-auto max-w-3xl p-4 sm:p-5">
+      <div className="mx-auto w-full max-w-[var(--page-max)] p-4 sm:p-5">
         <EmployeeForm
           initial={{
             values:

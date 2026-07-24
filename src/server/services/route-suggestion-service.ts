@@ -17,6 +17,7 @@ import { plannableMinutesAt } from '@/lib/hour-account';
 import type { Matrix, RouteStopInput } from '@/lib/route-optimizer';
 import {
   candidateWindows,
+  enclosingFlexWindow,
   evaluateCandidate,
   intersectWindows,
   isReservingStatus,
@@ -227,7 +228,16 @@ export interface DemandCandidate {
  * an dem Tag. Wird von den Einzel-Vorschlägen UND vom Tagesrouten-Generator
  * genutzt.
  */
-export async function loadOpenDemand(ctx: OrgContext, date: Date): Promise<DemandCandidate[]> {
+export async function loadOpenDemand(
+  ctx: OrgContext,
+  date: Date,
+  /**
+   * Revalidierung: nur diese Kunden berücksichtigen. So lässt sich prüfen, ob
+   * bereits angezeigte Vorschläge nach einer Datenänderung noch machbar sind,
+   * ohne neue Kunden hinzuzuziehen. Leer/undefined = kein Filter.
+   */
+  restrictCustomerIds?: string[] | null,
+): Promise<DemandCandidate[]> {
   const timezone = ctx.organization.timezone;
   const day = dayPeriodInZone(date, timezone);
   const weekday = isoWeekdayInZone(day.start, timezone);
@@ -240,8 +250,15 @@ export async function loadOpenDemand(ctx: OrgContext, date: Date): Promise<Deman
   // (Gutschriften bis zum Tag inkl. wiederkehrender Aufladungen,
   // minus Geleistetes, minus Reservierungen bis Tagesende).
   const plannable = await getPlannableMinutesForDate(ctx.organization.id, timezone, date);
+  const restrictSet =
+    restrictCustomerIds && restrictCustomerIds.length > 0 ? new Set(restrictCustomerIds) : null;
   const candidateIds = [...plannable.entries()]
-    .filter(([, value]) => value.hasAccount && value.plannableMinutes >= MIN_SUGGESTION_MINUTES)
+    .filter(
+      ([customerId, value]) =>
+        value.hasAccount &&
+        value.plannableMinutes >= MIN_SUGGESTION_MINUTES &&
+        (!restrictSet || restrictSet.has(customerId)),
+    )
     .map(([customerId]) => customerId);
   if (candidateIds.length === 0) return [];
 
@@ -341,6 +358,12 @@ export interface GenerateSuggestionsInput {
   gps?: GpsCoordinate;
   /** Nur scope 'self': Basisroute = aktuell ausgewählte Termine (Standard: alle zugewiesenen). */
   appointmentIds?: string[];
+  /**
+   * Nur scope 'self': Revalidierung. Statt neu zu suchen, werden ausschließlich
+   * diese (bereits angezeigten) Kunden gegen den aktuellen Stand geprüft – so
+   * fallen nicht mehr machbare Vorschläge weg, ohne dass neue hinzukommen.
+   */
+  restrictCustomerIds?: string[];
 }
 
 interface EmployeeContext {
@@ -407,7 +430,11 @@ export async function generateRouteSuggestions(
     ];
   }
 
-  const demand = await loadOpenDemand(ctx, date);
+  const demand = await loadOpenDemand(
+    ctx,
+    date,
+    input.scope === 'self' ? input.restrictCustomerIds : undefined,
+  );
   const customersWithAvailability = await loadCustomersWithAnyAvailability(
     demand.map((d) => d.customerId),
   );
@@ -466,6 +493,14 @@ export async function generateRouteSuggestions(
     }
   }
 
+  // Revalidierung prüft nur die Machbarkeit bereits gezeigter Vorschläge; die
+  // Reihenfolge behält die Oberfläche bei. Die (teils sekundenlange) KI-
+  // Priorisierung wird dabei übersprungen, damit das Ausblenden sofort wirkt.
+  const isRevalidation =
+    input.scope === 'self' &&
+    Array.isArray(input.restrictCustomerIds) &&
+    input.restrictCustomerIds.length > 0;
+
   // Endauswahl je Mitarbeiter + optionale KI-Priorisierung.
   let aiUsed = false;
   await Promise.all(
@@ -477,7 +512,7 @@ export async function generateRouteSuggestions(
 
       let ordered = top;
       let reasons = new Map<string, string>();
-      if (isOllamaConfigured()) {
+      if (isOllamaConfigured() && !isRevalidation) {
         const metrics: OllamaCandidateMetrics[] = top.map((evaluation, index) => ({
           key: `K${index + 1}`,
           extraTravelMinutes: Math.round(evaluation.dto.impact.extraTravelSeconds / 60),
@@ -953,6 +988,9 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
   const timezone = ctx.organization.timezone;
   const day = dayPeriodInZone(date, timezone);
   const weekday = isoWeekdayInZone(day.start, timezone);
+  const dayParts = calendarDayInZone(day.start, timezone);
+  const minuteToUtc = (minute: number): Date =>
+    zonedWallTimeToUtc(dayParts.year, dayParts.month, dayParts.day, minutesToTime(minute), timezone);
   const startAt = new Date(payload.start);
   const endAt = new Date(startAt.getTime() + payload.dur * 60_000);
   if (Number.isNaN(startAt.getTime()) || startAt < day.start || endAt > day.end) {
@@ -1174,17 +1212,31 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
       }
 
       // 7) PLANNED-Termin anlegen (Konto: Abzug entsteht beim Abschluss).
+      //    Bewusst FLEXIBEL im umschließenden Verfügbarkeitsfenster: Der
+      //    Einsatz wurde ja gerade eingeplant, WEIL er zeitlich beweglich ist –
+      //    künftige Umplanungen dürfen ihn im Fenster verschieben statt ihn
+      //    fälschlich als „fix" zu verankern.
+      const flexWindow = enclosingFlexWindow({
+        customerSlots,
+        employeeSlots: availability,
+        startMinute,
+        endMinute,
+        fallbackWindow: DEFAULT_PLANNING_WINDOW,
+      });
       const appointment = await tx.appointment.create({
         data: {
           organizationId: ctx.organization.id,
           customerId: customer.id,
           assignedEmployeeId: payload.emp,
-          title: 'Einsatz (Routenvorschlag)',
+          title: 'Einsatz (Routenplanung)',
           startAt,
           endAt,
           durationMinutes: payload.dur,
           status: 'PLANNED',
           assignmentStatus: 'ASSIGNED',
+          isFlexible: true,
+          earliestStartAt: minuteToUtc(flexWindow.startMinute),
+          latestEndAt: minuteToUtc(flexWindow.endMinute),
           locationAddressId: address.id,
           routeRelevant: true,
           internalNotes: 'Automatisch aus der Routenplanung übernommen.',

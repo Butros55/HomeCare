@@ -36,7 +36,7 @@ export default async function NotificationsPage() {
           </Button>
         }
       />
-      <div className="mx-auto max-w-3xl p-4 sm:p-5">
+      <div className="mx-auto w-full max-w-[var(--page-max)] p-4 sm:p-5">
         <ConflictNoticeList conflicts={conflicts} />
         <NotificationList
           items={notifications.map((notification) => ({

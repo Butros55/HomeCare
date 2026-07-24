@@ -123,6 +123,8 @@ const generateSchema = z.object({
   originType: z.enum(['office', 'home', 'gps']).optional(),
   gps: gpsSchema,
   appointmentIds: z.array(z.string().min(1)).max(30).optional(),
+  /** Revalidierung: nur diese bereits angezeigten Kunden erneut prüfen. */
+  restrictCustomerIds: z.array(z.string().min(1)).max(20).optional(),
 });
 export type GenerateSuggestionsActionInput = z.input<typeof generateSchema>;
 

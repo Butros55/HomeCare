@@ -289,3 +289,27 @@ export function hasErrors(conflicts: Conflict[]): boolean {
 export function hasWarnings(conflicts: Conflict[]): boolean {
   return conflicts.some((conflict) => conflict.severity === 'WARNING');
 }
+
+/**
+ * Liegt der Einsatz [startAt, startAt+durationMinutes) außerhalb ALLER
+ * übergebenen Verfügbarkeitsfenster? Leere Fensterliste = „immer verfügbar"
+ * (kein Konflikt). Die Fenster müssen bereits auf ihre Gültigkeit (validFrom/
+ * validUntil) vorgefiltert sein. Für Kalender-/Dashboard-Markierungen genutzt.
+ */
+export function isOutsideAvailabilityWindows(
+  startAt: Date,
+  durationMinutes: number,
+  slots: { weekday: number; startTime: string; endTime: string }[],
+  timezone: string,
+): boolean {
+  if (slots.length === 0) return false;
+  const weekday = isoWeekdayInZone(startAt, timezone);
+  const startMinutes = minutesOfDayInZone(startAt, timezone);
+  const endMinutes = startMinutes + durationMinutes;
+  return !slots.some((slot) => {
+    if (slot.weekday !== weekday) return false;
+    const [sh, sm] = slot.startTime.split(':').map(Number);
+    const [eh, em] = slot.endTime.split(':').map(Number);
+    return startMinutes >= (sh ?? 0) * 60 + (sm ?? 0) && endMinutes <= (eh ?? 0) * 60 + (em ?? 0);
+  });
+}

@@ -63,6 +63,8 @@ describe('computeSchedule', () => {
     const result = computeSchedule([0, 1], input);
     expect(result.feasible).toBe(false);
     expect(result.warnings.some((w) => w.includes('nach dem festen Beginn'))).toBe(true);
+    // Der feste Beginn bleibt verankert – die Anzeige verschiebt ihn NICHT.
+    expect(result.stops[1]!.serviceStartAt.getTime()).toBe(t(11).getTime());
   });
 
   it('wartet bei flexiblen Terminen auf die Fensteröffnung', () => {

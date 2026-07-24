@@ -109,9 +109,11 @@ export function NotesWorkspace({
   const [creating, setCreating] = React.useState(false);
   const [deleteTargetId, setDeleteTargetId] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState(false);
-  // Zu: sofort maximal Papier. Nur ohne jede Seite steht das Karussell offen,
-  // damit das leere Blatt mit „+" direkt sichtbar ist.
-  const [carouselOpen, setCarouselOpen] = React.useState(() => initialNotes.length === 0);
+  // Startet geschlossen. Ohne jede Notiz erscheint das Karussell gar nicht –
+  // dann führt der leere Zustand in der Mitte („Neue Notiz") durchs Anlegen,
+  // statt ein einzelnes „+"-Blatt unten einzublenden (wirkte verloren).
+  const [carouselOpen, setCarouselOpen] = React.useState(false);
+  const hasNotes = notes.length > 0;
   const { preferences, updatePreference } = useNotebookPreferences();
 
   const saveTimersRef = React.useRef<Map<string, number>>(new Map());
@@ -285,6 +287,9 @@ export function NotesWorkspace({
       const remaining = notesRef.current.filter((note) => note.id !== noteId);
       notesRef.current = remaining;
       setNotes(remaining);
+      // War es die letzte Notiz, das Karussell schließen – so taucht es beim
+      // nächsten Anlegen nicht ungefragt wieder auf.
+      if (remaining.length === 0) setCarouselOpen(false);
       revisionsRef.current.delete(noteId);
       setSaveStates((current) => {
         const next = { ...current };
@@ -313,17 +318,20 @@ export function NotesWorkspace({
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--color-canvas)]">
       {/* Schmale Kopfzeile: Blätter-Schalter, Name der Seite, Status, Aktionen. */}
       <header className="flex h-11 shrink-0 items-center gap-1 border-b border-[var(--color-line-subtle)] bg-[var(--color-panel)] px-2 pointer-coarse:h-14">
-        <Button
-          type="button"
-          data-notes-carousel-toggle
-          variant={carouselOpen ? 'primary' : 'ghost'}
-          size="icon"
-          onClick={() => setCarouselOpen(!carouselOpen)}
-          aria-label={carouselOpen ? 'Blätter schließen' : 'Blätter öffnen'}
-          aria-expanded={carouselOpen}
-        >
-          <GalleryHorizontalEnd aria-hidden />
-        </Button>
+        {/* Blätter-Schalter erst, wenn es überhaupt Notizen zu blättern gibt. */}
+        {hasNotes ? (
+          <Button
+            type="button"
+            data-notes-carousel-toggle
+            variant={carouselOpen ? 'primary' : 'ghost'}
+            size="icon"
+            onClick={() => setCarouselOpen(!carouselOpen)}
+            aria-label={carouselOpen ? 'Blätter schließen' : 'Blätter öffnen'}
+            aria-expanded={carouselOpen}
+          >
+            <GalleryHorizontalEnd aria-hidden />
+          </Button>
+        ) : null}
 
         {selectedNote ? (
           <>
@@ -405,25 +413,28 @@ export function NotesWorkspace({
           )}
         </div>
 
-        {/* Blätter-Karussell: fährt von unten über das Papier. */}
-        <NoteCarousel
-          notes={notes}
-          selectedId={selectedId}
-          saveStates={saveStates}
-          timezone={timezone}
-          open={carouselOpen}
-          creating={creating}
-          onSelect={openNote}
-          onCreate={() => void createNote()}
-          onRename={(noteId, title) =>
-            updateDraft(noteId, { title }, title.trim().length > 0)
-          }
-          onRenameCommit={(noteId) => {
-            normalizeCurrentTitle(noteId);
-            queueSave(noteId, 0);
-          }}
-          onClose={() => setCarouselOpen(false)}
-        />
+        {/* Blätter-Karussell: fährt von unten über das Papier. Ohne Notizen gibt
+            es nichts zu blättern – dann bleibt es ganz weg. */}
+        {hasNotes ? (
+          <NoteCarousel
+            notes={notes}
+            selectedId={selectedId}
+            saveStates={saveStates}
+            timezone={timezone}
+            open={carouselOpen}
+            creating={creating}
+            onSelect={openNote}
+            onCreate={() => void createNote()}
+            onRename={(noteId, title) =>
+              updateDraft(noteId, { title }, title.trim().length > 0)
+            }
+            onRenameCommit={(noteId) => {
+              normalizeCurrentTitle(noteId);
+              queueSave(noteId, 0);
+            }}
+            onClose={() => setCarouselOpen(false)}
+          />
+        ) : null}
       </div>
 
       <ConfirmDialog

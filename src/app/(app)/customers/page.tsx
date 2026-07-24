@@ -36,6 +36,7 @@ export default async function CustomersPage({
     city: raw.city,
     employeeId: raw.employeeId,
     openHours: raw.openHours,
+    withoutNext: raw.withoutNext,
     sort: raw.sort,
     dir: raw.dir,
     page: raw.page,
@@ -96,13 +97,13 @@ export default async function CustomersPage({
         </div>
       </PageHeader>
 
-      <div className="p-4 sm:p-5" data-tour="customers-list">
+      <div className="mx-auto w-full max-w-[var(--page-max)] p-4 sm:p-5" data-tour="customers-list">
         {result.rows.length === 0 ? (
           <EmptyState
             icon={<Contact />}
             title="Keine Kunden gefunden"
             description={
-              params.q || params.city || params.employeeId || params.openHours
+              params.q || params.city || params.employeeId || params.openHours || params.withoutNext
                 ? 'Für die aktuellen Filter gibt es keine Treffer.'
                 : 'Lege den ersten Kunden an, um mit der Planung zu starten.'
             }

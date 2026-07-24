@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: homecare
       POSTGRES_DB: homecare
     ports:
-      - '5432:5432'
+      - '5433:5432'
     volumes:
       - db-data:/var/lib/postgresql/data
       # Legt zusätzliche Datenbanken für Integrations- und E2E-Tests an.

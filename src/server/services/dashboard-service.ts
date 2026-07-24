@@ -2,6 +2,7 @@ import 'server-only';
 
 import { addDays } from 'date-fns';
 
+import { isOutsideAvailabilityWindows } from '@/lib/conflicts';
 import {
   calendarDayInZone,
   dayPeriodInZone,
@@ -10,7 +11,7 @@ import {
   utcDate,
   weekPeriodInZone,
 } from '@/lib/dates';
-import { centsForKilometers, centsForMinutes } from '@/lib/earnings';
+import { computeRouteEarnings } from '@/lib/earnings';
 import { estimateTravelSeconds } from '@/lib/geo';
 import { formatMinutesAsHours } from '@/lib/duration';
 import { getManagerSelfObligationMinutes } from '@/lib/hours';
@@ -49,6 +50,7 @@ export interface TodayEntry {
   title: string;
   customerName: string;
   customerColor: string;
+  employeeId: string | null;
   employeeName: string | null;
   startAt: Date;
   endAt: Date;
@@ -86,6 +88,8 @@ export interface MyDayEntry {
   travelSeconds: number | null;
   /** Späteste Abfahrt, um pünktlich zu sein. */
   departureAt: Date | null;
+  /** Hinweis (Überschneidung, Abwesenheit, außerhalb der Verfügbarkeit) – bitte prüfen. */
+  hasConflict: boolean;
 }
 
 /**
@@ -181,6 +185,52 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
   const startLocation = ctx.organization.defaultStartLocation as
     | { latitude?: number | null; longitude?: number | null }
     | null;
+
+  // Hinweise der EIGENEN heutigen Termine (Überschneidung, Abwesenheit,
+  // außerhalb der Verfügbarkeit) – auch im „Mein Tag"/Alleine-Modus sichtbar.
+  const conflictEntryIds = new Set<string>();
+  if (ownEmployeeId) {
+    const [ownAvailability, ownAbsences] = await Promise.all([
+      db.employeeAvailability.findMany({
+        where: { employeeId: ownEmployeeId },
+        select: { weekday: true, startTime: true, endTime: true, validFrom: true, validUntil: true },
+      }),
+      db.employeeAbsence.findMany({
+        where: {
+          employeeId: ownEmployeeId,
+          status: 'APPROVED',
+          startAt: { lt: today.end },
+          endAt: { gt: today.start },
+        },
+        select: { startAt: true, endAt: true },
+      }),
+    ]);
+    const own = todayAppointments.filter(
+      (a) =>
+        a.assignedEmployeeId === ownEmployeeId &&
+        !['CANCELLED', 'NO_SHOW', 'COMPLETED'].includes(a.status),
+    );
+    for (let i = 0; i < own.length; i += 1) {
+      for (let j = i + 1; j < own.length; j += 1) {
+        if (overlaps(own[i]!.startAt, own[i]!.endAt, own[j]!.startAt, own[j]!.endAt)) {
+          conflictEntryIds.add(own[i]!.id);
+          conflictEntryIds.add(own[j]!.id);
+        }
+      }
+      if (ownAbsences.some((ab) => overlaps(own[i]!.startAt, own[i]!.endAt, ab.startAt, ab.endAt))) {
+        conflictEntryIds.add(own[i]!.id);
+      }
+      const active = ownAvailability.filter(
+        (s) =>
+          s.validFrom <= own[i]!.startAt &&
+          (s.validUntil === null || s.validUntil >= own[i]!.startAt),
+      );
+      if (isOutsideAvailabilityWindows(own[i]!.startAt, own[i]!.durationMinutes, active, timezone)) {
+        conflictEntryIds.add(own[i]!.id);
+      }
+    }
+  }
+
   const entries: MyDayEntry[] = [];
   const explicitCurrent = todayAppointments.find(
     (appointment) =>
@@ -239,6 +289,7 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
         : travelSeconds != null
           ? new Date(appointment.startAt.getTime() - travelSeconds * 1000)
           : null,
+      hasConflict: conflictEntryIds.has(appointment.id),
     });
     if (coordinate) previousCoordinate = coordinate;
   }
@@ -295,11 +346,21 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
     todayAppointments.find((appointment) => appointment.endAt.getTime() > now.getTime()) ?? null;
   const todayTravelSeconds = entries.reduce((sum, entry) => sum + (entry.travelSeconds ?? 0), 0);
 
-  // Voraussichtlicher Tagesverdienst: eigene geplante Minuten × (Stundenlohn +
-  // steuerfreier Zuschlag) plus Kilometergeld für die gespeicherte Tagesroute.
-  // Nur eigene Termine zählen – im Solo-Modus können auch offene in der Liste sein.
+  // Voraussichtlicher Tagesverdienst – exakt dieselbe Berechnung wie im
+  // Routenplaner („Verdienst (Tag)"): Stundenlohn inkl. steuerfreiem Zuschlag
+  // auf die Kundenzeit plus Kilometergeld. Als Verdienstbasis zählt – wenn eine
+  // Route geplant ist – genau deren Kundenzeit und Strecke (identisch zum
+  // Planer). Ohne geplante Route ersatzweise alle eigenen Termine des Tages,
+  // damit der Verdienst nicht auf 0 fällt (Kilometergeld gibt es dann nicht).
   const routeDistanceMeters = routeStops.reduce(
     (sum, stop) => sum + stop.distanceMetersFromPrevious,
+    0,
+  );
+  const durationByAppointmentId = new Map(
+    todayAppointments.map((appointment) => [appointment.id, appointment.durationMinutes]),
+  );
+  const routeServiceMinutes = routeStops.reduce(
+    (sum, stop) => sum + (durationByAppointmentId.get(stop.appointmentId) ?? 0),
     0,
   );
   const ownTodayMinutes = ownEmployeeId
@@ -307,16 +368,21 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
         .filter((appointment) => appointment.assignedEmployeeId === ownEmployeeId)
         .reduce((sum, appointment) => sum + appointment.durationMinutes, 0)
     : 0;
+  const earningsServiceMinutes = routeStops.length > 0 ? routeServiceMinutes : ownTodayMinutes;
   // `?? 0`: robust, falls der (Dev-)Prisma-Client das Feld noch nicht kennt.
   const mileageRatePerKmCents = ctx.membership.mileageRatePerKmCents ?? 0;
-  const projectedMileageCents = centsForKilometers(routeDistanceMeters, mileageRatePerKmCents);
-  const projectedEarningsCents =
+  const projectedEarnings =
     ownEmployeeId && ctx.membership.hourlyWageCents > 0
-      ? centsForMinutes(
-          ownTodayMinutes,
-          ctx.membership.hourlyWageCents + ctx.membership.taxFreeBonusCentsPerHour,
-        ) + projectedMileageCents
+      ? computeRouteEarnings({
+          serviceMinutes: earningsServiceMinutes,
+          distanceMeters: routeDistanceMeters,
+          hourlyWageCents: ctx.membership.hourlyWageCents,
+          taxFreeBonusCentsPerHour: ctx.membership.taxFreeBonusCentsPerHour,
+          mileageRatePerKmCents,
+        })
       : null;
+  const projectedEarningsCents = projectedEarnings?.totalCents ?? null;
+  const projectedMileageCents = projectedEarnings?.mileageCents ?? 0;
 
   return {
     entries,
@@ -334,6 +400,8 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
       weekPlannedMinutes,
       openMinutes,
       openHint,
+      /** Anzahl eigener heutiger Termine mit Hinweis (Konflikt/Verfügbarkeit). */
+      conflictCount: conflictEntryIds.size,
       /** Voraussichtlicher Tagesverdienst (null ohne hinterlegten Stundenlohn). */
       projectedEarningsCents,
       /** Kilometergeld-Anteil davon (0 ohne Satz oder Route). */
@@ -563,19 +631,32 @@ export async function getDashboardData(ctx: OrgContext) {
       assignedEmployeeId: true,
       startAt: true,
       endAt: true,
+      durationMinutes: true,
       title: true,
     },
     orderBy: { startAt: 'asc' },
   });
-  const weekAbsences = await db.employeeAbsence.findMany({
-    where: {
-      employee: { organizationId: orgId },
-      status: 'APPROVED',
-      startAt: { lt: week.end },
-      endAt: { gt: week.start },
-    },
-    select: { employeeId: true, startAt: true, endAt: true },
-  });
+  const [weekAbsences, weekAvailabilities] = await Promise.all([
+    db.employeeAbsence.findMany({
+      where: {
+        employee: { organizationId: orgId },
+        status: 'APPROVED',
+        startAt: { lt: week.end },
+        endAt: { gt: week.start },
+      },
+      select: { employeeId: true, startAt: true, endAt: true },
+    }),
+    db.employeeAvailability.findMany({
+      where: { employee: { organizationId: orgId } },
+      select: { employeeId: true, weekday: true, startTime: true, endTime: true, validFrom: true, validUntil: true },
+    }),
+  ]);
+  const availByEmployee = new Map<string, typeof weekAvailabilities>();
+  for (const slot of weekAvailabilities) {
+    const list = availByEmployee.get(slot.employeeId) ?? [];
+    list.push(slot);
+    availByEmployee.set(slot.employeeId, list);
+  }
   const conflictAppointmentIds = new Set<string>();
   const byEmployee = new Map<string, typeof weekAppointments>();
   for (const appointment of weekAppointments) {
@@ -584,6 +665,7 @@ export async function getDashboardData(ctx: OrgContext) {
     byEmployee.set(appointment.assignedEmployeeId!, list);
   }
   for (const [employeeId, list] of byEmployee) {
+    const empSlots = availByEmployee.get(employeeId) ?? [];
     for (let i = 0; i < list.length; i += 1) {
       for (let j = i + 1; j < list.length; j += 1) {
         if (list[j]!.startAt >= list[i]!.endAt) break;
@@ -597,6 +679,14 @@ export async function getDashboardData(ctx: OrgContext) {
             overlaps(list[i]!.startAt, list[i]!.endAt, absence.startAt, absence.endAt),
         )
       ) {
+        conflictAppointmentIds.add(list[i]!.id);
+      }
+      const active = empSlots.filter(
+        (slot) =>
+          slot.validFrom <= list[i]!.startAt &&
+          (slot.validUntil === null || slot.validUntil >= list[i]!.startAt),
+      );
+      if (isOutsideAvailabilityWindows(list[i]!.startAt, list[i]!.durationMinutes, active, timezone)) {
         conflictAppointmentIds.add(list[i]!.id);
       }
     }
@@ -666,6 +756,7 @@ export async function getDashboardData(ctx: OrgContext) {
         title: appointment.title,
         customerName: `${appointment.customer.firstName} ${appointment.customer.lastName}`,
         customerColor: appointment.customer.color,
+        employeeId: appointment.assignedEmployee?.id ?? null,
         employeeName: appointment.assignedEmployee
           ? `${appointment.assignedEmployee.firstName} ${appointment.assignedEmployee.lastName}`
           : null,

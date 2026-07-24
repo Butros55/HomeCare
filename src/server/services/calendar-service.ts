@@ -4,6 +4,7 @@ import { addDays } from 'date-fns';
 
 import type { AppointmentStatus, Prisma } from '@prisma/client';
 
+import { isOutsideAvailabilityWindows } from '@/lib/conflicts';
 import { overlaps } from '@/lib/dates';
 import { db } from '@/server/db';
 import {
@@ -19,6 +20,22 @@ import { ensureMaterializedUntil } from '@/server/services/appointment-service';
  * Rolle gescoped. Lädt ausschließlich den sichtbaren Bereich (Anforderung 13)
  * und stellt vorher die Serien-Materialisierung bis zum Bereichsende sicher.
  */
+
+/** Wochen-Verfügbarkeitsfenster eines Mitarbeiters (für die Konfliktprüfung). */
+interface AvailabilitySlotRow {
+  weekday: number;
+  startTime: string;
+  endTime: string;
+  validFrom: Date;
+  validUntil: Date | null;
+}
+
+/** Am Termindatum gültige Fenster (validFrom/validUntil) herausfiltern. */
+function activeSlots(slots: AvailabilitySlotRow[], at: Date): AvailabilitySlotRow[] {
+  return slots.filter(
+    (slot) => slot.validFrom <= at && (slot.validUntil === null || slot.validUntil >= at),
+  );
+}
 
 export interface CalendarEventDto {
   id: string;
@@ -84,17 +101,32 @@ export async function listCalendarEvents(
     list.push(appointment);
     byEmployee.set(appointment.assignedEmployeeId, list);
   }
-  const absences = await db.employeeAbsence.findMany({
-    where: {
-      employeeId: { in: [...byEmployee.keys()] },
-      status: 'APPROVED',
-      startAt: { lt: range.end },
-      endAt: { gt: range.start },
-    },
-    select: { employeeId: true, startAt: true, endAt: true },
-  });
+  const employeeIds = [...byEmployee.keys()];
+  const [absences, availabilities] = await Promise.all([
+    db.employeeAbsence.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        status: 'APPROVED',
+        startAt: { lt: range.end },
+        endAt: { gt: range.start },
+      },
+      select: { employeeId: true, startAt: true, endAt: true },
+    }),
+    db.employeeAvailability.findMany({
+      where: { employeeId: { in: employeeIds } },
+      select: { employeeId: true, weekday: true, startTime: true, endTime: true, validFrom: true, validUntil: true },
+    }),
+  ]);
+  const availByEmployee = new Map<string, AvailabilitySlotRow[]>();
+  for (const slot of availabilities) {
+    const list = availByEmployee.get(slot.employeeId) ?? [];
+    list.push(slot);
+    availByEmployee.set(slot.employeeId, list);
+  }
+  const timezone = ctx.organization.timezone;
   for (const [employeeId, list] of byEmployee) {
     const sorted = [...list].sort((a, b) => a.startAt.getTime() - b.startAt.getTime());
+    const empSlots = availByEmployee.get(employeeId) ?? [];
     for (let i = 0; i < sorted.length; i += 1) {
       for (let j = i + 1; j < sorted.length; j += 1) {
         if (sorted[j]!.startAt >= sorted[i]!.endAt) break;
@@ -106,6 +138,17 @@ export async function listCalendarEvents(
           (absence) =>
             absence.employeeId === employeeId &&
             overlaps(sorted[i]!.startAt, sorted[i]!.endAt, absence.startAt, absence.endAt),
+        )
+      ) {
+        conflictIds.add(sorted[i]!.id);
+      }
+      // Termin außerhalb der Verfügbarkeit des Mitarbeiters → auch Konflikt.
+      if (
+        isOutsideAvailabilityWindows(
+          sorted[i]!.startAt,
+          sorted[i]!.durationMinutes,
+          activeSlots(empSlots, sorted[i]!.startAt),
+          timezone,
         )
       ) {
         conflictIds.add(sorted[i]!.id);
@@ -168,7 +211,7 @@ export async function listCalendarEventsByIds(ids: string[]): Promise<CalendarEv
       -1,
     );
     const winEnd = addDays(new Date(Math.max(...targets.map((t) => t.endAt.getTime()))), 1);
-    const [neighbors, absences] = await Promise.all([
+    const [neighbors, absences, availabilities] = await Promise.all([
       db.appointment.findMany({
         where: {
           organizationId: ctx.organization.id,
@@ -189,7 +232,18 @@ export async function listCalendarEventsByIds(ids: string[]): Promise<CalendarEv
         },
         select: { employeeId: true, startAt: true, endAt: true },
       }),
+      db.employeeAvailability.findMany({
+        where: { employeeId: { in: employeeIds } },
+        select: { employeeId: true, weekday: true, startTime: true, endTime: true, validFrom: true, validUntil: true },
+      }),
     ]);
+    const availByEmployee = new Map<string, AvailabilitySlotRow[]>();
+    for (const slot of availabilities) {
+      const list = availByEmployee.get(slot.employeeId) ?? [];
+      list.push(slot);
+      availByEmployee.set(slot.employeeId, list);
+    }
+    const timezone = ctx.organization.timezone;
     for (const target of targets) {
       if (!target.assignedEmployeeId) continue;
       if (['CANCELLED', 'NO_SHOW', 'COMPLETED'].includes(target.status)) continue;
@@ -204,6 +258,12 @@ export async function listCalendarEventsByIds(ids: string[]): Promise<CalendarEv
           (a) =>
             a.employeeId === target.assignedEmployeeId &&
             overlaps(target.startAt, target.endAt, a.startAt, a.endAt),
+        ) ||
+        isOutsideAvailabilityWindows(
+          target.startAt,
+          target.durationMinutes,
+          activeSlots(availByEmployee.get(target.assignedEmployeeId) ?? [], target.startAt),
+          timezone,
         );
       if (clash) conflictIds.add(target.id);
     }

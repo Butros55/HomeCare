@@ -135,6 +135,11 @@
   --spacing-topbar: 3.5rem;
   --spacing-bottom-nav: 4rem;
   --spacing-drawer: 30rem;
+  /* Einheitliche Höchstbreite für Inhaltsseiten (Kopf + Körper): füllt normale
+   * Bildschirme, verhindert aber das „In-die-Länge-Ziehen" auf sehr breiten
+   * Displays. Zentral hier änderbar. Werkzeugseiten (Kalender, Routen, Notizen)
+   * nutzen die volle Breite. */
+  --page-max: 72rem;
 
   /* Weiche, geschichtete, leicht blau getönte Schatten. */
   --shadow-panel: 0 1px 2px rgb(23 26 74 / 0.04), 0 6px 20px rgb(23 26 74 / 0.05);
@@ -724,4 +729,47 @@
 .leaflet-container {
   isolation: isolate;
   z-index: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Routenvorschläge – Ausblenden nicht mehr machbarer Karten
+ *
+ * Ändern sich die Routendaten, prüft die Oberfläche die angezeigten Vorschläge
+ * still nach. Nicht mehr annehmbare Karten wandern nach links aus dem Blick und
+ * kollabieren ihre Höhe (grid-template-rows 1fr → 0fr, ganz ohne feste
+ * Pixelmaße); die darunterliegenden rücken dadurch weich nach oben nach.
+ * ------------------------------------------------------------------------- */
+.suggestion-anim-list {
+  display: flex;
+  flex-direction: column;
+}
+.suggestion-anim {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows 340ms ease,
+    opacity 300ms ease;
+}
+.suggestion-anim__inner {
+  min-height: 0;
+  overflow: hidden;
+  padding-bottom: 0.625rem; /* Abstand zwischen den Karten (= space-y-2.5) */
+  transition: transform 340ms ease;
+}
+.suggestion-anim.is-exiting {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+.suggestion-anim.is-exiting .suggestion-anim__inner {
+  transform: translateX(-2rem);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .suggestion-anim,
+  .suggestion-anim__inner {
+    transition-duration: 1ms;
+  }
+  .suggestion-anim.is-exiting .suggestion-anim__inner {
+    transform: none;
+  }
 }

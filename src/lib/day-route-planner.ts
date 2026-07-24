@@ -55,6 +55,8 @@ export interface DayPlanOptions {
 
 export interface DayVariant {
   objective: DayVariantObjective;
+  /** Anzeigename der Variante (Ziel-Modus beschreibt den Nebenfokus). */
+  label: string;
   /** IDs der zusätzlich aufgenommenen Kandidaten (in Auswahlreihenfolge). */
   selectedCandidateIds: string[];
   route: PlannedRoute;
@@ -62,6 +64,13 @@ export interface DayVariant {
 
 /** Standard-Zielarbeitszeit, wenn der Nutzer keine angibt (6 Stunden). */
 export const DEFAULT_TARGET_MINUTES = 6 * 60;
+
+/** Anzeigenamen der zielfreien Profile. */
+const OBJECTIVE_LABEL: Record<DayVariantObjective, string> = {
+  compact: 'Wenig Fahrt',
+  full: 'Volle Auslastung',
+  early: 'Früh zu Hause',
+};
 
 /** Bewertungsboni, damit Wunschmitarbeiter/zugewiesene Kunden zuerst kommen. */
 const PREFERRED_BONUS = 300;
@@ -123,14 +132,55 @@ export function buildDayVariants(input: {
     routeEnd(route, options.earliestDepartureAt).getTime() <= options.latestReturnAt.getTime();
   const withinMax = (route: PlannedRoute): boolean =>
     !options.maxTotalServiceMinutes || route.totalServiceMinutes <= options.maxTotalServiceMinutes;
+  const bonusFor = (j: number): number =>
+    (candidates[j]!.isPreferred ? PREFERRED_BONUS : 0) +
+    (candidates[j]!.hasAllocation ? ALLOCATION_BONUS : 0);
 
-  const target = options.targetWorkMinutes ?? DEFAULT_TARGET_MINUTES;
-
-  const buildGreedy = (objective: DayVariantObjective): DayVariant => {
+  /**
+   * Ziel-Modus: Der Nutzer hat eine Zielarbeitszeit (Kundenzeit) angegeben. Es
+   * werden Einsätze aufgenommen, solange das die Gesamt-Kundenzeit NÄHER ans
+   * Ziel bringt – so landet die Route möglichst genau auf dem Wunschwert, ohne
+   * ihn deutlich zu überschreiten. Der `cost` bestimmt den Nebenfokus (wenig
+   * Fahrt bzw. Wartezeit); zugewiesene/Wunsch-Kunden werden bevorzugt.
+   */
+  const buildToTarget = (
+    objective: DayVariantObjective,
+    label: string,
+    target: number,
+    cost: (route: PlannedRoute) => number,
+  ): DayVariant => {
     const selected: number[] = [];
     const inSelected = new Set<number>();
     let current = planSubset([]);
-    // „compact" füllt bis zum Ziel, „early" bewusst kürzer, „full" bis nichts mehr passt.
+    for (;;) {
+      if (current.totalServiceMinutes >= target) break;
+      let best: { j: number; route: PlannedRoute; score: number } | null = null;
+      for (let j = 0; j < candidates.length; j += 1) {
+        if (inSelected.has(j)) continue;
+        const route = planSubset([...selected, j]);
+        if (!route.feasible || !withinReturn(route) || !withinMax(route)) continue;
+        const score = cost(route) - bonusFor(j);
+        if (best === null || score < best.score) best = { j, route, score };
+      }
+      if (!best) break;
+      // Nur aufnehmen, wenn es strikt NÄHER ans Ziel bringt – sonst lieber knapp
+      // darunter bleiben, als das Ziel deutlich zu überschreiten.
+      const distBefore = Math.abs(current.totalServiceMinutes - target);
+      const distAfter = Math.abs(best.route.totalServiceMinutes - target);
+      if (distAfter >= distBefore) break;
+      selected.push(best.j);
+      inSelected.add(best.j);
+      current = best.route;
+    }
+    return { objective, label, selectedCandidateIds: selected.map((j) => candidates[j]!.id), route: current };
+  };
+
+  /** Zielfreie Profile (wie bisher): kompakt bis Standardziel, volle Auslastung, früh zu Hause. */
+  const buildGreedy = (objective: DayVariantObjective): DayVariant => {
+    const target = DEFAULT_TARGET_MINUTES;
+    const selected: number[] = [];
+    const inSelected = new Set<number>();
+    let current = planSubset([]);
     const stopTarget =
       objective === 'compact'
         ? target
@@ -153,9 +203,7 @@ export function buildDayVariants(input: {
           (routeEnd(route, options.earliestDepartureAt).getTime() -
             routeEnd(current, options.earliestDepartureAt).getTime()) /
           1000;
-        const bonus =
-          (candidates[j]!.isPreferred ? PREFERRED_BONUS : 0) +
-          (candidates[j]!.hasAllocation ? ALLOCATION_BONUS : 0);
+        const bonus = bonusFor(j);
 
         let score: number;
         if (objective === 'compact') {
@@ -163,7 +211,6 @@ export function buildDayVariants(input: {
         } else if (objective === 'full') {
           score = marginalTravel - bonus;
         } else {
-          // „early": jede zusätzliche Serviceminute soll die Heimkehr kaum verzögern.
           score = laterHomeSeconds / addedService - bonus;
         }
 
@@ -178,14 +225,34 @@ export function buildDayVariants(input: {
 
     return {
       objective,
+      label: OBJECTIVE_LABEL[objective],
       selectedCandidateIds: selected.map((j) => candidates[j]!.id),
       route: current,
     };
   };
 
-  const variants = [buildGreedy('compact'), buildGreedy('full'), buildGreedy('early')];
+  // Mit Zielarbeitszeit: drei Routen, die das Ziel treffen und sich im Nebenfokus
+  // (Fahrt / Wartezeit / ausgewogen) unterscheiden. Ohne Ziel: die bisherigen Profile.
+  const variants =
+    options.targetWorkMinutes != null
+      ? [
+          buildToTarget('compact', 'Ziel · wenig Fahrt', options.targetWorkMinutes, (r) => r.totalTravelSeconds),
+          buildToTarget(
+            'early',
+            'Ziel · wenig Wartezeit',
+            options.targetWorkMinutes,
+            (r) => r.totalWaitSeconds + r.totalTravelSeconds / 5,
+          ),
+          buildToTarget(
+            'full',
+            'Ziel · ausgewogen',
+            options.targetWorkMinutes,
+            (r) => r.totalTravelSeconds + r.totalWaitSeconds,
+          ),
+        ]
+      : [buildGreedy('compact'), buildGreedy('full'), buildGreedy('early')];
 
-  // Doppelte (identische Auswahl) entfernen – Reihenfolge = Priorität der Ziele.
+  // Doppelte (identische Auswahl) entfernen – Reihenfolge = Priorität.
   const seen = new Set<string>();
   const distinct: DayVariant[] = [];
   for (const variant of variants) {

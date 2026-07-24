@@ -39,9 +39,15 @@ npm run dev                # http://localhost:3000  (bindet 0.0.0.0 → im LAN e
 
 Passwort jeweils **`Demo1234!`**
 
+Der Seed legt zwei vollständige Demo-Organisationen mit ~1,5 Jahren Historie an
+(einstellbar über `HISTORY_MONTHS`/`FUTURE_WEEKS` in `prisma/seed.ts`): eine im
+**Allein-Modus** und eine als **Leitung** mit Team – so lassen sich beide
+UI-Modi mit echten Daten (Termine, Stundenkonten, Routen, Verdienst) erleben.
+
 | E-Mail | Rolle |
 |---|---|
-| `owner@demo.example` | Inhaberin (Katrin Sommer) |
+| `solo@demo.example` | **Allein-Modus** – Ariane Vogt (Klarputz, Osnabrück) |
+| `owner@demo.example` | **Leitung** – Inhaberin Katrin Sommer (Blitzblank, Münster) |
 | `dispo@demo.example` | Disponent |
 | `maria@demo.example` | Team-Managerin (Team mit 2 Ebenen) |
 | `thomas@demo.example` | Team-Manager |

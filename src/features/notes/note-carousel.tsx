@@ -132,6 +132,18 @@ export function NoteCarousel({
   // Pointer-Events: sobald der Browser das Scrollen übernimmt, feuert
   // `pointercancel`, obwohl der Finger noch auf dem Display liegt.
   const touchActiveRef = React.useRef(false);
+  // Maus-Ziehen (Desktop): mit gedrückter linker Taste waagerecht scrollen.
+  // Touch scrollt nativ (touch-pan-x) – das hier gilt nur für die Maus.
+  const dragRef = React.useRef<{
+    startX: number;
+    startScroll: number;
+    pointerId: number;
+    moved: boolean;
+  } | null>(null);
+  const mouseDraggingRef = React.useRef(false);
+  // Unterdrückt den Klick, der auf ein Zieh-Ende folgt (sonst würde nach dem
+  // Scrollen versehentlich die Karte unter dem Zeiger ausgewählt).
+  const suppressClickRef = React.useRef(false);
   const wasOpenRef = React.useRef(false);
   const seenIdsRef = React.useRef<Set<string>>(new Set(notes.map((note) => note.id)));
   const [editingId, setEditingId] = React.useState<string | null>(null);
@@ -264,11 +276,67 @@ export function NoteCarousel({
     clearSettleTimer();
     settleTimerRef.current = window.setTimeout(() => {
       settleTimerRef.current = null;
-      // Finger noch unten → nichts tun, das Loslassen stößt es erneut an.
-      if (touchActiveRef.current) return;
+      // Finger/Maus noch unten → nichts tun, das Loslassen stößt es erneut an.
+      if (touchActiveRef.current || mouseDraggingRef.current) return;
       settleOnRealSheet();
     }, SETTLE_IDLE_MS);
   }, [clearSettleTimer, settleOnRealSheet]);
+
+  // ---- Maus-Ziehen (Desktop) ---------------------------------------------
+  const DRAG_THRESHOLD_PX = 4;
+
+  const onScrollerPointerDown = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      stopGlide();
+      // Touch scrollt nativ; nur die primäre Maustaste zieht.
+      if (event.pointerType !== 'mouse' || event.button !== 0) return;
+      const scroller = scrollerRef.current;
+      if (!scroller) return;
+      dragRef.current = {
+        startX: event.clientX,
+        startScroll: scroller.scrollLeft,
+        pointerId: event.pointerId,
+        moved: false,
+      };
+      // Bewusst noch KEIN Pointer-Capture: ein reiner Klick (ohne Bewegung)
+      // soll die Karte normal auswählen. Erst ab der Ziehschwelle übernehmen.
+    },
+    [stopGlide],
+  );
+
+  const onScrollerPointerMove = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const state = dragRef.current;
+    const scroller = scrollerRef.current;
+    if (!state || !scroller) return;
+    const dx = event.clientX - state.startX;
+    if (!state.moved) {
+      if (Math.abs(dx) < DRAG_THRESHOLD_PX) return;
+      state.moved = true;
+      mouseDraggingRef.current = true;
+      try {
+        scroller.setPointerCapture(state.pointerId);
+      } catch {
+        // Capture kann fehlschlagen (Pointer bereits weg) – dann ohne weiter.
+      }
+    }
+    event.preventDefault();
+    scroller.scrollLeft = state.startScroll - dx;
+  }, []);
+
+  const endScrollerDrag = React.useCallback(() => {
+    const state = dragRef.current;
+    if (!state) return;
+    dragRef.current = null;
+    if (!state.moved) return;
+    mouseDraggingRef.current = false;
+    suppressClickRef.current = true; // den folgenden Klick verschlucken
+    try {
+      scrollerRef.current?.releasePointerCapture(state.pointerId);
+    } catch {
+      /* egal */
+    }
+    scheduleSettle();
+  }, [scheduleSettle]);
 
   React.useEffect(() => {
     const scroller = scrollerRef.current;
@@ -404,7 +472,19 @@ export function NoteCarousel({
           scheduleFan();
           scheduleSettle();
         }}
-        onPointerDown={stopGlide}
+        onPointerDown={onScrollerPointerDown}
+        onPointerMove={onScrollerPointerMove}
+        onPointerUp={endScrollerDrag}
+        onPointerCancel={endScrollerDrag}
+        // Nach einem Zieh-Vorgang den unmittelbar folgenden Klick abfangen,
+        // damit nicht versehentlich eine Karte ausgewählt/geöffnet wird.
+        onClickCapture={(event) => {
+          if (suppressClickRef.current) {
+            suppressClickRef.current = false;
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
         onTouchStart={() => {
           touchActiveRef.current = true;
           stopGlide();
@@ -424,7 +504,9 @@ export function NoteCarousel({
         // `touch-action: pan-x` lässt nur waagerechtes Wischen zu – ein
         // senkrechter Wisch scrollt dadurch NICHT die ganze Seite;
         // `overscroll-contain` verhindert das Weiterreichen am Rand.
-        className="scrollbar-none flex touch-pan-x items-end gap-3 overflow-x-auto overflow-y-hidden overscroll-contain pb-8"
+        // cursor-grab/active:cursor-grabbing gilt nur für die Maus (Touch hat
+        // keinen Zeiger); select-none verhindert Textmarkieren beim Ziehen.
+        className="scrollbar-none flex touch-pan-x cursor-grab items-end gap-3 overflow-x-auto overflow-y-hidden overscroll-contain pb-8 select-none active:cursor-grabbing"
         style={{
           paddingTop: OVERSHOOT_HEADROOM,
           paddingInline: `max(1rem, calc(50% - var(--sheet-h) / ${SHEET_RATIO * 2}))`,
@@ -434,7 +516,7 @@ export function NoteCarousel({
         <div className="shrink-0" style={flightStyle(0)}>
           <SheetColumn ref={(node) => registerCard(NEW_SHEET_KEY, node)}>
             <SheetShell onClick={onCreate} disabled={creating} label="Neue Seite anlegen">
-              <span className="flex size-full flex-col items-center justify-center gap-2 rounded-[var(--radius-lg)] border-2 border-dashed border-slate-400/80 bg-white/55 text-slate-500 shadow-[0_6px_16px_-10px_rgb(0_0_0/0.5)] backdrop-blur-[2px]">
+              <span className="flex size-full flex-col items-center justify-center gap-2 rounded-[var(--radius-lg)] border-2 border-dashed border-slate-400/80 bg-white/55 text-slate-500 shadow-[0_6px_16px_-10px_rgb(0_0_0/0.5)] backdrop-blur-[2px] transition-[border-color,box-shadow,transform,background-color] duration-200 hover:-translate-y-0.5 hover:border-slate-500 hover:bg-white/70 hover:text-slate-700 hover:shadow-[0_14px_28px_-12px_rgb(0_0_0/0.55)]">
                 <Plus className="size-6" aria-hidden />
                 <span className="text-[length:var(--text-2xs)] font-medium">Neue Seite</span>
               </span>
@@ -459,10 +541,13 @@ export function NoteCarousel({
                 >
                   <span
                     className={cn(
-                      'block size-full overflow-hidden rounded-[var(--radius-lg)] border bg-[#faf9f6] transition-[border-color,box-shadow]',
+                      // Subtiler Hover: die Karte hebt sich leicht an und wirft
+                      // einen tieferen Schatten – ein dezenter Hinweis, dass sie
+                      // anfassbar ist.
+                      'block size-full overflow-hidden rounded-[var(--radius-lg)] border bg-[#faf9f6] transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5',
                       active
-                        ? 'border-[var(--color-brand)] shadow-[0_0_0_2px_var(--color-brand-ring),0_10px_24px_-10px_rgb(0_0_0/0.55)]'
-                        : 'border-slate-300 shadow-[0_6px_18px_-10px_rgb(0_0_0/0.55)]',
+                        ? 'border-[var(--color-brand)] shadow-[0_0_0_2px_var(--color-brand-ring),0_10px_24px_-10px_rgb(0_0_0/0.55)] hover:shadow-[0_0_0_2px_var(--color-brand-ring),0_16px_30px_-12px_rgb(0_0_0/0.6)]'
+                        : 'border-slate-300 shadow-[0_6px_18px_-10px_rgb(0_0_0/0.55)] hover:border-slate-400 hover:shadow-[0_14px_28px_-12px_rgb(0_0_0/0.6)]',
                     )}
                   >
                     <StrokePreview document={note.document} className="size-full" />

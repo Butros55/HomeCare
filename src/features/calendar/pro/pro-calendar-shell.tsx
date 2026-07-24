@@ -10,6 +10,7 @@
  */
 
 import { addMonths, startOfMonth } from 'date-fns';
+import { AlertTriangle, X } from 'lucide-react';
 import * as React from 'react';
 
 import { CalendarSurfaceSkeleton } from '@/components/layout/page-loading-skeleton';
@@ -43,6 +44,8 @@ export interface ProCalendarShellProps {
     kunde?: string;
     serie?: boolean;
     termin?: string;
+    /** Direkt in die Hinweis-Ansicht springen (nur Termine mit Konflikt). */
+    konflikte?: boolean;
   };
 }
 
@@ -66,6 +69,12 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
   const [drawerAppointmentId, setDrawerAppointmentId] = React.useState<string | null>(
     props.urlParams.termin ?? null,
   );
+  // „Nur Hinweise": zeigt ausschließlich Termine mit Konflikt (jederzeit abschaltbar).
+  const [conflictsOnly, setConflictsOnly] = React.useState(props.urlParams.konflikte ?? false);
+  // Kurzes Hervorheben eines Termins nach dem Anspringen per Deep-Link.
+  const [highlightEventId, setHighlightEventId] = React.useState<string | null>(null);
+  const highlightTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deepLinkDoneRef = React.useRef(false);
   const [createOpen, setCreateOpen] = React.useState(props.urlParams.neu && props.canManage);
   const [createPrefill, setCreatePrefill] = React.useState<{
     customerId?: string;
@@ -148,9 +157,25 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
     () => events.map((event) => toProEvent(event, props.soloMode)),
     [events, props.soloMode],
   );
+  // „Meine Ansicht"/Alleine: nur die eigenen Termine. Der Lead sieht in der
+  // Verwaltung alle; wechselt er in „Meine Ansicht", wird clientseitig auf die
+  // eigenen gefiltert (kein Neuladen). Solo ist serverseitig schon eingegrenzt.
+  const restrictToOwn = Boolean(props.simplePlanning && !props.soloMode && props.ownEmployeeId);
+  // Mitarbeiter-Kennzeichen am Chip nur in der Verwaltungs-/Teamansicht.
+  const showEmployee = !props.simplePlanning && !props.soloMode;
   const filteredEvents = React.useMemo(
-    () => proEvents.filter((event) => visibleKinds.has(event.kind)),
-    [proEvents, visibleKinds],
+    () =>
+      proEvents.filter(
+        (event) =>
+          visibleKinds.has(event.kind) &&
+          (!conflictsOnly || event.hasConflict) &&
+          (!restrictToOwn || event.employeeId === props.ownEmployeeId),
+      ),
+    [proEvents, visibleKinds, conflictsOnly, restrictToOwn, props.ownEmployeeId],
+  );
+  const conflictTotal = React.useMemo(
+    () => proEvents.filter((event) => event.hasConflict).length,
+    [proEvents],
   );
   const eventsByDay = React.useMemo(() => {
     const result = new Map<string, ProCalendarEvent[]>();
@@ -203,6 +228,35 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
     setDrawerAppointmentId(id);
   }, []);
 
+  /** Zum Tag eines Termins springen (Tagesansicht), ihn kurz hervorheben. */
+  const focusEvent = React.useCallback((event: { id: string; start: string }) => {
+    const date = new Date(event.start);
+    setSelectedKey(dayKey(date));
+    setMonth(startOfMonth(date));
+    setViewMode('today');
+    setHighlightEventId(event.id);
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = setTimeout(() => setHighlightEventId(null), 2600);
+  }, []);
+
+  // Deep-Link (?termin=…): sobald der Termin geladen ist, den Tag anspringen und
+  // hervorheben. Der Drawer öffnet ohnehin über `drawerAppointmentId`.
+  React.useEffect(() => {
+    const termin = props.urlParams.termin;
+    if (!termin || deepLinkDoneRef.current || events.length === 0) return;
+    const target = events.find((event) => event.id === termin);
+    if (!target) return;
+    deepLinkDoneRef.current = true;
+    focusEvent(target);
+  }, [props.urlParams.termin, events, focusEvent]);
+
+  React.useEffect(
+    () => () => {
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    },
+    [],
+  );
+
   const startCreate = React.useCallback(
     (key: string) => {
       if (!props.canManage) return;
@@ -232,6 +286,23 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col">
+      {conflictsOnly ? (
+        <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-danger)] bg-[var(--color-danger-soft)] px-4 py-2">
+          <AlertTriangle className="size-4 shrink-0 text-[var(--color-danger)]" aria-hidden />
+          <span className="min-w-0 flex-1 truncate text-[length:var(--text-sm)] font-medium text-[var(--color-danger)]">
+            {conflictTotal === 0
+              ? 'Keine Termine mit Hinweis im geladenen Zeitraum.'
+              : `Nur Hinweise: ${conflictTotal} ${conflictTotal === 1 ? 'Termin' : 'Termine'} zu prüfen`}
+          </span>
+          <button
+            type="button"
+            onClick={() => setConflictsOnly(false)}
+            className="flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[length:var(--text-xs)] font-medium text-[var(--color-danger)] transition-colors hover:bg-[color-mix(in_srgb,var(--color-danger)_16%,transparent)]"
+          >
+            Alle anzeigen <X className="size-3.5" aria-hidden />
+          </button>
+        </div>
+      ) : null}
       {eventsLoading ? (
         <CalendarSurfaceSkeleton />
       ) : (
@@ -244,6 +315,8 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
           eventsByDay={eventsByDay}
           conflictDays={conflictDays}
           today={today}
+          showEmployee={showEmployee}
+          highlightEventId={highlightEventId}
           onOpenEvent={openEvent}
           onOpenPanel={openPanel}
           onCreate={startCreate}

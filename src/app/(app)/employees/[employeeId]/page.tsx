@@ -160,7 +160,7 @@ export default async function EmployeeDetailPage({
         </nav>
       </PageHeader>
 
-      <div className="space-y-4 p-4 sm:p-5">
+      <div className="mx-auto w-full max-w-[var(--page-max)] space-y-4 p-4 sm:p-5">
         {labels.length > 0 && (tab === 'uebersicht' || tab === 'kalender') ? (
           <div className="flex flex-wrap items-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-soft)] px-4 py-2.5 text-[length:var(--text-sm)] text-[var(--color-warning)]">
             <AlertTriangle className="size-4 shrink-0" aria-hidden />

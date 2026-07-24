@@ -41,17 +41,26 @@ export interface RouteEarningsInput {
   /** Gefahrene Strecke der Route in Metern. */
   distanceMeters: number;
   hourlyWageCents: number;
+  /**
+   * Steuerfreier Zuschlag je Stunde (z. B. Werbe-/Sachbezugspauschale). Fließt
+   * in den ausgewiesenen Stundenverdienst mit ein – so rechnet die Kennzahl
+   * überall (Dashboard, Routenplaner, Tagesgenerator) mit demselben Satz.
+   * Optional; 0 = kein Zuschlag.
+   */
+  taxFreeBonusCentsPerHour?: number;
   /** Kilometergeld je km in Cent (nur eigene Fahrten – 0 = kein Kilometergeld). */
   mileageRatePerKmCents: number;
 }
 
 /**
- * Verdienst einer geplanten Tagesroute: Lohn für die Kundenzeit plus optionales
- * Kilometergeld für die gefahrene Strecke. Wird in der Routenplanung und im
- * Generator als Kennzahl angezeigt.
+ * Verdienst einer geplanten Tagesroute: Lohn (inkl. steuerfreiem Zuschlag) für
+ * die Kundenzeit plus optionales Kilometergeld für die gefahrene Strecke. Wird
+ * im Dashboard, in der Routenplanung und im Generator als Kennzahl angezeigt –
+ * bewusst über EINE Funktion, damit die Zahl überall identisch ist.
  */
 export function computeRouteEarnings(input: RouteEarningsInput) {
-  const wageCents = centsForMinutes(input.serviceMinutes, input.hourlyWageCents);
+  const hourlyRateCents = input.hourlyWageCents + (input.taxFreeBonusCentsPerHour ?? 0);
+  const wageCents = centsForMinutes(input.serviceMinutes, hourlyRateCents);
   const mileageCents = centsForKilometers(input.distanceMeters, input.mileageRatePerKmCents);
   return { wageCents, mileageCents, totalCents: wageCents + mileageCents };
 }

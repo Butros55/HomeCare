@@ -21,6 +21,7 @@ import {
 import type { Matrix, RouteStopInput } from '@/lib/route-optimizer';
 import {
   candidateWindows,
+  enclosingFlexWindow,
   intersectWindows,
   minutesToTime,
   planRouteWithAutoDeparture,
@@ -204,15 +205,42 @@ export interface GenerateDayRoutesInput {
   latestReturnMinute?: number | null;
 }
 
-const OBJECTIVE_LABELS: Record<DayVariantObjective, string> = {
-  compact: 'Wenig Fahrt',
-  full: 'Volle Auslastung',
-  early: 'Früh zu Hause',
-};
-
 // ---------------------------------------------------------------------------
 // Generieren
 // ---------------------------------------------------------------------------
+
+/**
+ * Feste Termine sind zeitlich verankert: Eine gewünschte „früheste Abfahrt"
+ * kann sie weder verschieben noch aus der Route drängen. Liegt ein fester
+ * Termin zu früh für den Wunsch, wird die Abfahrt so weit vorgezogen, dass er
+ * (direkt angefahren, inkl. Puffer) pünktlich erreichbar bleibt.
+ *
+ * Die Stopps müssen in Matrix-Reihenfolge übergeben werden (Stopp i ↔ Punkt i+1).
+ */
+function clampDepartureForFixedStops(input: {
+  earliestDepartureAt: Date;
+  stops: RouteStopInput[];
+  matrix: Matrix;
+  bufferMinutes: number;
+  /** Untergrenze (Tagesbeginn) – früher als 00:00 Wandzeit geht es nie. */
+  floor: Date;
+}): { earliestDepartureAt: Date; relaxed: boolean } {
+  let earliest = input.earliestDepartureAt;
+  let relaxed = false;
+  input.stops.forEach((stop, index) => {
+    if (!stop.fixedStartAt) return;
+    const travelSeconds = input.matrix.travelSeconds[0]?.[1 + index] ?? 0;
+    const required = new Date(
+      stop.fixedStartAt.getTime() - (travelSeconds + input.bufferMinutes * 60) * 1000,
+    );
+    if (required < earliest) {
+      earliest = required;
+      relaxed = true;
+    }
+  });
+  if (earliest < input.floor) earliest = input.floor;
+  return { earliestDepartureAt: earliest, relaxed };
+}
 
 export async function generateDayRoutes(
   input: GenerateDayRoutesInput,
@@ -448,8 +476,18 @@ export async function generateDayRoutes(
     distanceMeters: legs.map((row) => row.map((leg) => leg.distanceMeters)),
   };
 
-  const earliestDepartureAt =
+  const requestedDepartureAt =
     input.earliestDepartureMinute != null ? minuteToUtc(input.earliestDepartureMinute) : day.start;
+  // Feste Termine bleiben verankert und in der Route – kollidiert die
+  // Wunsch-Abfahrt damit, startet die Route früher (sichtbarer Hinweis unten).
+  const departureClamp = clampDepartureForFixedStops({
+    earliestDepartureAt: requestedDepartureAt,
+    stops: baseStops,
+    matrix: fullMatrix,
+    bufferMinutes: input.bufferMinutes,
+    floor: day.start,
+  });
+  const earliestDepartureAt = departureClamp.earliestDepartureAt;
   const latestReturnAt =
     input.latestReturnMinute != null ? minuteToUtc(input.latestReturnMinute) : null;
 
@@ -468,9 +506,20 @@ export async function generateDayRoutes(
     },
   });
 
+  // Wunsch-Abfahrt musste für feste Termine vorgezogen werden → transparent machen.
+  if (departureClamp.relaxed && input.earliestDepartureMinute != null) {
+    for (const variant of variants) {
+      variant.route.warnings.unshift(
+        `Feste Termine liegen vor der gewünschten frühesten Abfahrt (${minutesToTime(input.earliestDepartureMinute)}) – die Route startet entsprechend früher.`,
+      );
+    }
+  }
+
   // ---- Verdienst-Kennzahl (nur eigene Route + hinterlegter Stundenlohn;
   // Kilometergeld zählt ausschließlich für eigene Fahrten) ------------------
   const wageCents = isOwn ? ctx.membership.hourlyWageCents : 0;
+  // Steuerfreier Zuschlag je Stunde – gleiche Basis wie Dashboard/Routenplaner.
+  const taxFreeBonusCentsPerHour = isOwn ? (ctx.membership.taxFreeBonusCentsPerHour ?? 0) : 0;
   // `?? 0`: robust, falls der (Dev-)Prisma-Client das Feld noch nicht kennt.
   const mileageRatePerKmCents = isOwn ? (ctx.membership.mileageRatePerKmCents ?? 0) : 0;
   const showEarnings = isOwn && wageCents > 0;
@@ -543,6 +592,7 @@ export async function generateDayRoutes(
             serviceMinutes: route.totalServiceMinutes,
             distanceMeters: route.totalDistanceMeters,
             hourlyWageCents: wageCents,
+            taxFreeBonusCentsPerHour,
             mileageRatePerKmCents,
           })
         : null;
@@ -550,7 +600,7 @@ export async function generateDayRoutes(
       return {
         token,
         objective: variant.objective,
-        label: OBJECTIVE_LABELS[variant.objective],
+        label: variant.label,
         feasible: route.feasible,
         warnings: route.warnings,
         departureAt: route.latestDepartureAt.toISOString(),
@@ -698,21 +748,23 @@ export async function acceptDayRoute(input: {
     distanceMeters: legs.map((row) => row.map((leg) => leg.distanceMeters)),
   };
   const dayParts = calendarDayInZone(day.start, timezone);
+  const minuteToUtc = (minute: number): Date =>
+    zonedWallTimeToUtc(dayParts.year, dayParts.month, dayParts.day, minutesToTime(minute), timezone);
   const timeFormatter = new Intl.DateTimeFormat('de-DE', {
     timeZone: timezone,
     hour: '2-digit',
     minute: '2-digit',
   });
-  const earliestDepartureAt =
-    payload.earlyMin != null
-      ? zonedWallTimeToUtc(
-          dayParts.year,
-          dayParts.month,
-          dayParts.day,
-          minutesToTime(payload.earlyMin),
-          timezone,
-        )
-      : day.start;
+  // Identische Re-Planung wie beim Generieren – inklusive der vorgezogenen
+  // Abfahrt, falls feste Termine vor der Wunsch-Abfahrt liegen.
+  const requestedDepartureAt = payload.earlyMin != null ? minuteToUtc(payload.earlyMin) : day.start;
+  const { earliestDepartureAt } = clampDepartureForFixedStops({
+    earliestDepartureAt: requestedDepartureAt,
+    stops: [...baseStops, ...visitStops],
+    matrix,
+    bufferMinutes: payload.buffer,
+    floor: day.start,
+  });
   const planned = planRouteWithAutoDeparture({
     stops: [...baseStops, ...visitStops],
     matrix,
@@ -856,17 +908,31 @@ export async function acceptDayRoute(input: {
           });
         }
 
+        // Bewusst FLEXIBEL im umschließenden Verfügbarkeitsfenster: Die neuen
+        // Einsätze wurden gerade eingeplant, WEIL sie zeitlich beweglich sind –
+        // künftige Umplanungen dürfen sie im Fenster verschieben statt sie
+        // fälschlich als „fix" zu verankern.
+        const flexWindow = enclosingFlexWindow({
+          customerSlots,
+          employeeSlots: availability,
+          startMinute,
+          endMinute,
+          fallbackWindow: DEFAULT_PLANNING_WINDOW,
+        });
         const appointment = await tx.appointment.create({
           data: {
             organizationId: ctx.organization.id,
             customerId: visit.cust,
             assignedEmployeeId: payload.emp,
-            title: 'Einsatz (Tagesplanung)',
+            title: 'Einsatz (Routenplanung)',
             startAt: visit.startAt,
             endAt: visit.endAt,
             durationMinutes: visit.dur,
             status: 'PLANNED',
             assignmentStatus: 'ASSIGNED',
+            isFlexible: true,
+            earliestStartAt: minuteToUtc(flexWindow.startMinute),
+            latestEndAt: minuteToUtc(flexWindow.endMinute),
             locationAddressId: address.id,
             routeRelevant: true,
             internalNotes: 'Automatisch aus der Tagesplanung übernommen.',

@@ -143,7 +143,7 @@ export default async function SettingsPage({
         </nav>
       </PageHeader>
 
-      <div className="max-w-4xl space-y-4 p-4 sm:p-5">
+      <div className="mx-auto w-full max-w-[var(--page-max)] space-y-4 p-4 sm:p-5">
         {tab === 'profil' ? (
           <>
             <ProfileSettings

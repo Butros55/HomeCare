@@ -91,6 +91,16 @@ export async function listCustomers(params: CustomerListParams) {
       { appointments: { some: { deletedAt: null, assignedEmployeeId: params.employeeId } } },
     ];
   }
+  if (params.withoutNext) {
+    // Kunden ohne künftig geplanten Termin (Handlungsbedarf: Nachplanung).
+    where.appointments = {
+      none: {
+        deletedAt: null,
+        startAt: { gte: new Date() },
+        status: { in: ['PLANNED', 'CONFIRMED', 'IN_PROGRESS'] },
+      },
+    };
+  }
 
   const total = await db.customer.count({ where });
   const customers = await db.customer.findMany({

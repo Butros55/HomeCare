@@ -51,6 +51,36 @@ export default async function DashboardPage() {
   const canAllocate =
     hasPermission(ctx, 'hours.allocateOrg') || hasPermission(ctx, 'hours.allocateOwnPool');
 
+  // „Heute" nach Mitarbeiter gruppieren: pro Mitarbeiter eine Überschrift, darunter
+  // dessen Termine (zeitlich) – so sieht man sofort, wer wann welchen Termin hat.
+  // `data.timeline` ist bereits nach Uhrzeit sortiert; die Reihenfolge bleibt je Gruppe.
+  const todayGroups = (() => {
+    const map = new Map<string, { employeeName: string | null; entries: typeof data.timeline }>();
+    for (const entry of data.timeline) {
+      const key = entry.employeeId ?? '__unassigned__';
+      const group = map.get(key) ?? { employeeName: entry.employeeName, entries: [] };
+      group.entries.push(entry);
+      map.set(key, group);
+    }
+    return [...map.entries()]
+      .map(([key, group]) => ({
+        key,
+        employeeName: group.employeeName,
+        entries: group.entries,
+        minutes: group.entries.reduce(
+          (sum, e) => sum + Math.round((e.endAt.getTime() - e.startAt.getTime()) / 60_000),
+          0,
+        ),
+      }))
+      .sort((a, b) => {
+        // Unzugewiesene Termine ans Ende, sonst nach frühestem Termin des Mitarbeiters.
+        const aUn = a.employeeName == null;
+        const bUn = b.employeeName == null;
+        if (aUn !== bUn) return aUn ? 1 : -1;
+        return (a.entries[0]?.startAt.getTime() ?? 0) - (b.entries[0]?.startAt.getTime() ?? 0);
+      });
+  })();
+
   return (
     <>
       <PageHeader
@@ -58,7 +88,7 @@ export default async function DashboardPage() {
         description={`${formatWeekday(now, timezone)}, ${formatDate(now, timezone)} · ${ctx.organization.name}`}
       />
 
-      <div className="space-y-4 p-4 sm:p-5">
+      <div className="mx-auto w-full max-w-[var(--page-max)] space-y-4 p-4 sm:p-5">
         {/* Kennzahlkarten – klickbar, führen zu gefilterten Ansichten */}
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-5" data-tour="dashboard-stats">
           <Link href="/calendar" className="rounded-[var(--radius-xl)]">
@@ -118,7 +148,7 @@ export default async function DashboardPage() {
             />
           </Link>
           {data.isPlanner ? (
-            <Link href="/customers" className="hidden rounded-[var(--radius-xl)] sm:block">
+            <Link href="/customers?withoutNext=1" className="hidden rounded-[var(--radius-xl)] sm:block">
               <StatTile
                 icon={<Contact />}
                 label="Ohne nächste Planung"
@@ -168,60 +198,83 @@ export default async function DashboardPage() {
                   description="Der Tag ist frei – oder die Planung wartet noch."
                 />
               ) : (
-                <ol className="divide-y divide-[var(--color-line-subtle)]">
-                  {data.timeline.map((entry) => (
-                    <li key={entry.appointmentId} className="px-4 py-2.5">
-                      {entry.travelSecondsFromPrevious != null ? (
-                        <p className="mb-1.5 flex items-center gap-1.5 text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                          <Car className="size-3.5" aria-hidden />
-                          {formatTravelSeconds(entry.travelSecondsFromPrevious)} Fahrt
-                          {entry.departureFromPreviousAt
-                            ? ` · Abfahrt ${formatTime(entry.departureFromPreviousAt, timezone)}`
-                            : ''}
-                        </p>
-                      ) : null}
-                      <div className="flex items-center gap-3">
-                        <span className="tabular w-24 shrink-0 text-[length:var(--text-sm)] font-semibold">
-                          {formatTime(entry.startAt, timezone)}–{formatTime(entry.endAt, timezone)}
-                        </span>
-                        <span
-                          className="h-8 w-1 shrink-0 rounded-full"
-                          style={{ backgroundColor: entry.customerColor }}
-                          aria-hidden
+                <div className="divide-y divide-[var(--color-line)]">
+                  {todayGroups.map((group) => (
+                    <div key={group.key}>
+                      {/* Mitarbeiter-Überschrift der Gruppe */}
+                      <div className="flex items-center gap-2.5 bg-[var(--color-panel-sunken)] px-4 py-2">
+                        <EntityAvatar
+                          id={group.key}
+                          name={group.employeeName ?? 'Nicht zugewiesen'}
+                          size="sm"
                         />
-                        <span className="min-w-0 flex-1">
-                          <Link
-                            href={`/calendar?termin=${entry.appointmentId}`}
-                            className="block truncate text-[length:var(--text-sm)] font-medium hover:text-[var(--color-brand)]"
-                          >
-                            {entry.customerName} · {entry.title}
-                          </Link>
-                          <span className="block truncate text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                            {entry.employeeName ?? 'Nicht zugewiesen'}
-                            {entry.addressLine ? ` · ${entry.addressLine}` : ''}
-                          </span>
+                        <span className="min-w-0 flex-1 truncate text-[length:var(--text-sm)] font-semibold">
+                          {group.employeeName ?? 'Nicht zugewiesen'}
                         </span>
-                        {entry.hasConflict ? (
-                          <AlertTriangle className="size-4 shrink-0 text-[var(--color-warning)]" aria-label="Konflikt" />
-                        ) : null}
-                        <StatusPill size="sm" tone={statusOf(APPOINTMENT_STATUS, entry.status).tone}>
-                          {statusOf(APPOINTMENT_STATUS, entry.status).label}
-                        </StatusPill>
-                        {entry.latitude != null && entry.longitude != null ? (
-                          <Button asChild variant="ghost" size="icon-sm" aria-label="Navigation starten">
-                            <a
-                              href={googleMapsDirectionsUrl({ latitude: entry.latitude, longitude: entry.longitude })}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              <Navigation aria-hidden />
-                            </a>
-                          </Button>
-                        ) : null}
+                        <span className="shrink-0 text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+                          {group.entries.length}{' '}
+                          {group.entries.length === 1 ? 'Termin' : 'Termine'} ·{' '}
+                          {formatMinutesAsHours(group.minutes)}
+                        </span>
                       </div>
-                    </li>
+                      <ol className="divide-y divide-[var(--color-line-subtle)]">
+                        {group.entries.map((entry) => (
+                          <li key={entry.appointmentId} className="px-4 py-2.5">
+                            {entry.travelSecondsFromPrevious != null ? (
+                              <p className="mb-1.5 flex items-center gap-1.5 text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                                <Car className="size-3.5" aria-hidden />
+                                {formatTravelSeconds(entry.travelSecondsFromPrevious)} Fahrt
+                                {entry.departureFromPreviousAt
+                                  ? ` · Abfahrt ${formatTime(entry.departureFromPreviousAt, timezone)}`
+                                  : ''}
+                              </p>
+                            ) : null}
+                            <div className="flex items-center gap-3">
+                              <span className="tabular w-24 shrink-0 text-[length:var(--text-sm)] font-semibold">
+                                {formatTime(entry.startAt, timezone)}–{formatTime(entry.endAt, timezone)}
+                              </span>
+                              <span
+                                className="h-8 w-1 shrink-0 rounded-full"
+                                style={{ backgroundColor: entry.customerColor }}
+                                aria-hidden
+                              />
+                              <span className="min-w-0 flex-1">
+                                <Link
+                                  href={`/calendar?termin=${entry.appointmentId}`}
+                                  className="block truncate text-[length:var(--text-sm)] font-medium hover:text-[var(--color-brand)]"
+                                >
+                                  {entry.customerName} · {entry.title}
+                                </Link>
+                                {entry.addressLine ? (
+                                  <span className="block truncate text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                                    {entry.addressLine}
+                                  </span>
+                                ) : null}
+                              </span>
+                              {entry.hasConflict ? (
+                                <AlertTriangle className="size-4 shrink-0 text-[var(--color-warning)]" aria-label="Konflikt" />
+                              ) : null}
+                              <StatusPill size="sm" tone={statusOf(APPOINTMENT_STATUS, entry.status).tone}>
+                                {statusOf(APPOINTMENT_STATUS, entry.status).label}
+                              </StatusPill>
+                              {entry.latitude != null && entry.longitude != null ? (
+                                <Button asChild variant="ghost" size="icon-sm" aria-label="Navigation starten">
+                                  <a
+                                    href={googleMapsDirectionsUrl({ latitude: entry.latitude, longitude: entry.longitude })}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    <Navigation aria-hidden />
+                                  </a>
+                                </Button>
+                              ) : null}
+                            </div>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
                   ))}
-                </ol>
+                </div>
               )}
             </PanelBody>
           </Panel>

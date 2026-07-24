@@ -116,6 +116,35 @@ export function candidateWindows(input: {
     : intersection;
 }
 
+/**
+ * Fenstergrenzen für einen NEU angelegten flexiblen Termin (aus Vorschlag oder
+ * Tagesplanung): das Verfügbarkeitsfenster (Kunde ∩ Mitarbeiter), das den
+ * gewählten Einsatz enthält. So bleibt der Termin bei künftigen Umplanungen im
+ * selben Rahmen beweglich, statt fest verankert zu sein.
+ *
+ * Ohne gepflegte Fenster gilt das übergebene Standard-Planungsfenster; liegt
+ * der Einsatz (theoretisch) außerhalb jedes Fensters, wird exakt sein eigener
+ * Zeitraum verwendet – ein Termin liegt nie außerhalb seines Fensters.
+ */
+export function enclosingFlexWindow(input: {
+  customerSlots: { startTime: string; endTime: string }[];
+  employeeSlots: { startTime: string; endTime: string }[];
+  startMinute: number;
+  endMinute: number;
+  fallbackWindow?: MinuteWindow;
+}): MinuteWindow {
+  const unconstrained = input.customerSlots.length === 0 && input.employeeSlots.length === 0;
+  const windows = unconstrained
+    ? [input.fallbackWindow ?? FULL_DAY_WINDOW]
+    : candidateWindows({ customerSlots: input.customerSlots, employeeSlots: input.employeeSlots });
+  const enclosing = windows.find(
+    (w) => input.startMinute >= w.startMinute && input.endMinute <= w.endMinute,
+  );
+  // Kein umschließendes Fenster (z. B. Standardfenster zu eng): exakt der
+  // Einsatz selbst – ein Termin liegt nie außerhalb seines eigenen Fensters.
+  return enclosing ?? { startMinute: input.startMinute, endMinute: input.endMinute };
+}
+
 // ---------------------------------------------------------------------------
 // Offener Bedarf & Vorschlagsdauer
 // ---------------------------------------------------------------------------

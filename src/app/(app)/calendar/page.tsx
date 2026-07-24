@@ -61,6 +61,7 @@ export default async function CalendarPage({
           kunde: params.kunde,
           serie: params.serie === '1',
           termin: params.termin,
+          konflikte: params.konflikte === '1',
         }}
       />
     </div>

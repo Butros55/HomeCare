@@ -2,9 +2,16 @@ import { ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 import * as React from 'react';
 
+import { cn } from '@/lib/utils';
+
 /**
  * Einheitlicher Seitenkopf: Breadcrumbs, Titel, optionale Beschreibung und
  * rechtsbündige Aktionen. Sitzt direkt auf der Canvas – keine Chrome-Leiste.
+ *
+ * Der Kopf ist – wie der Seitenkörper – auf `--page-max` zentriert, damit beide
+ * exakt fluchten und Inhalte auf sehr breiten Displays nicht in die Länge
+ * gezogen werden. Werkzeugseiten (Routen) setzen `fluid`, um die volle Breite zu
+ * nutzen; ihr Körper ist dann ebenfalls voll breit.
  */
 export function PageHeader({
   title,
@@ -12,15 +19,23 @@ export function PageHeader({
   breadcrumbs,
   actions,
   children,
+  fluid = false,
 }: {
   title: string;
   description?: string;
   breadcrumbs?: { label: string; href?: string }[];
   actions?: React.ReactNode;
   children?: React.ReactNode;
+  /** true = volle Breite (Werkzeugseiten), sonst zentriert auf `--page-max`. */
+  fluid?: boolean;
 }) {
   return (
-    <div className="px-4 pt-4 sm:px-5 sm:pt-5">
+    <div
+      className={cn(
+        'mx-auto w-full px-4 pt-4 sm:px-5 sm:pt-5',
+        fluid ? 'max-w-none' : 'max-w-[var(--page-max)]',
+      )}
+    >
       {breadcrumbs && breadcrumbs.length > 0 ? (
         <nav aria-label="Brotkrumen" className="mb-1">
           <ol className="flex flex-wrap items-center gap-1 text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">

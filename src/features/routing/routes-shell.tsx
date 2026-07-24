@@ -91,6 +91,12 @@ type PlanningData = Extract<
 
 type OriginType = 'office' | 'home' | 'gps';
 
+/** Dauer der Ausblende-Animation eines nicht mehr machbaren Vorschlags (muss
+ *  zur CSS-Klasse `.suggestion-anim` in globals.css passen). */
+const SUGGESTION_EXIT_MS = 360;
+/** Sammelt schnelle Datenänderungen, bevor die Vorschläge revalidiert werden. */
+const REVALIDATE_DEBOUNCE_MS = 450;
+
 /** Browser-Standort erst beim Berechnen anfragen (Datenschutz). */
 function requestGps(): Promise<{ latitude: number; longitude: number; timestamp: number }> {
   return new Promise((resolve, reject) => {
@@ -144,9 +150,11 @@ export function RoutesShell({
 
   return (
     <>
+      {/* Werkzeugseite: Karte + Editor brauchen die volle Breite (fluid). */}
       <PageHeader
         title="Tagesroute"
         description="Reihenfolge, Fahrzeiten und empfohlene Abfahrt für einen Arbeitstag planen."
+        fluid
       />
       <div className="space-y-4 p-4 sm:p-5">
         {teamMode ? (
@@ -264,31 +272,98 @@ function SingleRoutePlanner({
 
   // Vorschläge (nur eigene Route).
   const isOwn = employeeId === ownEmployeeId;
+  // „Selbstplanung": die eigene Route (oder Alleine-Modus) wird automatisch
+  // gespeichert – ohne „Freigeben". Freigegeben werden muss nur, was man einem
+  // ANDEREN Mitarbeiter zuweist.
+  const selfPlanning = soloMode || isOwn;
   const [suggestions, setSuggestions] = React.useState<RouteSuggestionDto[] | null>(null);
   const [suggestionInfo, setSuggestionInfo] = React.useState<{ aiUsed: boolean } | null>(null);
   const [declinedTokens, setDeclinedTokens] = React.useState<Set<string>>(new Set());
   const [generating, setGenerating] = React.useState(false);
   const [acceptingToken, setAcceptingToken] = React.useState<string | null>(null);
 
+  // Nach einer Datenänderung nicht mehr annehmbare Vorschläge blenden nach links
+  // aus (customerId-basiert, da die Tokens bei jeder Revalidierung neu vergeben
+  // werden). Neue Kunden kommen nur über einen manuellen „Generieren"-Klick.
+  const [exitingCustomerIds, setExitingCustomerIds] = React.useState<Set<string>>(new Set());
+  const suggestionsRef = React.useRef(suggestions);
+  const revalidateRef = React.useRef<() => void>(() => {});
+  const revalidateSeqRef = React.useRef(0);
+  // Zählt jede vollständige Ersetzung der Liste (Generieren/Reset). Eine noch
+  // laufende Ausblende-Animation darf einen frisch erzeugten Satz nicht anfassen.
+  const listEpochRef = React.useRef(0);
+  const lastGpsRef = React.useRef<
+    { latitude: number; longitude: number; timestamp: number } | undefined
+  >(undefined);
+  React.useEffect(() => {
+    suggestionsRef.current = suggestions;
+  }, [suggestions]);
+
+  /**
+   * Entfernt Vorschläge animiert: erst als „ausblendend" markieren (CSS lässt
+   * sie nach links verschwinden und die Höhe kollabieren – die restlichen
+   * rücken nach oben), nach der Animation aus der Liste nehmen. Überlebende
+   * bekommen dabei ihre frischen Kennzahlen/Tokens (`refresh`).
+   */
+  const animateRemoval = React.useCallback(
+    (removedCustomerIds: string[], refresh?: Map<string, RouteSuggestionDto>) => {
+      if (removedCustomerIds.length === 0) {
+        if (refresh) {
+          setSuggestions((prev) =>
+            prev ? prev.map((s) => refresh.get(s.customerId) ?? s) : prev,
+          );
+        }
+        return;
+      }
+      const removed = new Set(removedCustomerIds);
+      const epoch = listEpochRef.current;
+      setExitingCustomerIds((prev) => new Set([...prev, ...removedCustomerIds]));
+      window.setTimeout(() => {
+        // Wurde die Liste zwischenzeitlich neu generiert, die Animation verwerfen.
+        if (epoch === listEpochRef.current) {
+          setSuggestions((prev) =>
+            prev
+              ? prev
+                  .filter((s) => !removed.has(s.customerId))
+                  .map((s) => refresh?.get(s.customerId) ?? s)
+              : prev,
+          );
+        }
+        setExitingCustomerIds((prev) => {
+          const next = new Set(prev);
+          for (const id of removed) next.delete(id);
+          return next;
+        });
+      }, SUGGESTION_EXIT_MS);
+    },
+    [],
+  );
+
   // Tagesrouten-Generator (Popup mit kompletten Routen-Varianten).
   const [dayDialogOpen, setDayDialogOpen] = React.useState(false);
 
   const reloadData = React.useCallback(
-    async (keepRoute = false): Promise<string[] | null> => {
+    async (options?: { keepRoute?: boolean; clear?: boolean }): Promise<string[] | null> => {
       if (!employeeId || !date) return null;
+      const keepRoute = options?.keepRoute ?? false;
+      const clear = options?.clear ?? false;
       setLoading(true);
       try {
         const result = await getRoutePlanningDataAction(employeeId, date);
         if (result.ok) {
           // Nur Termine auswählen, die es wirklich noch gibt – sonst zählt der
           // Planer gelöschte Stopps mit („3/2 gewählt") und man wird sie nicht los.
+          // `clear` (nach „Verwerfen"): bewusst mit leerer Auswahl starten, damit
+          // die Route NICHT sofort aus den Tagesterminen neu aufgebaut wird.
           const existing = new Set(
             [...result.data.assigned, ...result.data.suggestions].map((c) => c.appointmentId),
           );
-          const ids = (
-            result.data.existingPlan?.stopAppointmentIds ??
-            result.data.assigned.map((a) => a.appointmentId)
-          ).filter((id) => existing.has(id));
+          const ids = clear
+            ? []
+            : (
+                result.data.existingPlan?.stopAppointmentIds ??
+                result.data.assigned.map((a) => a.appointmentId)
+              ).filter((id) => existing.has(id));
           setData(result.data);
           setSelectedIds(ids);
           // Gespeicherte Einstellungen der Route übernehmen (Startpunkt, Puffer,
@@ -312,11 +387,11 @@ function SingleRoutePlanner({
           }
           if (!keepRoute) {
             // Gespeicherte Route direkt anzeigen – sie überlebt den Seitenwechsel.
-            setRoute(result.data.savedRoute);
+            setRoute(clear ? null : result.data.savedRoute);
             setManualOrder(null);
             // Keine gespeicherte Route, aber Termine da → gleich einmal rechnen
-            // (nur anzeigen, noch nicht speichern).
-            pendingInitialComputeRef.current = !result.data.savedRoute && ids.length > 0;
+            // (nur anzeigen, noch nicht speichern). Nach „Verwerfen" NICHT.
+            pendingInitialComputeRef.current = !clear && !result.data.savedRoute && ids.length > 0;
           }
           if (plan?.droppedStopCount) {
             toast.info(
@@ -344,6 +419,9 @@ function SingleRoutePlanner({
       setSuggestions(null);
       setSuggestionInfo(null);
       setDeclinedTokens(new Set());
+      setExitingCustomerIds(new Set());
+      revalidateSeqRef.current += 1; // laufende Revalidierungen verwerfen
+      listEpochRef.current += 1;
       await reloadData();
     });
     return () => {
@@ -366,6 +444,7 @@ function SingleRoutePlanner({
       if (originType === 'gps') {
         try {
           gps = await requestGps();
+          lastGpsRef.current = gps; // für die stille Vorschlags-Revalidierung merken
         } catch {
           toast.error(
             'Standortfreigabe verweigert oder nicht verfügbar – bitte Büro oder Zuhause als Startpunkt wählen.',
@@ -393,7 +472,7 @@ function SingleRoutePlanner({
    * wird wiederverwendet, damit keine erneute Standortabfrage aufpoppt.
    */
   const autoPersist = async (input: ComputeRouteActionInput, computed: ComputedRoute) => {
-    if (!soloMode || !canManage || !computed.feasible) return;
+    if (!selfPlanning || !canManage || !computed.feasible) return;
     const result = await saveRouteAction(
       {
         ...input,
@@ -428,12 +507,12 @@ function SingleRoutePlanner({
       setManualOrder(order ?? null);
       if (result.data.warnings.length > 0) {
         toast.warning(`Route aktualisiert – ${result.data.warnings.length} Hinweis(e).`);
-      } else if (!options?.silent && !soloMode) {
+      } else if (!options?.silent && !selfPlanning) {
         toast.success('Route berechnet.');
       }
       if (!options?.skipPersist) {
         await autoPersist(input, result.data);
-        if (!options?.silent && soloMode && result.data.warnings.length === 0) {
+        if (!options?.silent && selfPlanning && result.data.warnings.length === 0) {
           toast.success('Route gespeichert.');
         }
       }
@@ -460,7 +539,7 @@ function SingleRoutePlanner({
       const result = await saveRouteAction(input, publish);
       if (result.ok) {
         toast.success(publish ? 'Route gespeichert und freigegeben.' : 'Route gespeichert.');
-        await reloadData(true);
+        await reloadData({ keepRoute: true });
       } else {
         toast.error(result.message);
       }
@@ -473,7 +552,10 @@ function SingleRoutePlanner({
       if (result.ok) {
         toast.success('Route verworfen.');
         setRoute(null);
-        await reloadData();
+        setManualOrder(null);
+        // clear: Auswahl leeren und NICHT sofort neu aufbauen – sonst käme die
+        // gerade verworfene Route direkt wieder (und verlangte erneut Freigeben).
+        await reloadData({ clear: true });
       } else {
         toast.error(result.message);
       }
@@ -508,7 +590,7 @@ function SingleRoutePlanner({
     } else {
       setRoute(null);
       setManualOrder(null);
-      if (soloMode && canManage) void discardRouteAction(employeeId, date);
+      if (selfPlanning && canManage) void discardRouteAction(employeeId, date);
     }
   };
 
@@ -519,11 +601,15 @@ function SingleRoutePlanner({
     setSuggestions(null);
     setSuggestionInfo(null);
     setDeclinedTokens(new Set());
+    setExitingCustomerIds(new Set());
+    revalidateSeqRef.current += 1; // laufende Revalidierung verwerfen (Voll-Neulauf)
+    listEpochRef.current += 1;
     try {
       let gps: { latitude: number; longitude: number; timestamp: number } | undefined;
       if (originType === 'gps') {
         try {
           gps = await requestGps();
+          lastGpsRef.current = gps;
         } catch {
           toast.error(
             'Standortfreigabe verweigert – bitte Büro oder Zuhause als Startpunkt wählen.',
@@ -561,14 +647,18 @@ function SingleRoutePlanner({
         toast.success(
           `Termin für ${suggestion.customerName} übernommen. Der Routenentwurf wurde aktualisiert.`,
         );
-        // Verbleibende Vorschläge gegen die FRISCHE Terminliste neu berechnen.
-        const freshIds = await reloadData();
-        await generateSuggestions(freshIds ?? undefined);
+        // Angenommene Karte sofort ausblenden; die Route neu laden. Die dadurch
+        // geänderte Terminauswahl stößt die stille Revalidierung an, die auch
+        // alle weiteren jetzt unmöglichen Vorschläge entfernt – OHNE komplett
+        // neu zu generieren (neue Kunden kommen nur per „Generieren").
+        animateRemoval([suggestion.customerId]);
+        await reloadData();
       } else {
         toast.error(result.message);
         if (result.code === 'SUGGESTION_STALE') {
-          const freshIds = await reloadData();
-          await generateSuggestions(freshIds ?? undefined);
+          // Daten haben sich geändert → nur revalidieren (die nicht mehr
+          // machbaren Vorschläge fallen weg), nicht neu generieren.
+          await reloadData();
         }
       }
     } finally {
@@ -586,6 +676,70 @@ function SingleRoutePlanner({
       return next;
     });
   };
+
+  /**
+   * Stille Revalidierung: prüft die aktuell angezeigten Vorschläge gegen den
+   * neuen Datenstand (geänderte Termine/Startpunkt/Puffer/Rückkehr). Nicht mehr
+   * annehmbare fallen animiert weg, die übrigen bleiben mit frischen Kennzahlen
+   * stehen. Es werden bewusst KEINE neuen Kunden vorgeschlagen (restrictCustomerIds).
+   */
+  const revalidate = async () => {
+    const current = suggestions;
+    const declined = declinedTokens;
+    if (!current || current.length === 0) return;
+    const visible = current.filter((s) => !declined.has(s.token));
+    if (visible.length === 0) return;
+
+    const seq = (revalidateSeqRef.current += 1);
+
+    let gps = lastGpsRef.current;
+    if (originType === 'gps' && !gps) {
+      try {
+        gps = await requestGps();
+        lastGpsRef.current = gps;
+      } catch {
+        return; // Ohne Standort lieber nichts entfernen.
+      }
+    }
+    if (originType !== 'gps') gps = undefined;
+
+    const result = await generateRouteSuggestionsAction({
+      date,
+      scope: 'self',
+      originType,
+      gps,
+      bufferMinutes,
+      returnToStart,
+      appointmentIds: selectedIds.length > 0 ? selectedIds : undefined,
+      restrictCustomerIds: visible.map((s) => s.customerId),
+    });
+    if (seq !== revalidateSeqRef.current) return; // durch neueren Lauf überholt
+    if (!result.ok) return; // Fehler: Liste unverändert lassen
+
+    const fresh = result.data.employees[0]?.suggestions ?? [];
+    const freshById = new Map(fresh.map((s) => [s.customerId, s]));
+    const removedIds = visible
+      .filter((s) => !freshById.has(s.customerId))
+      .map((s) => s.customerId);
+    animateRemoval(removedIds, freshById);
+  };
+
+  // Immer die aktuellste Revalidierungs-Closure bereithalten (liest den neuesten
+  // State), ohne den Debounce-Effekt bei jedem Render neu zu starten.
+  React.useEffect(() => {
+    revalidateRef.current = () => {
+      void revalidate();
+    };
+  });
+
+  // Datenänderung (Termine/Startpunkt/Puffer/Rückkehr) → nach kurzem Sammeln
+  // still revalidieren. Läuft nur, wenn bereits Vorschläge sichtbar sind; ein
+  // frisch generierter Satz löst nichts aus (Signale unverändert).
+  React.useEffect(() => {
+    if (!suggestionsRef.current || suggestionsRef.current.length === 0) return;
+    const handle = window.setTimeout(() => revalidateRef.current(), REVALIDATE_DEBOUNCE_MS);
+    return () => window.clearTimeout(handle);
+  }, [selectedIds, originType, bufferMinutes, returnToStart]);
 
   // ---- Tagesrouten-Generator ---------------------------------------------
   const generateDayRoutes = async (form: DayRouteFormValues) => {
@@ -617,8 +771,9 @@ function SingleRoutePlanner({
   };
 
   const acceptDayRoute = async (token: string): Promise<boolean> => {
-    // Alleine-Modus: direkt verbindlich; sonst als Entwurf (Freigeben wie gehabt).
-    const result = await acceptDayRouteAction(token, soloMode);
+    // Eigene Route/Alleine-Modus: direkt verbindlich; für andere als Entwurf
+    // (dann noch „Freigeben").
+    const result = await acceptDayRouteAction(token, selfPlanning);
     if (!result.ok) {
       toast.error(result.message);
       return false;
@@ -906,7 +1061,7 @@ function SingleRoutePlanner({
                 </PanelTitle>
                 {canManage ? (
                   <div className="flex flex-wrap items-center gap-2">
-                    {soloMode ? (
+                    {selfPlanning ? (
                       route ? (
                         <span className="flex items-center gap-1.5 text-[length:var(--text-2xs)] text-[var(--color-success)]">
                           <Check className="size-3.5" aria-hidden />
@@ -1043,6 +1198,7 @@ function SingleRoutePlanner({
                 suggestionInfo={suggestionInfo}
                 visibleSuggestions={visibleSuggestions}
                 declinedList={declinedList}
+                exitingCustomerIds={exitingCustomerIds}
                 canAccept={canAccept}
                 acceptingToken={acceptingToken}
                 timezone={timezone}
@@ -1061,12 +1217,12 @@ function SingleRoutePlanner({
           {/* Karte + Kennzahlen – bleiben beim Scrollen zusammen sichtbar und
               folgen jeder Bearbeitung sofort. Mobil stehen sie oben (order-1). */}
           <div className="order-1 xl:order-none xl:col-span-3">
-            {/* Karte + Kennzahlen füllen zusammen höchstens die sichtbare Höhe
-                (Fenster minus Topbar), damit die Sticky-Spalte immer komplett
-                einrastet. Die Karte ist der flexible Teil und schrumpft, damit
-                die Kennzahlen darunter nie abgeschnitten werden. */}
-            <div className="@container flex flex-col gap-3 xl:sticky xl:top-4 xl:max-h-[calc(100dvh_-_var(--spacing-topbar)_-_2rem)]">
-              <Panel className="xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
+            {/* Karte + Kennzahlen bleiben beim Scrollen sichtbar (sticky). Die
+                Karte hat eine feste, angenehme Höhe (rund 42 % der Fensterhöhe,
+                gedeckelt) – sie soll auf großen Displays NICHT die ganze Höhe
+                ausfüllen. */}
+            <div className="@container flex flex-col gap-3 xl:sticky xl:top-4">
+              <Panel className="xl:flex xl:flex-col">
                 <PanelHeader>
                   <PanelTitle>Karte</PanelTitle>
                   {polyline && polyline.length > 1 ? (
@@ -1079,8 +1235,8 @@ function SingleRoutePlanner({
                     </span>
                   ) : null}
                 </PanelHeader>
-                <PanelBody className="p-3 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
-                  <div className="h-[360px] overflow-hidden rounded-[var(--radius-lg)] xl:h-auto xl:min-h-[8rem] xl:flex-1">
+                <PanelBody className="p-3">
+                  <div className="h-[360px] overflow-hidden rounded-[var(--radius-lg)] xl:h-[clamp(20rem,42vh,30rem)]">
                     {markers.length > 0 ? (
                       <LeafletMap markers={markers} polyline={polyline} roadPath={activeRoadPath} />
                     ) : (
@@ -1149,6 +1305,8 @@ function SingleRoutePlanner({
                           serviceMinutes: route.totalServiceMinutes,
                           distanceMeters: route.totalDistanceMeters,
                           hourlyWageCents: data.earningsRates.hourlyWageCents ?? 0,
+                          taxFreeBonusCentsPerHour:
+                            data.earningsRates.taxFreeBonusCentsPerHour ?? 0,
                           mileageRatePerKmCents: data.earningsRates.mileageRatePerKmCents ?? 0,
                         }).totalCents,
                       )}
@@ -1679,6 +1837,8 @@ interface SuggestionListProps {
   suggestionInfo: { aiUsed: boolean } | null;
   visibleSuggestions: RouteSuggestionDto[] | null;
   declinedList: RouteSuggestionDto[];
+  /** customerIds, die gerade animiert ausgeblendet werden. */
+  exitingCustomerIds: Set<string>;
   canAccept: boolean;
   acceptingToken: string | null;
   timezone: string;
@@ -1715,6 +1875,7 @@ function SuggestionsBody({
   suggestions,
   visibleSuggestions,
   declinedList,
+  exitingCustomerIds,
   canAccept,
   acceptingToken,
   timezone,
@@ -1761,35 +1922,52 @@ function SuggestionsBody({
     );
   }
   return (
-    <div className="space-y-2.5">
-      {visibleSuggestions?.map((suggestion) => (
-        <SuggestionCard
-          key={suggestion.token}
-          suggestion={suggestion}
-          timezone={timezone}
-          canAccept={canAccept}
-          declined={false}
-          pending={acceptingToken === suggestion.token}
-          onAccept={onAccept}
-          onDecline={onDecline}
-          onUndoDecline={onUndoDecline}
-        />
-      ))}
-      {declinedList.map((suggestion) => (
-        <SuggestionCard
-          key={suggestion.token}
-          suggestion={suggestion}
-          timezone={timezone}
-          canAccept={canAccept}
-          declined
-          pending={false}
-          onAccept={onAccept}
-          onDecline={onDecline}
-          onUndoDecline={onUndoDecline}
-        />
-      ))}
+    <div>
+      {/* Sichtbare Vorschläge: nach customerId gekeyt, damit Karten beim
+          Revalidieren erhalten bleiben und nur weggefallene ausblenden. */}
+      <div className="suggestion-anim-list">
+        {visibleSuggestions?.map((suggestion) => (
+          <div
+            key={suggestion.customerId}
+            className={cn(
+              'suggestion-anim',
+              exitingCustomerIds.has(suggestion.customerId) && 'is-exiting',
+            )}
+          >
+            <div className="suggestion-anim__inner">
+              <SuggestionCard
+                suggestion={suggestion}
+                timezone={timezone}
+                canAccept={canAccept}
+                declined={false}
+                pending={acceptingToken === suggestion.token}
+                onAccept={onAccept}
+                onDecline={onDecline}
+                onUndoDecline={onUndoDecline}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      {declinedList.length > 0 ? (
+        <div className="mt-2.5 space-y-2.5">
+          {declinedList.map((suggestion) => (
+            <SuggestionCard
+              key={suggestion.token}
+              suggestion={suggestion}
+              timezone={timezone}
+              canAccept={canAccept}
+              declined
+              pending={false}
+              onAccept={onAccept}
+              onDecline={onDecline}
+              onUndoDecline={onUndoDecline}
+            />
+          ))}
+        </div>
+      ) : null}
       {!canAccept ? (
-        <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+        <p className="mt-2.5 text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
           Vorschläge können nur von der Leitung übernommen werden.
         </p>
       ) : null}

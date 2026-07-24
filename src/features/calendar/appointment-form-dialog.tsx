@@ -480,30 +480,30 @@ export function AppointmentFormDialog({
               />
             </div>
 
-            {!soloMode ? (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-3 py-2.5">
-                  <span className="text-[length:var(--text-sm)]">
-                    <span className="block font-medium">Flexibler Termin</span>
-                    <span className="block text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                      Kann in der Routenplanung verschoben werden.
-                    </span>
+            {/* Flexibel/Routenrelevant bewusst auch im Solo-Modus: ohne diese
+                Angaben ergibt die Fix/Flexibel-Logik der Routenplanung keinen Sinn. */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <label className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-3 py-2.5">
+                <span className="text-[length:var(--text-sm)]">
+                  <span className="block font-medium">Flexibler Termin</span>
+                  <span className="block text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                    Kann in der Routenplanung verschoben werden.
                   </span>
-                  <Switch checked={isFlexible} onCheckedChange={setIsFlexible} />
-                </label>
-                <label className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-3 py-2.5">
-                  <span className="text-[length:var(--text-sm)]">
-                    <span className="block font-medium">Routenrelevant</span>
-                    <span className="block text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                      Wird in Tagesrouten eingeplant.
-                    </span>
+                </span>
+                <Switch checked={isFlexible} onCheckedChange={setIsFlexible} />
+              </label>
+              <label className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-3 py-2.5">
+                <span className="text-[length:var(--text-sm)]">
+                  <span className="block font-medium">Routenrelevant</span>
+                  <span className="block text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                    Wird in Tagesrouten eingeplant.
                   </span>
-                  <Switch checked={routeRelevant} onCheckedChange={setRouteRelevant} />
-                </label>
-              </div>
-            ) : null}
+                </span>
+                <Switch checked={routeRelevant} onCheckedChange={setRouteRelevant} />
+              </label>
+            </div>
 
-            {!soloMode && isFlexible ? (
+            {isFlexible ? (
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label htmlFor="af-earliest">Frühester Start</Label>

@@ -42,12 +42,15 @@ export interface ProCalendarEvent {
   end: string;
   customerName: string;
   customerColor: string;
+  employeeId: string | null;
   employeeName: string | null;
   /** Nur im Team-Modus ein eigener Handlungsbedarf; Solo kennt keine Zuweisung. */
   unassigned: boolean;
   hasConflict: boolean;
   /** Serienzugehörigkeit – für das Serien-Icon am Termin-Chip. */
   isSeries: boolean;
+  /** Flexibler Termin (verschiebbar) – eigenes Icon statt „fix". */
+  isFlexible: boolean;
   status: string;
 }
 
@@ -69,10 +72,12 @@ export function toProEvent(event: CalendarEventDto, soloMode = false): ProCalend
     end: event.end,
     customerName: event.customerName,
     customerColor: event.customerColor,
+    employeeId: event.employeeId,
     employeeName: event.employeeName,
     unassigned: !soloMode && !event.employeeId,
     hasConflict: event.hasConflict,
     isSeries: event.seriesId != null,
+    isFlexible: event.isFlexible,
     status: event.status,
   };
 }

@@ -101,12 +101,14 @@ export function computeSchedule(
     let warning: string | null = null;
 
     if (stop.fixedStartAt) {
+      // Feste Termine sind zeitlich verankert: Der Beginn wird NIE verschoben –
+      // eine zu späte Ankunft wird gemeldet (Route unzulässig), aber die
+      // angezeigten Zeiten bleiben die vereinbarten.
       serviceStart = stop.fixedStartAt;
       if (arrival > stop.fixedStartAt) {
         const lateMinutes = Math.ceil((arrival.getTime() - stop.fixedStartAt.getTime()) / 60_000);
         warning = `Ankunft ${lateMinutes} Min. nach dem festen Beginn (${fmt(stop.fixedStartAt)} geplant).`;
         feasible = false;
-        serviceStart = arrival; // realistisch weiterrechnen
       }
     } else {
       serviceStart = arrival;
@@ -141,7 +143,9 @@ export function computeSchedule(
     if (warning) warnings.push(`Stopp ${position + 1}: ${warning}`);
 
     currentMatrixIndex = matrixIndex(stopIndex);
-    currentTime = new Date(serviceEnd.getTime() + bufferMinutes * 60_000);
+    // Bei verspäteter Ankunft an einem festen Termin (serviceEnd < arrival
+    // möglich, da der Beginn verankert bleibt) darf die Zeit nicht rückwärts laufen.
+    currentTime = new Date(Math.max(serviceEnd.getTime(), arrival.getTime()) + bufferMinutes * 60_000);
   });
 
   let returnArrivalAt: Date | null = null;

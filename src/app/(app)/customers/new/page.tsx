@@ -23,7 +23,7 @@ export default async function NewCustomerPage() {
         title="Kunde anlegen"
         breadcrumbs={[{ label: 'Kunden', href: '/customers' }, { label: 'Neu' }]}
       />
-      <div className="mx-auto max-w-3xl p-4 sm:p-5">
+      <div className="mx-auto w-full max-w-[var(--page-max)] p-4 sm:p-5">
         <CustomerForm
           initial={{}}
           employees={employees.map((e) => ({ id: e.id, name: employeeDisplayName(e, ctx.user.id) }))}

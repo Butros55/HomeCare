@@ -46,7 +46,7 @@ export default async function EditCustomerPage({
           { label: 'Bearbeiten' },
         ]}
       />
-      <div className="mx-auto max-w-3xl p-4 sm:p-5">
+      <div className="mx-auto w-full max-w-[var(--page-max)] p-4 sm:p-5">
         <CustomerForm
           initial={{
             customerId: customer.id,

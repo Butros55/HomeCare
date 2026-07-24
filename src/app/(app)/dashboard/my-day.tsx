@@ -1,4 +1,6 @@
 import {
+  AlertTriangle,
+  ArrowRight,
   CalendarDays,
   CalendarPlus,
   Car,
@@ -57,7 +59,31 @@ export async function MyDayDashboard({
         description={`${formatWeekday(now, timezone)}, ${formatDate(now, timezone)} · ${ctx.user.firstName} ${ctx.user.lastName}`}
       />
 
-      <div className="mx-auto max-w-5xl space-y-4 p-4 sm:p-5">
+      <div className="mx-auto w-full max-w-[var(--page-max)] space-y-4 p-4 sm:p-5">
+        {/* Auffälliger Hinweis-Banner: Termine mit Konflikt (Überschneidung,
+            Abwesenheit, außerhalb der Verfügbarkeit) direkt zum Prüfen. */}
+        {data.counts.conflictCount > 0 ? (
+          <Link
+            href="/calendar?konflikte=1"
+            className="flex items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--color-danger)] bg-[var(--color-danger-soft)] px-4 py-3 transition-colors hover:bg-[color-mix(in_srgb,var(--color-danger)_16%,transparent)]"
+          >
+            <AlertTriangle className="size-5 shrink-0 text-[var(--color-danger)]" aria-hidden />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[length:var(--text-sm)] font-semibold text-[var(--color-danger)]">
+                {data.counts.conflictCount === 1
+                  ? '1 Termin heute mit Hinweis'
+                  : `${data.counts.conflictCount} Termine heute mit Hinweis`}
+              </span>
+              <span className="block text-[length:var(--text-xs)] text-[var(--color-ink-muted)]">
+                Bitte prüfen – z. B. außerhalb der Verfügbarkeit oder Überschneidung.
+              </span>
+            </span>
+            <span className="flex shrink-0 items-center gap-1 text-[length:var(--text-sm)] font-medium text-[var(--color-danger)]">
+              Prüfen <ArrowRight className="size-4" aria-hidden />
+            </span>
+          </Link>
+        ) : null}
+
         {/* Kompakte Kennzahlen */}
         <div className="grid grid-cols-2 gap-3 xl:grid-cols-4" data-tour="my-day-stats">
           <StatTile
@@ -236,6 +262,15 @@ export async function MyDayDashboard({
                           {entry.addressLine ? ` · ${entry.addressLine}` : ''}
                         </span>
                       </span>
+                      {entry.hasConflict ? (
+                        <Link
+                          href={`/calendar?termin=${entry.appointmentId}`}
+                          className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--color-danger-soft)] px-2 py-0.5 text-[length:var(--text-2xs)] font-semibold text-[var(--color-danger)]"
+                          title="Hinweis – bitte prüfen"
+                        >
+                          <AlertTriangle className="size-3.5" aria-hidden /> Hinweis
+                        </Link>
+                      ) : null}
                       <StatusPill size="sm" tone={displayedStatus.tone}>
                         {displayedStatus.label}
                       </StatusPill>

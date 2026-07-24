@@ -245,6 +245,9 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
     isOwn && ctx.membership.hourlyWageCents > 0
       ? {
           hourlyWageCents: ctx.membership.hourlyWageCents,
+          // Steuerfreier Zuschlag fließt in den Stundenverdienst ein – gleiche
+          // Basis wie im Dashboard („Verdienst heute").
+          taxFreeBonusCentsPerHour: ctx.membership.taxFreeBonusCentsPerHour ?? 0,
           // `?? 0`: robust, falls der (Dev-)Prisma-Client das Feld noch nicht kennt.
           mileageRatePerKmCents: ctx.membership.mileageRatePerKmCents ?? 0,
         }

@@ -66,7 +66,7 @@ export default async function ReportsPage({
             </div>
           }
         />
-        <div className="mx-auto max-w-5xl p-4 sm:p-5">
+        <div className="mx-auto w-full max-w-[var(--page-max)] p-4 sm:p-5">
           <PersonalEarningsDashboard data={earnings} />
         </div>
       </>
@@ -135,7 +135,7 @@ export default async function ReportsPage({
         </div>
       </PageHeader>
 
-      <div className="space-y-4 p-4 sm:p-5">
+      <div className="mx-auto w-full max-w-[var(--page-max)] space-y-4 p-4 sm:p-5">
         <PersonalEarningsDashboard data={earnings} />
 
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-5" data-tour="reports-stats">
@@ -148,8 +148,16 @@ export default async function ReportsPage({
             value={formatMinutesAsHours(data.totals.openMinutes)}
             tone={data.totals.openMinutes > 0 ? 'warning' : 'success'}
           />
-          <StatTile label="Fahrtzeit (Routen)" value={formatTravelSeconds(data.totals.travelSeconds)} />
-          <StatTile label="Entfernung" value={formatDistance(data.totals.distanceMeters)} />
+          <StatTile
+            label="Fahrtzeit"
+            value={formatTravelSeconds(data.totals.travelSeconds)}
+            hint="erfasste Fahrten"
+          />
+          <StatTile
+            label="Entfernung"
+            value={formatDistance(data.totals.distanceMeters)}
+            hint="geschätzt"
+          />
           <StatTile
             label="Auslastung"
             value={data.totals.utilizationPercent != null ? `${data.totals.utilizationPercent} %` : '—'}

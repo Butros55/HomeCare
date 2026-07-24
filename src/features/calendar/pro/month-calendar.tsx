@@ -60,6 +60,10 @@ interface ProMonthCalendarProps {
   /** Tage mit mindestens einem Konflikt (roter Ring am Datum). */
   conflictDays: Set<string>;
   today: Date;
+  /** Verwaltungsansicht: Mitarbeiter-Kennzeichen (Initialen) am Chip zeigen. */
+  showEmployee?: boolean;
+  /** Termin, der nach dem Anspringen kurz hervorgehoben wird. */
+  highlightEventId?: string | null;
   onOpenEvent: (id: string) => void;
   onOpenPanel: (page: 'calendars' | 'day') => void;
   onCreate: (key: string) => void;
@@ -109,6 +113,16 @@ const DOT_CLASS_BY_KIND: Record<ProEventKind, string> = {
   cancelled: 'bg-muted-foreground/50',
 };
 
+/** Initialen aus einem Namen ("Sofia Lorenz" → "SL"). */
+function nameInitials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word[0]!.toUpperCase())
+    .join('');
+}
+
 interface DayChip {
   key: string;
   label: string;
@@ -116,7 +130,12 @@ interface DayChip {
   dot: string;
   sub?: string;
   isSeries: boolean;
+  isFlexible: boolean;
   hasConflict: boolean;
+  /** Verwaltungsansicht: Initialen des zuständigen Mitarbeiters (sonst null). */
+  employeeInitials: string | null;
+  /** Termin nach dem Anspringen kurz hervorheben. */
+  highlighted: boolean;
 }
 
 /**
@@ -124,7 +143,8 @@ interface DayChip {
  * rote Plakette + roter Rahmen) und Serie (subtiles Wiederholungs-Icon).
  */
 function ProMonthChip({ chip }: { chip: DayChip }) {
-  const showMarkers = chip.hasConflict || chip.isSeries;
+  const showMarkers = chip.hasConflict || chip.isSeries || chip.isFlexible;
+  const markerCount = (chip.hasConflict ? 1 : 0) + (chip.isSeries ? 1 : 0) + (chip.isFlexible ? 1 : 0);
   return (
     <span
       className={cn(
@@ -133,15 +153,42 @@ function ProMonthChip({ chip }: { chip: DayChip }) {
         chip.cls,
         chip.hasConflict &&
           'ring-1 ring-inset ring-[var(--color-danger)] bg-[color-mix(in_srgb,var(--color-danger)_16%,transparent)]',
+        chip.highlighted && 'animate-pulse ring-2 ring-[var(--color-brand)]',
       )}
-      title={chip.hasConflict ? 'Terminkonflikt' : chip.isSeries ? 'Serientermin' : undefined}
+      title={
+        chip.hasConflict
+          ? 'Hinweis: bitte prüfen'
+          : [chip.isFlexible ? 'Flexibler Termin' : null, chip.isSeries ? 'Serientermin' : null]
+              .filter(Boolean)
+              .join(' · ') || undefined
+      }
     >
-      <span className={cn('block truncate', showMarkers && 'pr-3.5')}>{chip.label}</span>
+      <span
+        className={cn(
+          'flex items-center gap-1',
+          showMarkers && (markerCount > 1 ? 'pr-5' : 'pr-3.5'),
+        )}
+      >
+        {chip.employeeInitials ? (
+          <span
+            className="grid size-3.5 shrink-0 place-items-center rounded-full bg-black/25 text-[7px] font-bold leading-none"
+            title="Mitarbeiter"
+          >
+            {chip.employeeInitials}
+          </span>
+        ) : null}
+        <span className="min-w-0 flex-1 truncate">{chip.label}</span>
+      </span>
       {showMarkers && (
         <span className="pointer-events-none absolute top-1/2 right-0.5 flex -translate-y-1/2 items-center gap-0.5">
           {chip.hasConflict && (
             <span className="grid size-3 place-items-center rounded-full bg-[var(--color-danger)] text-[7px] font-bold text-white">
               !
+            </span>
+          )}
+          {chip.isFlexible && (
+            <span className="text-[9px] leading-none opacity-70" aria-hidden title="Flexibel">
+              ↔
             </span>
           )}
           {chip.isSeries && (
@@ -519,6 +566,8 @@ export function ProMonthCalendar({
   eventsByDay,
   conflictDays,
   today,
+  showEmployee = false,
+  highlightEventId = null,
   onOpenEvent,
   onOpenPanel,
   onCreate,
@@ -713,7 +762,10 @@ export function ProMonthCalendar({
         dot: DOT_CLASS_BY_KIND[ev.kind],
         sub: format(new Date(ev.start), 'HH:mm'),
         isSeries: ev.isSeries,
+        isFlexible: ev.isFlexible,
         hasConflict: ev.hasConflict,
+        employeeInitials: showEmployee && ev.employeeName ? nameInitials(ev.employeeName) : null,
+        highlighted: ev.id === highlightEventId,
       });
     }
     const MAX = 3;
@@ -1583,7 +1635,13 @@ export function ProMonthCalendar({
                                                   role="button"
                                                   tabIndex={0}
                                                   aria-label={`Termin ${c.label} öffnen`}
-                                                  title={c.hasConflict ? 'Terminkonflikt' : c.isSeries ? 'Serientermin' : undefined}
+                                                  title={
+                                                    c.hasConflict
+                                                      ? 'Hinweis: bitte prüfen'
+                                                      : [c.isFlexible ? 'Flexibler Termin' : null, c.isSeries ? 'Serientermin' : null]
+                                                          .filter(Boolean)
+                                                          .join(' · ') || undefined
+                                                  }
                                                   onClick={(event) => {
                                                     // Termin öffnen statt in den Tag zu wechseln.
                                                     event.stopPropagation();
@@ -1606,17 +1664,27 @@ export function ProMonthCalendar({
                                                           zoomMode === 'full' ? 'py-1' : 'py-px',
                                                           c.hasConflict &&
                                                             'ring-1 ring-inset ring-[var(--color-danger)] bg-[color-mix(in_srgb,var(--color-danger)_16%,transparent)]',
+                                                          c.highlighted &&
+                                                            'animate-pulse ring-2 ring-[var(--color-brand)]',
                                                         ),
                                                   )}
                                                 >
                                                   <span
                                                     className={cn(
-                                                      'block truncate font-medium leading-tight transition-opacity duration-150 ease-out text-[length:calc(9px*var(--chip-scale))] sm:text-[length:calc(10px*var(--chip-scale))]',
+                                                      'flex items-center gap-1 font-medium leading-tight transition-opacity duration-150 ease-out text-[length:calc(9px*var(--chip-scale))] sm:text-[length:calc(10px*var(--chip-scale))]',
                                                       zoomMode === 'bars' ? 'opacity-0' : 'opacity-100',
-                                                      (c.hasConflict || c.isSeries) && 'pr-3.5',
+                                                      (c.hasConflict || c.isSeries || c.isFlexible) && 'pr-3.5',
                                                     )}
                                                   >
-                                                    {c.label}
+                                                    {c.employeeInitials ? (
+                                                      <span
+                                                        className="grid size-3.5 shrink-0 place-items-center rounded-full bg-black/25 text-[7px] font-bold leading-none"
+                                                        title="Mitarbeiter"
+                                                      >
+                                                        {c.employeeInitials}
+                                                      </span>
+                                                    ) : null}
+                                                    <span className="min-w-0 flex-1 truncate">{c.label}</span>
                                                   </span>
                                                   {c.sub && (
                                                     <span
@@ -1628,12 +1696,17 @@ export function ProMonthCalendar({
                                                       {c.sub}
                                                     </span>
                                                   )}
-                                                  {/* Marker oben rechts: Konflikt (rot) + Serie (subtil). */}
-                                                  {zoomMode !== 'bars' && (c.hasConflict || c.isSeries) && (
+                                                  {/* Marker oben rechts: Konflikt (rot), flexibel (↔), Serie (↻). */}
+                                                  {zoomMode !== 'bars' && (c.hasConflict || c.isSeries || c.isFlexible) && (
                                                     <span className="pointer-events-none absolute top-0.5 right-0.5 flex items-center gap-0.5">
                                                       {c.hasConflict && (
                                                         <span className="grid size-3 place-items-center rounded-full bg-[var(--color-danger)] text-[7px] font-bold text-white">
                                                           !
+                                                        </span>
+                                                      )}
+                                                      {c.isFlexible && (
+                                                        <span className="text-[9px] leading-none opacity-70" aria-hidden>
+                                                          ↔
                                                         </span>
                                                       )}
                                                       {c.isSeries && (
@@ -1689,6 +1762,8 @@ export function ProMonthCalendar({
               onMonthChange={onMonthChange}
               eventsByDay={eventsByDay}
               today={today}
+              showEmployee={showEmployee}
+              highlightEventId={highlightEventId}
               onOpenEvent={onOpenEvent}
               onOpenPanel={onOpenPanel}
               onCreate={onCreate}
