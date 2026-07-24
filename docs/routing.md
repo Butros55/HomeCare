@@ -11,7 +11,7 @@ erreichen nie den Client.
 | Geocoding | `mock` (deterministisch) | `nominatim` | Google, Mapbox, ORS |
 | Routing/Matrix | `mock` (Haversine-Schätzung) | `osrm`, `mapbox`, `graphhopper`, `google` | dieselben mit eigenem Kontingent |
 | Streckenverlauf (Karte) | `mock` (Luftlinie) | OSRM, Mapbox, GraphHopper, Google (Fallback-Kette) | dieselben |
-| Karten-Tiles | OSM (`NEXT_PUBLIC_MAP_TILE_URL`) | beliebiger Tile-Server | kommerzieller Tile-/Style-Provider |
+| Karten-Tiles | CARTO hell/dunkel über `/api/map/tiles` | Mapbox (Token serverseitig) | eigener Tile-Server via `NEXT_PUBLIC_MAP_TILE_URL` |
 
 **Mock-Provider (Standard):** Geocoding hasht die normalisierte Adresse auf eine stabile
 Koordinate im Raum Münster („mehrdeutig“ im Straßennamen → zwei Kandidaten für den
@@ -67,6 +67,27 @@ MVP-Verfahren gemäß Anforderung 17, deterministisch und unit-getestet:
 6. Ergebnis: Reihenfolge, Ankunft/Einsatzbeginn/-ende je Stopp, Fahrzeit/Distanz je
    Abschnitt, Wartezeiten, Puffer, Summen, Rückkehrzeit, Warnungen; „keine zulässige
    Route“ wird explizit gemeldet (`ROUTE_NOT_FEASIBLE` bzw. Warnliste).
+
+## Kartenkacheln (hell/dunkel)
+
+Die Karte folgt dem App-Theme – die alten OSM-Kacheln waren im dunklen UI ein
+Fremdkörper.
+
+- Client fragt immer `/api/map/tiles/{light|dark}/{z}/{x}/{y}{r}` an; welcher
+  Anbieter dahintersteckt, entscheidet der Server (`src/lib/map-tiles.ts` baut
+  nur die URL, kennt keine Schlüssel).
+- **Mit `MAPBOX_ACCESS_TOKEN`**: Die Route holt die Kacheln serverseitig bei
+  Mapbox (`light-v11` / `dark-v11`, 512 px) und reicht sie durch – der Token
+  bleibt auf dem Server und taucht nicht im Client-Bundle auf.
+- **Ohne Token**: 307-Weiterleitung auf die frei nutzbaren CARTO-Basiskarten
+  (Positron / Dark Matter). Der Browser lädt dann direkt dort, der Server ist
+  aus dem Weg.
+- Pfadsegmente werden streng geprüft (feste Stilnamen, nur Ziffern, Kachel
+  innerhalb des Zoom-Rasters) – der Proxy kann nie zu einer beliebigen Ziel-URL
+  werden. Cache: ein Tag Browser, eine Woche `stale-while-revalidate`.
+- `{r}` liefert `@2x` für Retina-Displays (`detectRetina`).
+- `NEXT_PUBLIC_MAP_TILE_URL` überschreibt weiterhin alles – für einen eigenen
+  Tile-/Style-Server. Leer lassen, sonst greift das Theme-Umschalten nicht.
 
 ## Streckenverlauf auf der Karte
 

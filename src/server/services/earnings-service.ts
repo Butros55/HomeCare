@@ -2,6 +2,7 @@ import 'server-only';
 
 import { fromDateInputValue } from '@/lib/dates';
 import { centsForMinutes, computePersonalEarnings } from '@/lib/earnings';
+import { computeNetPay, isCompensationProfileComplete } from '@/lib/net-pay';
 import { db } from '@/server/db';
 import { AppError } from '@/server/errors';
 import {
@@ -176,6 +177,30 @@ export async function getPersonalEarningsData(filters: PersonalEarningsFilters) 
         left.name.localeCompare(right.name, 'de'),
     );
 
+  // Brutto → Netto: nur schätzen, wenn das Vergütungsprofil vollständig ist.
+  // Der steuerfreie Zuschlag (z. B. Werbepauschale) hängt an den eigenen
+  // geleisteten Stunden, nicht an der Provision.
+  const membership = ctx.membership;
+  const taxFreeBonusCents = centsForMinutes(
+    ownCompletedMinutes,
+    membership.taxFreeBonusCentsPerHour,
+  );
+  const profile = {
+    employmentType: membership.taxEmploymentType ?? undefined,
+    incomeTaxRatePercent: membership.incomeTaxRatePercent ?? undefined,
+    churchTaxRatePercent: membership.churchTaxRatePercent,
+    healthInsuranceExtraRatePercent: membership.healthInsuranceExtraRatePercent,
+    hasChildren: membership.hasChildren,
+    applySolidarity: membership.applySolidarity,
+  };
+  const netPay = isCompensationProfileComplete(profile)
+    ? computeNetPay({
+        taxableGrossCents: calculated.totalEarningsCents,
+        taxFreeCents: taxFreeBonusCents,
+        profile,
+      })
+    : null;
+
   return {
     period: { from: filters.from, to: filters.to },
     showCommission,
@@ -183,7 +208,17 @@ export async function getPersonalEarningsData(filters: PersonalEarningsFilters) 
       hourlyWageCents: ctx.membership.hourlyWageCents,
       employeeCommissionCentsPerHour:
         ctx.membership.employeeCommissionCentsPerHour,
+      taxFreeBonusCentsPerHour: membership.taxFreeBonusCentsPerHour,
+      taxFreeBonusLabel: membership.taxFreeBonusLabel,
     },
+    /** Steuerfreier Zuschlag im Zeitraum (0, wenn keiner hinterlegt ist). */
+    taxFreeBonusCents,
+    /**
+     * Netto-Schätzung – `null`, solange die Angaben in den Einstellungen
+     * fehlen. Dann zeigt der Bericht bewusst nur Brutto.
+     */
+    netPay,
+    employmentType: membership.taxEmploymentType,
     own: {
       completedMinutes: ownCompletedMinutes,
       appointmentCount: ownAppointmentCount,

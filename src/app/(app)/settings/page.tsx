@@ -133,6 +133,15 @@ export default async function SettingsPage({
                 hourlyWageCents: ctx.membership.hourlyWageCents,
                 employeeCommissionCentsPerHour:
                   ctx.membership.employeeCommissionCentsPerHour,
+                taxEmploymentType: ctx.membership.taxEmploymentType,
+                incomeTaxRatePercent: ctx.membership.incomeTaxRatePercent,
+                churchTaxRatePercent: ctx.membership.churchTaxRatePercent,
+                healthInsuranceExtraRatePercent:
+                  ctx.membership.healthInsuranceExtraRatePercent,
+                hasChildren: ctx.membership.hasChildren,
+                applySolidarity: ctx.membership.applySolidarity,
+                taxFreeBonusCentsPerHour: ctx.membership.taxFreeBonusCentsPerHour,
+                taxFreeBonusLabel: ctx.membership.taxFreeBonusLabel,
               }}
               showCommission={
                 isLeadershipRole(ctx.membership.role) &&

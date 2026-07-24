@@ -2,7 +2,14 @@ import 'server-only';
 
 import { addDays } from 'date-fns';
 
-import { dayPeriodInZone, monthPeriodInZone, overlaps, weekPeriodInZone } from '@/lib/dates';
+import {
+  calendarDayInZone,
+  dayPeriodInZone,
+  monthPeriodInZone,
+  overlaps,
+  utcDate,
+  weekPeriodInZone,
+} from '@/lib/dates';
 import { estimateTravelSeconds } from '@/lib/geo';
 import { formatMinutesAsHours } from '@/lib/duration';
 import { getManagerSelfObligationMinutes } from '@/lib/hours';
@@ -95,6 +102,9 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
   const month = monthPeriodInZone(now, timezone);
 
   const ownEmployeeId = ctx.employee?.id ?? null;
+  // RoutePlan.routeDate ist die Kalenderdatums-Mitternacht in UTC.
+  const todayParts = calendarDayInZone(now, timezone);
+  const todayRouteDate = utcDate(todayParts.year, todayParts.month, todayParts.day);
   const mineFilter = options.includeUnassigned
     ? {
         OR: [
@@ -104,7 +114,7 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
       }
     : { assignedEmployeeId: ownEmployeeId ?? '-' };
 
-  const [todayAppointments, upcoming, weekAppointments] = await Promise.all([
+  const [todayAppointments, upcoming, weekAppointments, todayRoutePlan] = await Promise.all([
     db.appointment.findMany({
       where: {
         organizationId: orgId,
@@ -143,7 +153,28 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
       },
       select: { durationMinutes: true, startAt: true, status: true },
     }),
+    // Die im Routenplaner gespeicherte Tagesroute. Sie ist bewusst etwas
+    // Eigenes: Termine sind der Inhalt des Tages, die Route ist die dafür
+    // geplante Fahrt – mit den echten Fahrzeiten von Kunde zu Kunde.
+    ownEmployeeId
+      ? db.routePlan.findUnique({
+          where: {
+            employeeId_routeDate: {
+              employeeId: ownEmployeeId,
+              routeDate: todayRouteDate,
+            },
+          },
+          include: { stops: { orderBy: { sequence: 'asc' } } },
+        })
+      : Promise.resolve(null),
   ]);
+
+  // Stopps auf gelöschte/abgesagte Termine zählen nicht mehr mit.
+  const todayAppointmentIds = new Set(todayAppointments.map((appointment) => appointment.id));
+  const routeStops = (todayRoutePlan?.stops ?? []).filter((stop) =>
+    todayAppointmentIds.has(stop.appointmentId),
+  );
+  const routeStopByAppointment = new Map(routeStops.map((stop) => [stop.appointmentId, stop]));
 
   // Abfahrtszeiten: Startpunkt der Organisation → erster Termin → Folgetermine.
   const startLocation = ctx.organization.defaultStartLocation as
@@ -176,8 +207,12 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
             longitude: appointment.locationAddress.longitude,
           }
         : null;
-    const travelSeconds =
-      previousCoordinate && coordinate && appointment.routeRelevant
+    // Liegt eine geplante Route vor, gilt deren echte Fahrzeit für genau
+    // diesen Abschnitt (Kunde → Kunde). Nur ohne Plan wird geschätzt.
+    const plannedStop = routeStopByAppointment.get(appointment.id);
+    const travelSeconds = plannedStop
+      ? plannedStop.travelSecondsFromPrevious
+      : previousCoordinate && coordinate && appointment.routeRelevant
         ? estimateTravelSeconds(previousCoordinate, coordinate)
         : null;
     entries.push({
@@ -198,7 +233,11 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
       latitude: coordinate?.latitude ?? null,
       longitude: coordinate?.longitude ?? null,
       travelSeconds,
-      departureAt: travelSeconds != null ? new Date(appointment.startAt.getTime() - travelSeconds * 1000) : null,
+      departureAt: plannedStop
+        ? new Date(plannedStop.arrivalAt.getTime() - plannedStop.travelSecondsFromPrevious * 1000)
+        : travelSeconds != null
+          ? new Date(appointment.startAt.getTime() - travelSeconds * 1000)
+          : null,
     });
     if (coordinate) previousCoordinate = coordinate;
   }
@@ -274,6 +313,42 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
     },
     nextAppointmentAt: nextAppointment?.startAt ?? null,
     firstDeparture: entries[0]?.departureAt ?? null,
+    /**
+     * Die im Routenplaner gespeicherte Tagesroute – bewusst getrennt von den
+     * Terminen. `null`, solange für heute nichts geplant wurde.
+     */
+    route:
+      todayRoutePlan && routeStops.length > 0
+        ? {
+            status: todayRoutePlan.status,
+            originLabel:
+              (todayRoutePlan.startAddress as { label?: string } | null)?.label ?? 'Startpunkt',
+            departureAt: todayRoutePlan.plannedDepartureAt,
+            returnAt: todayRoutePlan.plannedReturnAt,
+            totalTravelSeconds: routeStops.reduce(
+              (sum, stop) => sum + stop.travelSecondsFromPrevious,
+              0,
+            ),
+            totalDistanceMeters: routeStops.reduce(
+              (sum, stop) => sum + stop.distanceMetersFromPrevious,
+              0,
+            ),
+            stops: routeStops.map((stop, index) => {
+              const appointment = todayAppointments.find((a) => a.id === stop.appointmentId)!;
+              return {
+                appointmentId: stop.appointmentId,
+                sequence: index + 1,
+                customerName: `${appointment.customer.firstName} ${appointment.customer.lastName}`,
+                customerColor: appointment.customer.color,
+                arrivalAt: stop.arrivalAt,
+                serviceStartAt: stop.serviceStartAt,
+                serviceEndAt: stop.serviceEndAt,
+                travelSecondsFromPrevious: stop.travelSecondsFromPrevious,
+                distanceMetersFromPrevious: stop.distanceMetersFromPrevious,
+              };
+            }),
+          }
+        : null,
   };
 }
 

@@ -1,5 +1,6 @@
 'use client';
 
+import type { TaxEmploymentType } from '@prisma/client';
 import { Monitor, Moon, Sun } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from '@/components/layout/theme-provider';
@@ -9,7 +10,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { FormAlert } from '@/components/ui/form-alert';
 import { FieldHint, Input, Label } from '@/components/ui/input';
-import { Switch } from '@/components/ui/misc';
+import { Checkbox, Switch } from '@/components/ui/misc';
 import { Panel, PanelBody, PanelHeader, PanelTitle } from '@/components/ui/panel';
 import { cn } from '@/lib/utils';
 import { changePasswordAction, updateProfileAction } from '@/server/auth/actions';
@@ -120,6 +121,14 @@ export function EarningsSettings({
   initial: {
     hourlyWageCents: number;
     employeeCommissionCentsPerHour: number;
+    taxEmploymentType: TaxEmploymentType | null;
+    incomeTaxRatePercent: number | null;
+    churchTaxRatePercent: number;
+    healthInsuranceExtraRatePercent: number;
+    hasChildren: boolean;
+    applySolidarity: boolean;
+    taxFreeBonusCentsPerHour: number;
+    taxFreeBonusLabel: string;
   };
   showCommission: boolean;
 }) {
@@ -130,19 +139,43 @@ export function EarningsSettings({
   const [commission, setCommission] = React.useState(
     centsToInputValue(initial.employeeCommissionCentsPerHour),
   );
+  const [taxEmploymentType, setTaxEmploymentType] = React.useState<TaxEmploymentType | ''>(
+    initial.taxEmploymentType ?? '',
+  );
+  const [incomeTaxRate, setIncomeTaxRate] = React.useState(
+    initial.incomeTaxRatePercent != null ? String(initial.incomeTaxRatePercent) : '',
+  );
+  const [churchTaxRate, setChurchTaxRate] = React.useState(String(initial.churchTaxRatePercent));
+  const [healthExtraRate, setHealthExtraRate] = React.useState(
+    String(initial.healthInsuranceExtraRatePercent),
+  );
+  const [hasChildren, setHasChildren] = React.useState(initial.hasChildren);
+  const [applySolidarity, setApplySolidarity] = React.useState(initial.applySolidarity);
+  const [bonus, setBonus] = React.useState(centsToInputValue(initial.taxFreeBonusCentsPerHour));
+  const [bonusLabel, setBonusLabel] = React.useState(initial.taxFreeBonusLabel);
   const [error, setError] = React.useState<string | null>(null);
   const [pending, startTransition] = React.useTransition();
+
+  /** Netto braucht die Beschäftigungsart; außer Minijob zusätzlich den Steuersatz. */
+  const needsTaxRate = taxEmploymentType === 'EMPLOYED' || taxEmploymentType === 'SELF_EMPLOYED';
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     const hourlyWageCents = inputValueToCents(hourlyWage);
     const employeeCommissionCentsPerHour =
       inputValueToCents(commission);
+    const taxFreeBonusCentsPerHour = inputValueToCents(bonus);
     if (
       hourlyWageCents === null ||
+      taxFreeBonusCentsPerHour === null ||
       (showCommission && employeeCommissionCentsPerHour === null)
     ) {
       setError('Bitte einen gültigen Betrag mit höchstens zwei Nachkommastellen eingeben.');
+      return;
+    }
+    const parsedTaxRate = incomeTaxRate.trim() === '' ? null : Number(incomeTaxRate.replace(',', '.'));
+    if (needsTaxRate && (parsedTaxRate === null || !Number.isFinite(parsedTaxRate))) {
+      setError('Bitte den geschätzten Steuersatz in Prozent angeben – sonst ist kein Netto möglich.');
       return;
     }
 
@@ -152,6 +185,14 @@ export function EarningsSettings({
         ...(showCommission
           ? { employeeCommissionCentsPerHour: employeeCommissionCentsPerHour! }
           : {}),
+        taxEmploymentType: taxEmploymentType === '' ? null : taxEmploymentType,
+        incomeTaxRatePercent: parsedTaxRate,
+        churchTaxRatePercent: Number(churchTaxRate.replace(',', '.')) || 0,
+        healthInsuranceExtraRatePercent: Number(healthExtraRate.replace(',', '.')) || 0,
+        hasChildren,
+        applySolidarity,
+        taxFreeBonusCentsPerHour,
+        taxFreeBonusLabel: bonusLabel.trim() || 'Werbepauschale',
       });
       if (result.ok) {
         setError(null);
@@ -232,6 +273,160 @@ export function EarningsSettings({
               </div>
             ) : null}
           </div>
+
+          {/* Steuerfreier Zuschlag – z. B. Werbepauschale fürs Flyerverteilen. */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <Label htmlFor="earnings-bonus">Steuerfreier Zuschlag je Stunde</Label>
+              <div className="relative">
+                <Input
+                  id="earnings-bonus"
+                  inputMode="decimal"
+                  value={bonus}
+                  onChange={(event) => setBonus(event.target.value)}
+                  className="pr-12"
+                />
+                <span
+                  className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[length:var(--text-sm)] text-[var(--color-ink-subtle)]"
+                  aria-hidden
+                >
+                  €/Std.
+                </span>
+              </div>
+              <FieldHint>
+                Wird zusätzlich zum Stundenlohn gezahlt und nicht besteuert.
+              </FieldHint>
+            </div>
+            <div>
+              <Label htmlFor="earnings-bonus-label">Bezeichnung des Zuschlags</Label>
+              <Input
+                id="earnings-bonus-label"
+                value={bonusLabel}
+                maxLength={60}
+                onChange={(event) => setBonusLabel(event.target.value)}
+              />
+              <FieldHint>Erscheint so im Bericht.</FieldHint>
+            </div>
+          </div>
+
+          {/* Angaben für die Netto-Schätzung. */}
+          <div className="space-y-3 rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] bg-[var(--color-panel-sunken)] p-3">
+            <div>
+              <p className="text-[length:var(--text-sm)] font-medium">Netto-Schätzung</p>
+              <p className="mt-0.5 text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                Ohne diese Angaben zeigt der Bericht nur Brutto. Die Berechnung ist eine
+                Orientierung, keine Lohnabrechnung und keine Steuerberatung – die genaue
+                Lohnsteuer ergibt sich aus den amtlichen Tabellen.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="earnings-employment">Beschäftigungsart</Label>
+                <select
+                  id="earnings-employment"
+                  value={taxEmploymentType}
+                  onChange={(event) =>
+                    setTaxEmploymentType(event.target.value as TaxEmploymentType | '')
+                  }
+                  className="h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-line)] bg-[var(--color-panel)] px-2.5 text-[length:var(--text-sm)]"
+                >
+                  <option value="">Keine Angabe (nur Brutto)</option>
+                  <option value="MINIJOB">Minijob (Pauschalabgaben)</option>
+                  <option value="EMPLOYED">Angestellt (sozialversicherungspflichtig)</option>
+                  <option value="SELF_EMPLOYED">Selbständig</option>
+                </select>
+                <FieldHint>
+                  Beim Minijob bleibt brutto = netto, die Abgaben trägt der Arbeitgeber.
+                </FieldHint>
+              </div>
+
+              {needsTaxRate ? (
+                <div>
+                  <Label htmlFor="earnings-tax-rate">
+                    {taxEmploymentType === 'SELF_EMPLOYED'
+                      ? 'Geschätzte Einkommensteuer'
+                      : 'Geschätzte Lohnsteuer'}
+                  </Label>
+                  <div className="relative">
+                    <Input
+                      id="earnings-tax-rate"
+                      inputMode="decimal"
+                      value={incomeTaxRate}
+                      onChange={(event) => setIncomeTaxRate(event.target.value)}
+                      className="pr-8"
+                    />
+                    <span
+                      className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[length:var(--text-sm)] text-[var(--color-ink-subtle)]"
+                      aria-hidden
+                    >
+                      %
+                    </span>
+                  </div>
+                  <FieldHint>Dein persönlicher Satz, z. B. aus der letzten Abrechnung.</FieldHint>
+                </div>
+              ) : null}
+            </div>
+
+            {taxEmploymentType === 'EMPLOYED' || taxEmploymentType === 'SELF_EMPLOYED' ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="earnings-church">Kirchensteuer</Label>
+                  <select
+                    id="earnings-church"
+                    value={churchTaxRate}
+                    onChange={(event) => setChurchTaxRate(event.target.value)}
+                    className="h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-line)] bg-[var(--color-panel)] px-2.5 text-[length:var(--text-sm)]"
+                  >
+                    <option value="0">Keine</option>
+                    <option value="8">8 % (BW, BY)</option>
+                    <option value="9">9 % (übrige Länder)</option>
+                  </select>
+                </div>
+                {taxEmploymentType === 'EMPLOYED' ? (
+                  <div>
+                    <Label htmlFor="earnings-health-extra">Zusatzbeitrag Krankenkasse</Label>
+                    <div className="relative">
+                      <Input
+                        id="earnings-health-extra"
+                        inputMode="decimal"
+                        value={healthExtraRate}
+                        onChange={(event) => setHealthExtraRate(event.target.value)}
+                        className="pr-8"
+                      />
+                      <span
+                        className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[length:var(--text-sm)] text-[var(--color-ink-subtle)]"
+                        aria-hidden
+                      >
+                        %
+                      </span>
+                    </div>
+                    <FieldHint>Gesamtsatz der Kasse – getragen wird die Hälfte.</FieldHint>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {taxEmploymentType === 'EMPLOYED' || taxEmploymentType === 'SELF_EMPLOYED' ? (
+              <div className="flex flex-wrap gap-4">
+                <label className="flex items-center gap-2 text-[length:var(--text-sm)]">
+                  <Checkbox
+                    checked={hasChildren}
+                    onCheckedChange={(checked) => setHasChildren(Boolean(checked))}
+                  />
+                  Kinder (kein Pflege-Zuschlag)
+                </label>
+                <label className="flex items-center gap-2 text-[length:var(--text-sm)]">
+                  <Checkbox
+                    checked={applySolidarity}
+                    onCheckedChange={(checked) => setApplySolidarity(Boolean(checked))}
+                  />
+                  Solidaritätszuschlag
+                </label>
+              </div>
+            ) : null}
+          </div>
+
           <Button type="submit" variant="primary" loading={pending}>
             Verdienst speichern
           </Button>

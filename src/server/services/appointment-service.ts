@@ -38,7 +38,9 @@ import {
   scopeContains,
   type OrgContext,
 } from '@/server/permissions';
+import { computeRouteMatrixCached } from '@/server/providers/routing';
 import { getPlannableMinutesForDate } from '@/server/services/account-service';
+import { detachAppointmentsFromRoutePlans } from '@/server/services/route-service';
 import {
   createNotification,
   createNotificationsForUsers,
@@ -161,6 +163,81 @@ async function notifyLeadershipAboutEmployeePlanning(
 // Konfliktprüfung (lädt Kontextdaten und delegiert an src/lib/conflicts)
 // ---------------------------------------------------------------------------
 
+/**
+ * Fahrzeiten zu den direkten Nachbarn eines Termins – als Abschnittszeiten,
+ * nicht als Tagessumme.
+ *
+ * Reihenfolge der Quellen:
+ *  1. Bereits geplante Route des Tages (gespeicherte Abschnittszeiten) – so
+ *     sagen Kalender-Hinweise exakt das, was der Routenplaner berechnet hat.
+ *  2. Der konfigurierte Routing-Anbieter (eine gecachte Matrix-Abfrage für
+ *     Vorgänger → Termin → Nachfolger).
+ *  3. Luftlinien-Schätzung, falls kein Dienst antwortet.
+ */
+async function resolveNeighbourTravelSeconds(input: {
+  employeeId: string;
+  /** Kalendertag als UTC-Mitternacht – so speichert der Routenplaner ihn. */
+  routeDate: Date;
+  here: { latitude: number; longitude: number };
+  previous: { id: string; point: { latitude: number; longitude: number } | null } | null;
+  next: { id: string; point: { latitude: number; longitude: number } | null } | null;
+  candidateId?: string;
+}): Promise<{ fromPreviousSeconds: number | null; toNextSeconds: number | null }> {
+  let fromPreviousSeconds: number | null = null;
+  let toNextSeconds: number | null = null;
+
+  // 1) Gespeicherte Route des Tages.
+  const plan = await db.routePlan.findUnique({
+    where: {
+      employeeId_routeDate: { employeeId: input.employeeId, routeDate: input.routeDate },
+    },
+    include: { stops: { orderBy: { sequence: 'asc' } } },
+  });
+  if (plan) {
+    const stops = plan.stops;
+    const indexOf = (appointmentId: string) =>
+      stops.findIndex((stop) => stop.appointmentId === appointmentId);
+    const candidateIndex = input.candidateId ? indexOf(input.candidateId) : -1;
+    if (candidateIndex > 0 && input.previous && stops[candidateIndex - 1]?.appointmentId === input.previous.id) {
+      fromPreviousSeconds = stops[candidateIndex]!.travelSecondsFromPrevious;
+    }
+    if (
+      candidateIndex >= 0 &&
+      input.next &&
+      stops[candidateIndex + 1]?.appointmentId === input.next.id
+    ) {
+      toNextSeconds = stops[candidateIndex + 1]!.travelSecondsFromPrevious;
+    }
+  }
+
+  const needsPrevious = fromPreviousSeconds == null && Boolean(input.previous?.point);
+  const needsNext = toNextSeconds == null && Boolean(input.next?.point);
+  if (!needsPrevious && !needsNext) return { fromPreviousSeconds, toNextSeconds };
+
+  // 2) Echte Fahrzeiten vom Routing-Anbieter (eine gecachte Abfrage).
+  const points = [
+    ...(needsPrevious ? [input.previous!.point!] : []),
+    input.here,
+    ...(needsNext ? [input.next!.point!] : []),
+  ];
+  const hereIndex = needsPrevious ? 1 : 0;
+  try {
+    const matrix = await computeRouteMatrixCached(points);
+    if (needsPrevious) fromPreviousSeconds = matrix[0]?.[hereIndex]?.travelSeconds ?? null;
+    if (needsNext) toNextSeconds = matrix[hereIndex]?.[hereIndex + 1]?.travelSeconds ?? null;
+  } catch {
+    // 3) Anbieter nicht erreichbar – Schätzung, damit die Prüfung nie ausfällt.
+  }
+  if (needsPrevious && fromPreviousSeconds == null) {
+    fromPreviousSeconds = estimateTravelSeconds(input.previous!.point!, input.here);
+  }
+  if (needsNext && toNextSeconds == null) {
+    toNextSeconds = estimateTravelSeconds(input.here, input.next!.point!);
+  }
+
+  return { fromPreviousSeconds, toNextSeconds };
+}
+
 export async function collectConflicts(
   ctx: OrgContext,
   candidate: {
@@ -248,31 +325,52 @@ export async function collectConflicts(
       .filter((a) => a.startAt >= day.start && a.startAt < day.end)
       .reduce((sum, a) => sum + a.durationMinutes, 0);
 
-    // Fahrzeit zu unmittelbaren Nachbarterminen (deterministische Schätzung).
+    // Fahrzeit zu den unmittelbaren Nachbarterminen – bewusst nur AM SELBEN
+    // TAG. Ein Termin vom Vortag ist kein Vorgänger einer Tagesfahrt, und die
+    // Zeiten müssen Abschnittszeiten (Kunde → Kunde) sein, keine Tagessummen.
     if (address?.latitude != null && address?.longitude != null) {
       const here = { latitude: address.latitude, longitude: address.longitude };
-      const previous = appointments
-        .filter((a) => a.endAt <= candidate.startAt && a.routeRelevant)
-        .at(-1);
-      const next = appointments.find(
-        (a) => a.startAt >= candidate.endAt && a.routeRelevant,
+      const sameDay = appointments.filter(
+        (a) => a.routeRelevant && a.startAt >= day.start && a.startAt < day.end,
       );
+      const previous = sameDay.filter((a) => a.endAt <= candidate.startAt).at(-1);
+      const next = sameDay.find((a) => a.startAt >= candidate.endAt);
+
+      const previousPoint =
+        previous?.locationAddress?.latitude != null && previous.locationAddress.longitude != null
+          ? {
+              latitude: previous.locationAddress.latitude,
+              longitude: previous.locationAddress.longitude,
+            }
+          : null;
+      const nextPoint =
+        next?.locationAddress?.latitude != null && next.locationAddress.longitude != null
+          ? { latitude: next.locationAddress.latitude, longitude: next.locationAddress.longitude }
+          : null;
+
+      // Echte Fahrzeiten vom konfigurierten Routing-Anbieter – dieselbe Quelle
+      // wie im Routenplaner. Vorrang haben bereits geplante Abschnitte.
+      const candidateDayParts = calendarDayInZone(candidate.startAt, timezone);
+      const legs = await resolveNeighbourTravelSeconds({
+        employeeId: candidate.assignedEmployeeId,
+        routeDate: utcDate(
+          candidateDayParts.year,
+          candidateDayParts.month,
+          candidateDayParts.day,
+        ),
+        here,
+        previous: previous ? { id: previous.id, point: previousPoint } : null,
+        next: next ? { id: next.id, point: nextPoint } : null,
+        candidateId: candidate.id,
+      });
+
       travel = {};
-      if (
-        previous?.locationAddress?.latitude != null &&
-        previous.locationAddress.longitude != null
-      ) {
-        travel.fromPreviousSeconds = estimateTravelSeconds(
-          { latitude: previous.locationAddress.latitude, longitude: previous.locationAddress.longitude },
-          here,
-        );
+      if (previous && legs.fromPreviousSeconds != null) {
+        travel.fromPreviousSeconds = legs.fromPreviousSeconds;
         travel.previousEndAt = previous.endAt;
       }
-      if (next?.locationAddress?.latitude != null && next.locationAddress.longitude != null) {
-        travel.toNextSeconds = estimateTravelSeconds(here, {
-          latitude: next.locationAddress.latitude,
-          longitude: next.locationAddress.longitude,
-        });
+      if (next && legs.toNextSeconds != null) {
+        travel.toNextSeconds = legs.toNextSeconds;
         travel.nextStartAt = next.startAt;
       }
     }
@@ -987,6 +1085,8 @@ export async function cancelAppointment(
         where: { id },
         data: { status: 'CANCELLED', cancellationReason: options.reason ?? null },
       });
+      // Abgesagte Termine werden nicht angefahren – aus der Tagesroute nehmen.
+      await detachAppointmentsFromRoutePlans(tx, [id]);
       if (seriesId && occurrenceDate) {
         await tx.appointmentSeriesException.upsert({
           where: { seriesId_occurrenceDate: { seriesId, occurrenceDate } },
@@ -1029,6 +1129,10 @@ export async function cancelAppointment(
         where: { id: { in: future.map((a) => a.id) } },
         data: { status: 'CANCELLED', cancellationReason: options.reason ?? 'Serie beendet' },
       });
+      await detachAppointmentsFromRoutePlans(
+        tx,
+        future.map((a) => a.id),
+      );
       await tx.appointmentSeries.update({
         where: { id: appointment.seriesId! },
         data:
@@ -1097,6 +1201,8 @@ export async function deleteAppointment(
         where: { id: appointment.id },
         data: { deletedAt: now },
       });
+      // Aus gespeicherten Tagesrouten entfernen (Soft-Delete löst kein Cascade aus).
+      await detachAppointmentsFromRoutePlans(tx, [appointment.id]);
       // Einzelnes Serien-Vorkommen: als abgesagte Ausnahme markieren, damit es
       // bei einer Neu-Materialisierung nicht wieder auftaucht.
       if (appointment.seriesId && appointment.occurrenceDate) {
@@ -1161,6 +1267,7 @@ export async function deleteAppointment(
       where: { id: { in: deletedIds } },
       data: { deletedAt: now },
     });
+    await detachAppointmentsFromRoutePlans(tx, deletedIds);
     await tx.appointmentSeries.update({
       where: { id: appointment.seriesId! },
       data:

@@ -17,7 +17,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { QuickCompleteButton } from '@/features/appointments/quick-complete-button';
 import { formatDate, formatDateTime, formatTime, formatWeekday, toDateInputValue } from '@/lib/dates';
 import { formatMinutesAsHours } from '@/lib/duration';
-import { formatTravelSeconds, googleMapsDirectionsUrl } from '@/lib/geo';
+import { formatDistance, formatTravelSeconds, googleMapsDirectionsUrl } from '@/lib/geo';
 import {
   APPOINTMENT_STATUS,
   SIMPLE_APPOINTMENT_STATUS,
@@ -131,6 +131,38 @@ export async function MyDayDashboard({
             </Link>
           </PanelHeader>
           <PanelBody className="p-0">
+            {/* Geplante Tagesroute – eigener Block, unabhängig von den Terminen.
+                Zeigt genau das, was im Routenplaner gespeichert wurde. */}
+            {data.route ? (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--color-line-subtle)] bg-[var(--color-panel-sunken)] px-4 py-2.5">
+                <span className="flex items-center gap-1.5 text-[length:var(--text-xs)] font-medium text-[var(--color-ink)]">
+                  <RouteIcon className="size-3.5 text-[var(--color-brand)]" aria-hidden />
+                  Geplante Route
+                  <span className="text-[length:var(--text-2xs)] font-normal text-[var(--color-ink-subtle)]">
+                    {data.route.status === 'PUBLISHED' ? 'freigegeben' : 'Entwurf'}
+                  </span>
+                </span>
+                <span className="text-[length:var(--text-2xs)] text-[var(--color-ink-muted)]">
+                  {data.route.stops.length} Stopps ab {data.route.originLabel}
+                </span>
+                {data.route.departureAt ? (
+                  <span className="text-[length:var(--text-2xs)] text-[var(--color-ink-muted)]">
+                    Abfahrt {formatTime(data.route.departureAt, timezone)}
+                  </span>
+                ) : null}
+                <span className="text-[length:var(--text-2xs)] text-[var(--color-ink-muted)]">
+                  {formatTravelSeconds(data.route.totalTravelSeconds)} ·{' '}
+                  {formatDistance(data.route.totalDistanceMeters)}
+                </span>
+                <Link
+                  href={`/routes?datum=${todayIso}`}
+                  className="ml-auto text-[length:var(--text-2xs)] text-[var(--color-brand)] hover:underline"
+                >
+                  Route öffnen →
+                </Link>
+              </div>
+            ) : null}
+
             {data.entries.length === 0 ? (
               <EmptyState
                 className="m-4 border-0"

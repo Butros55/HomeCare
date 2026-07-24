@@ -20,6 +20,17 @@ datasource db {
 
 // ============================== Enums =======================================
 
+/// Steuerliche Beschäftigungsart – bestimmt die Abzüge der Netto-Schätzung.
+/// Bewusst getrennt von `EmploymentType` (Vollzeit/Teilzeit … am Mitarbeiter).
+enum TaxEmploymentType {
+  /// Geringfügige Beschäftigung mit Pauschalabgaben des Arbeitgebers.
+  MINIJOB
+  /// Sozialversicherungspflichtige Beschäftigung.
+  EMPLOYED
+  /// Selbständig – trägt Steuer und Vorsorge selbst.
+  SELF_EMPLOYED
+}
+
 enum MembershipRole {
   ORGANIZATION_OWNER
   ADMIN
@@ -319,6 +330,22 @@ model OrganizationMembership {
   hourlyWageCents                Int              @default(0)
   /// Persönliche Leitungs-Provision je geleisteter Mitarbeiterstunde in Euro-Cent.
   employeeCommissionCentsPerHour Int              @default(0)
+  /// Beschäftigungsart für die Netto-Schätzung; null = noch nicht angegeben.
+  taxEmploymentType              TaxEmploymentType?
+  /// Geschätzter Lohn-/Einkommensteuersatz in Prozent (auf das Brutto).
+  incomeTaxRatePercent           Float?
+  /// Kirchensteuer in Prozent der Lohnsteuer (0, 8 oder 9).
+  churchTaxRatePercent           Float            @default(0)
+  /// Kassenindividueller Zusatzbeitrag in Prozent (gesamt, hälftig getragen).
+  healthInsuranceExtraRatePercent Float           @default(2.5)
+  /// Ohne Kinder greift der Zuschlag zur Pflegeversicherung.
+  hasChildren                    Boolean          @default(false)
+  /// Solidaritätszuschlag berücksichtigen.
+  applySolidarity                Boolean          @default(false)
+  /// Steuerfreier Zuschlag je geleisteter Stunde in Euro-Cent (z. B. Werbepauschale).
+  taxFreeBonusCentsPerHour       Int              @default(0)
+  /// Bezeichnung des Zuschlags, erscheint so im Bericht.
+  taxFreeBonusLabel              String           @default("Werbepauschale")
   invitedByUserId                String?
   invitedBy                      User?            @relation("MembershipInviter", fields: [invitedByUserId], references: [id], onDelete: SetNull)
   joinedAt                       DateTime         @default(now())

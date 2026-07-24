@@ -6,6 +6,9 @@ import L from 'leaflet';
 import * as React from 'react';
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
 
+import { useTheme } from '@/components/layout/theme-provider';
+import { tileConfiguration, type MapTheme } from '@/lib/map-tiles';
+
 export interface MapMarker {
   id: string;
   latitude: number;
@@ -17,10 +20,29 @@ export interface MapMarker {
   sequence?: number;
 }
 
-const TILE_URL =
-  process.env.NEXT_PUBLIC_MAP_TILE_URL ?? 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
-const ATTRIBUTION =
-  process.env.NEXT_PUBLIC_MAP_ATTRIBUTION ?? '&copy; OpenStreetMap-Mitwirkende';
+/**
+ * Aufgelöster Hell/Dunkel-Modus. Der Theme-Provider kennt nur die Präferenz –
+ * bei „System" entscheidet die Medienabfrage, inklusive Live-Wechsel.
+ */
+function useResolvedTheme(): MapTheme {
+  const { theme } = useTheme();
+  const [systemDark, setSystemDark] = React.useState(false);
+
+  React.useEffect(() => {
+    const query = window.matchMedia('(prefers-color-scheme: dark)');
+    const update = () => setSystemDark(query.matches);
+    const initial = window.requestAnimationFrame(update);
+    query.addEventListener('change', update);
+    return () => {
+      window.cancelAnimationFrame(initial);
+      query.removeEventListener('change', update);
+    };
+  }, []);
+
+  if (theme === 'dark') return 'dark';
+  if (theme === 'light') return 'light';
+  return systemDark ? 'dark' : 'light';
+}
 
 /** Farbiger Punkt-/Nummern-Pin als DivIcon (keine Bild-Assets nötig). */
 function markerIcon(color: string, sequence?: number): L.DivIcon {
@@ -69,6 +91,8 @@ export function LeafletMap({
   const center: [number, number] =
     markers.length > 0 ? [markers[0]!.latitude, markers[0]!.longitude] : [51.9607, 7.6261];
   const hasRoad = Boolean(roadPath && roadPath.length > 1);
+  const mapTheme = useResolvedTheme();
+  const tiles = tileConfiguration(mapTheme);
 
   return (
     <MapContainer
@@ -78,7 +102,15 @@ export function LeafletMap({
       scrollWheelZoom={false}
       attributionControl
     >
-      <TileLayer url={TILE_URL} attribution={ATTRIBUTION} maxZoom={19} />
+      {/* key: erzwingt den Austausch der Ebene beim Theme-Wechsel. */}
+      <TileLayer
+        key={tiles.url}
+        url={tiles.url}
+        attribution={tiles.attribution}
+        maxZoom={tiles.maxZoom}
+        detectRetina
+        {...(tiles.subdomains ? { subdomains: tiles.subdomains } : {})}
+      />
 
       {/* Echte Fahrstrecke: breite helle Kontur unter der farbigen Linie,
           damit sie auf jedem Kartenhintergrund lesbar bleibt. */}

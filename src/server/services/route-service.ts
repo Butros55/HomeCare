@@ -1,6 +1,6 @@
 import 'server-only';
 
-import type { Employee } from '@prisma/client';
+import type { Employee, Prisma } from '@prisma/client';
 
 import { dayPeriodInZone, fromDateInputValue } from '@/lib/dates';
 import type { StructuredLocation } from '@/lib/geo';
@@ -180,7 +180,19 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
       : Promise.resolve([]),
     db.routePlan.findUnique({
       where: { employeeId_routeDate: { employeeId, routeDate: date } },
-      include: { stops: { orderBy: { sequence: 'asc' } } },
+      include: {
+        stops: {
+          orderBy: { sequence: 'asc' },
+          include: {
+            appointment: {
+              include: {
+                customer: { select: { firstName: true, lastName: true, color: true } },
+                locationAddress: true,
+              },
+            },
+          },
+        },
+      },
     }),
   ]);
 
@@ -210,11 +222,28 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
   const home = locationFromJson(employee.startLocation);
   const office = locationFromJson(ctx.organization.defaultStartLocation);
 
+  const assigned = assignedAppointments.map((a) => toCandidate(a, true));
+  const suggestions = unassignedAppointments.map((a) => toCandidate(a, false));
+
+  /**
+   * Gespeicherte Stopps können auf inzwischen gelöschte oder abgesagte Termine
+   * zeigen. Sie werden hier konsequent ausgeblendet – sonst zählt der Planer
+   * Geisterstopps mit („3/2 gewählt") und man bekommt sie nicht mehr abgewählt.
+   */
+  const livingAppointmentIds = new Set([
+    ...assigned.map((candidate) => candidate.appointmentId),
+    ...suggestions.map((candidate) => candidate.appointmentId),
+  ]);
+  const livingStops = (existingPlan?.stops ?? []).filter((stop) =>
+    livingAppointmentIds.has(stop.appointmentId),
+  );
+  const droppedStopCount = (existingPlan?.stops.length ?? 0) - livingStops.length;
+
   return {
     employeeName: `${employee.firstName} ${employee.lastName}`,
     isOwn,
-    assigned: assignedAppointments.map((a) => toCandidate(a, true)),
-    suggestions: unassignedAppointments.map((a) => toCandidate(a, false)),
+    assigned,
+    suggestions,
     /** Verfügbare Startpunkte (GPS entscheidet der Client bei eigener Route). */
     origins: {
       office: office ? { label: office.label ?? 'Büro' } : null,
@@ -231,9 +260,91 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
           originType: existingPlan.originType as RouteOriginType,
           bufferMinutes: existingPlan.bufferMinutes,
           returnToStart: existingPlan.returnToStart,
-          stopAppointmentIds: existingPlan.stops.map((s) => s.appointmentId),
+          stopAppointmentIds: livingStops.map((s) => s.appointmentId),
+          /** Wie viele Stopps auf gelöschte/abgesagte Termine zeigten. */
+          droppedStopCount,
         }
       : null,
+    /**
+     * Die gespeicherte Route als fertiges Ergebnis – damit sie nach einem
+     * Seitenwechsel unverändert wieder dasteht und nicht neu berechnet werden
+     * muss. `null`, sobald Stopps weggefallen sind: dann ist die gespeicherte
+     * Reihenfolge überholt und muss neu berechnet werden.
+     */
+    savedRoute:
+      existingPlan && livingStops.length > 0 && droppedStopCount === 0
+        ? savedRouteToDto(existingPlan, livingStops)
+        : null,
+  };
+}
+
+type PersistedPlan = Prisma.RoutePlanGetPayload<{
+  include: {
+    stops: {
+      include: {
+        appointment: {
+          include: {
+            customer: { select: { firstName: true; lastName: true; color: true } };
+            locationAddress: true;
+          };
+        };
+      };
+    };
+  };
+}>;
+
+/**
+ * Übersetzt einen gespeicherten Plan in dieselbe Form, die `computeRoutePlan`
+ * liefert – so zeigt die Oberfläche gespeicherte und frisch berechnete Routen
+ * über denselben Weg an.
+ */
+function savedRouteToDto(plan: PersistedPlan, stops: PersistedPlan['stops']) {
+  const origin = locationFromJson(plan.startAddress);
+  const lastEnd =
+    plan.plannedReturnAt ?? stops.at(-1)?.serviceEndAt ?? plan.plannedDepartureAt ?? plan.routeDate;
+  const departure = plan.plannedDepartureAt ?? stops[0]?.arrivalAt ?? plan.routeDate;
+
+  return {
+    provider: plan.provider,
+    originType: plan.originType as RouteOriginType,
+    originLabel: origin?.label ?? 'Startpunkt',
+    origin: {
+      latitude: origin?.latitude ?? 0,
+      longitude: origin?.longitude ?? 0,
+      label: origin?.label ?? 'Startpunkt',
+    },
+    departureAt: departure.toISOString(),
+    returnArrivalAt: plan.plannedReturnAt?.toISOString() ?? null,
+    totalTravelSeconds: plan.totalTravelSeconds,
+    totalDistanceMeters: plan.totalDistanceMeters,
+    totalServiceMinutes: plan.totalServiceMinutes,
+    totalWaitSeconds: plan.totalWaitSeconds,
+    workdaySeconds: Math.max(0, Math.round((lastEnd.getTime() - departure.getTime()) / 1000)),
+    warnings: stops.map((stop) => stop.warning).filter((value): value is string => Boolean(value)),
+    feasible: true,
+    stops: stops.map((stop, index) => ({
+      appointmentId: stop.appointmentId,
+      sequence: index + 1,
+      title: stop.appointment.title,
+      customerName: `${stop.appointment.customer.firstName} ${stop.appointment.customer.lastName}`,
+      customerColor: stop.appointment.customer.color,
+      addressLine: stop.appointment.locationAddress
+        ? `${stop.appointment.locationAddress.street} ${stop.appointment.locationAddress.houseNumber}, ${stop.appointment.locationAddress.postalCode} ${stop.appointment.locationAddress.city}`
+        : '',
+      latitude: stop.appointment.locationAddress?.latitude ?? 0,
+      longitude: stop.appointment.locationAddress?.longitude ?? 0,
+      isFlexible: stop.appointment.isFlexible,
+      arrivalAt: stop.arrivalAt.toISOString(),
+      serviceStartAt: stop.serviceStartAt.toISOString(),
+      serviceEndAt: stop.serviceEndAt.toISOString(),
+      travelSecondsFromPrevious: stop.travelSecondsFromPrevious,
+      distanceMetersFromPrevious: stop.distanceMetersFromPrevious,
+      waitSeconds: Math.max(
+        0,
+        Math.round((stop.serviceStartAt.getTime() - stop.arrivalAt.getTime()) / 1000),
+      ),
+      warning: stop.warning,
+    })),
   };
 }
 
@@ -500,6 +611,65 @@ export async function saveRoutePlan(
   }
 
   return { routePlanId: plan.id };
+}
+
+/**
+ * Entfernt Termine aus allen gespeicherten Routen. Termine werden nur weich
+ * gelöscht (`deletedAt`), deshalb greift kein Datenbank-Cascade – ohne diesen
+ * Schritt blieben Stopps auf gelöschte/abgesagte Termine bestehen und tauchten
+ * im Planer als nicht abwählbare Geisterstopps auf.
+ *
+ * Reihenfolge wird lückenlos nachgezogen, Summen neu gebildet; bleibt kein
+ * Stopp übrig, verschwindet der Plan ganz.
+ */
+export async function detachAppointmentsFromRoutePlans(
+  tx: Prisma.TransactionClient,
+  appointmentIds: string[],
+): Promise<void> {
+  if (appointmentIds.length === 0) return;
+  const affected = await tx.routeStop.findMany({
+    where: { appointmentId: { in: appointmentIds } },
+    select: { id: true, routePlanId: true },
+  });
+  if (affected.length === 0) return;
+
+  await tx.routeStop.deleteMany({ where: { id: { in: affected.map((stop) => stop.id) } } });
+
+  for (const routePlanId of [...new Set(affected.map((stop) => stop.routePlanId))]) {
+    const remaining = await tx.routeStop.findMany({
+      where: { routePlanId },
+      orderBy: { sequence: 'asc' },
+    });
+    if (remaining.length === 0) {
+      await tx.routePlan.delete({ where: { id: routePlanId } });
+      continue;
+    }
+    // Aufsteigend umnummerieren: Ziel ist immer ≤ aktueller Wert, dadurch
+    // kollidiert nichts mit der Eindeutigkeit (routePlanId, sequence).
+    for (const [index, stop] of remaining.entries()) {
+      if (stop.sequence !== index + 1) {
+        await tx.routeStop.update({ where: { id: stop.id }, data: { sequence: index + 1 } });
+      }
+    }
+    await tx.routePlan.update({
+      where: { id: routePlanId },
+      data: {
+        totalTravelSeconds: remaining.reduce(
+          (sum, stop) => sum + stop.travelSecondsFromPrevious,
+          0,
+        ),
+        totalDistanceMeters: remaining.reduce(
+          (sum, stop) => sum + stop.distanceMetersFromPrevious,
+          0,
+        ),
+        totalServiceMinutes: remaining.reduce(
+          (sum, stop) =>
+            sum + Math.round((stop.serviceEndAt.getTime() - stop.serviceStartAt.getTime()) / 60000),
+          0,
+        ),
+      },
+    });
+  }
 }
 
 export async function discardRoutePlan(employeeId: string, dateInput: string): Promise<void> {

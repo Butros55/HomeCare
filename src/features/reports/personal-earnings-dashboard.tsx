@@ -146,15 +146,128 @@ export function PersonalEarningsDashboard({ data }: { data: PersonalEarningsData
                 value={formatEuroCents(data.commission.earningsCents)}
               />
             ) : null}
+            {data.taxFreeBonusCents > 0 ? (
+              <BreakdownRow
+                label={`${data.rates.taxFreeBonusLabel} (steuerfrei)`}
+                detail={`${formatMinutesAsHours(data.own.completedMinutes)} zu ${formatEuroCents(data.rates.taxFreeBonusCentsPerHour)} je Stunde`}
+                value={formatEuroCents(data.taxFreeBonusCents)}
+              />
+            ) : null}
             <div className="flex items-center justify-between gap-4 rounded-[var(--radius-lg)] bg-[var(--color-brand-subtle)] px-3 py-2.5">
-              <dt className="text-[length:var(--text-base)] font-semibold">Gesamt</dt>
+              <dt className="text-[length:var(--text-base)] font-semibold">
+                {data.netPay ? 'Brutto gesamt' : 'Gesamt'}
+              </dt>
               <dd className="tabular text-right text-[length:var(--text-xl)] font-bold text-[var(--color-brand)]">
-                {formatEuroCents(data.totalEarningsCents)}
+                {formatEuroCents(data.netPay?.grossCents ?? data.totalEarningsCents + data.taxFreeBonusCents)}
               </dd>
             </div>
           </dl>
         </PanelBody>
       </Panel>
+
+      {/* Netto – nur mit vollständigen Angaben, sonst ein Hinweis darauf. */}
+      {data.netPay ? (
+        <Panel>
+          <PanelHeader>
+            <PanelTitle>Netto (Schätzung)</PanelTitle>
+            <Link
+              href="/settings"
+              className="text-[length:var(--text-xs)] text-[var(--color-brand)] hover:underline"
+            >
+              Angaben bearbeiten
+            </Link>
+          </PanelHeader>
+          <PanelBody>
+            <dl className="space-y-2">
+              <BreakdownRow
+                label="Steuerpflichtiges Brutto"
+                detail="Stundenlohn und Provision"
+                value={formatEuroCents(data.netPay.taxableGrossCents)}
+              />
+              {data.netPay.incomeTaxCents > 0 ? (
+                <BreakdownRow
+                  label={data.employmentType === 'SELF_EMPLOYED' ? 'Einkommensteuer' : 'Lohnsteuer'}
+                  detail="geschätzt nach deinem Satz"
+                  value={`− ${formatEuroCents(data.netPay.incomeTaxCents)}`}
+                />
+              ) : null}
+              {data.netPay.solidarityCents > 0 ? (
+                <BreakdownRow
+                  label="Solidaritätszuschlag"
+                  detail="5,5 % der Steuer"
+                  value={`− ${formatEuroCents(data.netPay.solidarityCents)}`}
+                />
+              ) : null}
+              {data.netPay.churchTaxCents > 0 ? (
+                <BreakdownRow
+                  label="Kirchensteuer"
+                  detail="Anteil der Steuer"
+                  value={`− ${formatEuroCents(data.netPay.churchTaxCents)}`}
+                />
+              ) : null}
+              {data.netPay.pensionCents > 0 ? (
+                <BreakdownRow
+                  label="Rentenversicherung"
+                  detail="Arbeitnehmeranteil 9,3 %"
+                  value={`− ${formatEuroCents(data.netPay.pensionCents)}`}
+                />
+              ) : null}
+              {data.netPay.healthCents > 0 ? (
+                <BreakdownRow
+                  label="Krankenversicherung"
+                  detail="Arbeitnehmeranteil inkl. halbem Zusatzbeitrag"
+                  value={`− ${formatEuroCents(data.netPay.healthCents)}`}
+                />
+              ) : null}
+              {data.netPay.careCents > 0 ? (
+                <BreakdownRow
+                  label="Pflegeversicherung"
+                  detail="Arbeitnehmeranteil"
+                  value={`− ${formatEuroCents(data.netPay.careCents)}`}
+                />
+              ) : null}
+              {data.netPay.unemploymentCents > 0 ? (
+                <BreakdownRow
+                  label="Arbeitslosenversicherung"
+                  detail="Arbeitnehmeranteil 1,3 %"
+                  value={`− ${formatEuroCents(data.netPay.unemploymentCents)}`}
+                />
+              ) : null}
+              {data.netPay.taxFreeCents > 0 ? (
+                <BreakdownRow
+                  label={`${data.rates.taxFreeBonusLabel} (ungekürzt)`}
+                  detail="steuerfrei, keine Abzüge"
+                  value={formatEuroCents(data.netPay.taxFreeCents)}
+                />
+              ) : null}
+              <div className="flex items-center justify-between gap-4 rounded-[var(--radius-lg)] bg-[var(--color-success-soft)] px-3 py-2.5">
+                <dt className="text-[length:var(--text-base)] font-semibold">Netto gesamt</dt>
+                <dd className="tabular text-right text-[length:var(--text-xl)] font-bold text-[var(--color-success)]">
+                  {formatEuroCents(data.netPay.netCents)}
+                </dd>
+              </div>
+            </dl>
+            <p className="mt-3 text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+              Orientierungswert auf Basis deiner Angaben – keine Lohnabrechnung und keine
+              Steuerberatung. Die genaue Lohnsteuer ergibt sich aus den amtlichen Tabellen.
+            </p>
+          </PanelBody>
+        </Panel>
+      ) : (
+        <Panel>
+          <PanelBody className="flex flex-wrap items-center gap-2">
+            <span className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+              Für eine Netto-Schätzung fehlen noch Angaben zu Beschäftigungsart und Steuersatz.
+            </span>
+            <Link
+              href="/settings"
+              className="text-[length:var(--text-sm)] font-medium text-[var(--color-brand)] hover:underline"
+            >
+              Jetzt eintragen →
+            </Link>
+          </PanelBody>
+        </Panel>
+      )}
 
       {data.showCommission && data.commission.employeeRows.length > 0 ? (
         <Panel>

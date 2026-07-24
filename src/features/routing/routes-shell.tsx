@@ -106,6 +106,7 @@ export function RoutesShell({
   initialDate,
   canManage,
   canAccept,
+  soloMode,
   timezone,
 }: {
   /** true = Leitungs-UI mit Einzelroute + Teamplanung; false = nur eigene Route. */
@@ -117,6 +118,11 @@ export function RoutesShell({
   canManage: boolean;
   /** Vorschläge übernehmen dürfen nur Leitungs-Konten. */
   canAccept: boolean;
+  /**
+   * Alleine-Modus: Es gibt niemanden, für den etwas freigegeben werden müsste.
+   * Änderungen werden deshalb sofort gespeichert, „Freigeben" entfällt.
+   */
+  soloMode: boolean;
   timezone: string;
 }) {
   const [date, setDate] = React.useState(initialDate);
@@ -153,6 +159,7 @@ export function RoutesShell({
                 setReturnToStart={setReturnToStart}
                 canManage={canManage}
                 canAccept={canAccept}
+                soloMode={soloMode}
                 timezone={timezone}
                 showEmployeeSelect
               />
@@ -183,6 +190,7 @@ export function RoutesShell({
             setReturnToStart={setReturnToStart}
             canManage={canManage}
             canAccept={canAccept}
+            soloMode={soloMode}
             timezone={timezone}
             showEmployeeSelect={false}
           />
@@ -208,6 +216,7 @@ function SingleRoutePlanner({
   setReturnToStart,
   canManage,
   canAccept,
+  soloMode,
   timezone,
   showEmployeeSelect,
 }: {
@@ -222,6 +231,8 @@ function SingleRoutePlanner({
   setReturnToStart: (value: boolean) => void;
   canManage: boolean;
   canAccept: boolean;
+  /** Alleine-Modus: sofort speichern statt speichern/freigeben. */
+  soloMode: boolean;
   timezone: string;
   showEmployeeSelect: boolean;
 }) {
@@ -250,18 +261,40 @@ function SingleRoutePlanner({
       try {
         const result = await getRoutePlanningDataAction(employeeId, date);
         if (result.ok) {
-          const ids =
+          // Nur Termine auswählen, die es wirklich noch gibt – sonst zählt der
+          // Planer gelöschte Stopps mit („3/2 gewählt") und man wird sie nicht los.
+          const existing = new Set(
+            [...result.data.assigned, ...result.data.suggestions].map((c) => c.appointmentId),
+          );
+          const ids = (
             result.data.existingPlan?.stopAppointmentIds ??
-            result.data.assigned.map((a) => a.appointmentId);
+            result.data.assigned.map((a) => a.appointmentId)
+          ).filter((id) => existing.has(id));
           setData(result.data);
           setSelectedIds(ids);
+          // Gespeicherte Einstellungen der Route übernehmen (Startpunkt, Puffer,
+          // Rückkehr) – sonst weicht eine Neuberechnung vom Gespeicherten ab.
+          const plan = result.data.existingPlan;
+          if (plan) {
+            setOriginType(plan.originType);
+            setBufferMinutes(plan.bufferMinutes);
+            setReturnToStart(plan.returnToStart);
+          }
           // Ohne Zuhause-Adresse fällt der Startpunkt sichtbar auf das Büro zurück.
           if (!result.data.origins.home) {
             setOriginType((current) => (current === 'home' ? 'office' : current));
           }
           if (!keepRoute) {
-            setRoute(null);
+            // Gespeicherte Route direkt anzeigen – sie überlebt den Seitenwechsel.
+            setRoute(result.data.savedRoute);
             setManualOrder(null);
+          }
+          if (plan?.droppedStopCount) {
+            toast.info(
+              plan.droppedStopCount === 1
+                ? 'Ein Termin der gespeicherten Route existiert nicht mehr – bitte neu berechnen.'
+                : `${plan.droppedStopCount} Termine der gespeicherten Route existieren nicht mehr – bitte neu berechnen.`,
+            );
           }
           return ids;
         }
@@ -272,7 +305,7 @@ function SingleRoutePlanner({
         setLoading(false);
       }
     },
-    [employeeId, date],
+    [employeeId, date, setBufferMinutes, setReturnToStart],
   );
 
   React.useEffect(() => {
@@ -294,7 +327,7 @@ function SingleRoutePlanner({
   const officeAvailable = Boolean(data?.origins.office);
 
   const buildInput = React.useCallback(
-    async (order?: string[]): Promise<ComputeRouteActionInput | null> => {
+    async (order?: string[], manual?: boolean): Promise<ComputeRouteActionInput | null> => {
       const ids = order ?? selectedIds;
       if (ids.length === 0) {
         toast.error('Bitte mindestens einen Termin auswählen.');
@@ -319,15 +352,33 @@ function SingleRoutePlanner({
         gps,
         bufferMinutes,
         returnToStart,
-        manualOrder: Boolean(order),
+        manualOrder: manual ?? Boolean(order),
       };
     },
     [employeeId, date, selectedIds, originType, bufferMinutes, returnToStart],
   );
 
-  const compute = (order?: string[]) => {
+  /**
+   * Alleine-Modus: Es gibt niemanden, dem etwas freigegeben werden müsste –
+   * jede berechnete Route wird sofort gespeichert. Der bereits gebaute Input
+   * wird wiederverwendet, damit keine erneute Standortabfrage aufpoppt.
+   */
+  const autoPersist = async (input: ComputeRouteActionInput, computed: ComputedRoute) => {
+    if (!soloMode || !canManage || !computed.feasible) return;
+    const result = await saveRouteAction(
+      {
+        ...input,
+        appointmentIds: computed.stops.map((stop) => stop.appointmentId),
+        manualOrder: true,
+      },
+      false,
+    );
+    if (!result.ok) toast.error(`Route konnte nicht gespeichert werden: ${result.message}`);
+  };
+
+  const compute = (order?: string[], options?: { manual?: boolean }) => {
     startTransition(async () => {
-      const input = await buildInput(order);
+      const input = await buildInput(order, options?.manual);
       if (!input) return;
       const result = await computeRouteAction(input);
       if (result.ok) {
@@ -335,9 +386,11 @@ function SingleRoutePlanner({
         setManualOrder(order ?? null);
         if (result.data.warnings.length > 0) {
           toast.warning(`Route berechnet – ${result.data.warnings.length} Warnung(en).`);
-        } else {
+        } else if (!soloMode) {
           toast.success('Route berechnet.');
         }
+        await autoPersist(input, result.data);
+        if (soloMode && result.data.warnings.length === 0) toast.success('Route gespeichert.');
       } else {
         toast.error(result.message);
       }
@@ -390,9 +443,20 @@ function SingleRoutePlanner({
   };
 
   const toggleSelection = (appointmentId: string, checked: boolean) => {
-    setSelectedIds((current) =>
-      checked ? [...current, appointmentId] : current.filter((id) => id !== appointmentId),
-    );
+    const next = checked
+      ? [...selectedIds, appointmentId]
+      : selectedIds.filter((id) => id !== appointmentId);
+    setSelectedIds(next);
+    // Alleine-Modus: An-/Abhaken plant sofort um und sichert das Ergebnis.
+    // Bewusst ohne manuelle Reihenfolge – die neue Auswahl wird optimiert.
+    if (soloMode && canManage) {
+      if (next.length > 0) compute(next, { manual: false });
+      else {
+        setRoute(null);
+        void discardRouteAction(employeeId, date);
+      }
+      return;
+    }
     setRoute(null);
   };
 
@@ -863,30 +927,44 @@ function SingleRoutePlanner({
             <PanelHeader>
               <PanelTitle>Stoppliste & Zeitachse</PanelTitle>
               {canManage ? (
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Button variant="secondary" size="sm" onClick={() => compute()} loading={pending}>
                     <RefreshCcw aria-hidden /> Neu optimieren
                   </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => save(false)}
-                    loading={pending}
-                    disabled={!route.feasible}
-                    title={route.feasible ? undefined : 'Unzulässige Routen können nicht gespeichert werden.'}
-                  >
-                    <Save aria-hidden /> Speichern
-                  </Button>
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={() => save(true)}
-                    loading={pending}
-                    disabled={!route.feasible}
-                    title={route.feasible ? undefined : 'Unzulässige Routen können nicht freigegeben werden.'}
-                  >
-                    <Send aria-hidden /> Freigeben
-                  </Button>
+
+                  {/* Alleine-Modus: nichts freizugeben – Änderungen sind schon gesichert. */}
+                  {soloMode ? (
+                    <span className="flex items-center gap-1.5 text-[length:var(--text-2xs)] text-[var(--color-success)]">
+                      <Check className="size-3.5" aria-hidden />
+                      {route.feasible
+                        ? 'Automatisch gespeichert'
+                        : 'Nicht gespeichert – Route ist unzulässig'}
+                    </span>
+                  ) : (
+                    <>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => save(false)}
+                        loading={pending}
+                        disabled={!route.feasible}
+                        title={route.feasible ? undefined : 'Unzulässige Routen können nicht gespeichert werden.'}
+                      >
+                        <Save aria-hidden /> Speichern
+                      </Button>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => save(true)}
+                        loading={pending}
+                        disabled={!route.feasible}
+                        title={route.feasible ? undefined : 'Unzulässige Routen können nicht freigegeben werden.'}
+                      >
+                        <Send aria-hidden /> Freigeben
+                      </Button>
+                    </>
+                  )}
+
                   {data?.existingPlan ? (
                     <Button variant="danger" size="sm" onClick={discard} loading={pending}>
                       <Trash2 aria-hidden /> Verwerfen

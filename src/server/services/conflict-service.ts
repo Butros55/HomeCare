@@ -6,6 +6,7 @@ import type { Conflict } from '@/lib/conflicts';
 import { resolveDayOverlaps, type ResolverAppointment } from '@/lib/conflict-resolver';
 import { calendarDayInZone, dayPeriodInZone, formatTime } from '@/lib/dates';
 import { estimateTravelSeconds } from '@/lib/geo';
+import { computeRouteMatrixCached } from '@/server/providers/routing';
 import { db } from '@/server/db';
 import { AppError } from '@/server/errors';
 import {
@@ -185,7 +186,7 @@ async function computeResolution(
 
   // Fahrzeit-Puffer: aus den tatsächlichen Distanzen der Tagesstopps abgeleitet,
   // damit zwischen Terminen genug Zeit zum Fahren bleibt (nicht nur 0-Overlap).
-  const bufferMinutes = estimateTravelBufferMinutes(
+  const bufferMinutes = await estimateTravelBufferMinutes(
     appointments
       .filter((a) => a.routeRelevant && a.locationAddress?.latitude != null && a.locationAddress?.longitude != null)
       .map((a) => ({ latitude: a.locationAddress!.latitude!, longitude: a.locationAddress!.longitude! })),
@@ -243,16 +244,40 @@ function calendarDayInZoneIso(date: Date, timezone: string): string {
  * Repräsentativer Fahrzeit-Puffer (Minuten) aus den Tagesstopps: mittlere
  * geschätzte Fahrzeit zwischen benachbarten Koordinaten, gedeckelt auf 5..30.
  */
-function estimateTravelBufferMinutes(points: { latitude: number; longitude: number }[]): number {
+/**
+ * Puffer zwischen zwei Terminen: mittlere Fahrzeit eines Abschnitts (Kunde →
+ * Kunde), nicht die Summe des Tages. Zeiten kommen vom konfigurierten
+ * Routing-Anbieter, damit Auflösungsvorschläge dieselbe Grundlage haben wie
+ * der Routenplaner; fällt der Dienst aus, wird geschätzt.
+ */
+async function estimateTravelBufferMinutes(
+  points: { latitude: number; longitude: number }[],
+): Promise<number> {
   if (points.length < 2) return 5;
+
   let total = 0;
   let count = 0;
-  for (let i = 1; i < points.length; i += 1) {
-    total += estimateTravelSeconds(points[i - 1]!, points[i]!);
-    count += 1;
+  try {
+    const matrix = await computeRouteMatrixCached(points);
+    for (let i = 1; i < points.length; i += 1) {
+      const seconds = matrix[i - 1]?.[i]?.travelSeconds;
+      if (seconds != null) {
+        total += seconds;
+        count += 1;
+      }
+    }
+  } catch {
+    // Anbieter nicht erreichbar – unten auf die Schätzung zurückfallen.
   }
-  const avgMinutes = count > 0 ? Math.round(total / count / 60) : 5;
-  return Math.min(30, Math.max(5, avgMinutes));
+  if (count === 0) {
+    for (let i = 1; i < points.length; i += 1) {
+      total += estimateTravelSeconds(points[i - 1]!, points[i]!);
+      count += 1;
+    }
+  }
+
+  const averageMinutes = count > 0 ? Math.round(total / count / 60) : 5;
+  return Math.min(30, Math.max(5, averageMinutes));
 }
 
 async function requireEmployeeInScope(ctx: OrgContext, employeeId: string) {

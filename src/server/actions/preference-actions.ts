@@ -90,6 +90,26 @@ const earningsSettingsSchema = z.object({
     .min(0, 'Die Provision darf nicht negativ sein.')
     .max(1_000_000, 'Die Provision ist zu hoch.')
     .optional(),
+  // Angaben für die Netto-Schätzung. Alles optional – ohne sie zeigt der
+  // Bericht ausschließlich Brutto.
+  taxEmploymentType: z.enum(['MINIJOB', 'EMPLOYED', 'SELF_EMPLOYED']).nullable().optional(),
+  incomeTaxRatePercent: z
+    .number()
+    .min(0, 'Der Steuersatz darf nicht negativ sein.')
+    .max(60, 'Der Steuersatz ist zu hoch.')
+    .nullable()
+    .optional(),
+  churchTaxRatePercent: z.number().min(0).max(12).optional(),
+  healthInsuranceExtraRatePercent: z.number().min(0).max(10).optional(),
+  hasChildren: z.boolean().optional(),
+  applySolidarity: z.boolean().optional(),
+  taxFreeBonusCentsPerHour: z
+    .number()
+    .int()
+    .min(0, 'Der Zuschlag darf nicht negativ sein.')
+    .max(1_000_000, 'Der Zuschlag ist zu hoch.')
+    .optional(),
+  taxFreeBonusLabel: z.string().trim().min(1).max(60).optional(),
 });
 
 /**
@@ -126,6 +146,30 @@ export async function saveEarningsSettingsAction(
                 employeeCommissionCentsPerHour:
                   data.employeeCommissionCentsPerHour,
               }
+            : {}),
+          // Nur übernehmen, was auch geschickt wurde – so lassen sich einzelne
+          // Angaben ergänzen, ohne die übrigen zu überschreiben.
+          ...(data.taxEmploymentType !== undefined
+            ? { taxEmploymentType: data.taxEmploymentType }
+            : {}),
+          ...(data.incomeTaxRatePercent !== undefined
+            ? { incomeTaxRatePercent: data.incomeTaxRatePercent }
+            : {}),
+          ...(data.churchTaxRatePercent !== undefined
+            ? { churchTaxRatePercent: data.churchTaxRatePercent }
+            : {}),
+          ...(data.healthInsuranceExtraRatePercent !== undefined
+            ? { healthInsuranceExtraRatePercent: data.healthInsuranceExtraRatePercent }
+            : {}),
+          ...(data.hasChildren !== undefined ? { hasChildren: data.hasChildren } : {}),
+          ...(data.applySolidarity !== undefined
+            ? { applySolidarity: data.applySolidarity }
+            : {}),
+          ...(data.taxFreeBonusCentsPerHour !== undefined
+            ? { taxFreeBonusCentsPerHour: data.taxFreeBonusCentsPerHour }
+            : {}),
+          ...(data.taxFreeBonusLabel !== undefined
+            ? { taxFreeBonusLabel: data.taxFreeBonusLabel }
             : {}),
         },
       });

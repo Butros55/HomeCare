@@ -59,6 +59,7 @@ export default async function RoutesPage({
       initialDate={params.datum ?? toDateInputValue(new Date(), ctx.organization.timezone)}
       canManage={hasPermission(ctx, 'routes.manage')}
       canAccept={ctx.membership.role !== 'EMPLOYEE'}
+      soloMode={mode === 'solo'}
       timezone={ctx.organization.timezone}
     />
   );
