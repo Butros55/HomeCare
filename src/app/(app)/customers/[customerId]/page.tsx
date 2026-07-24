@@ -86,8 +86,11 @@ export default async function CustomerDetailPage({
   if (!visibleTabs.some((t) => t.key === tab)) tab = 'uebersicht';
 
   const timezone = ctx.organization.timezone;
-  // Stundenkonto ist global (kein Monats-Zeitraum mehr).
-  const stats = await getCustomerAccountStats(ctx.organization.id, timezone, customerId);
+  const hourBudgetsEnabled = ctx.organization.hourBudgetsEnabled;
+  // Stundenkonto ist global (kein Monats-Zeitraum mehr); ohne Budgets nicht geladen.
+  const stats = hourBudgetsEnabled
+    ? await getCustomerAccountStats(ctx.organization.id, timezone, customerId)
+    : null;
   const name = `${customer.firstName} ${customer.lastName}`;
   const address = customer.addresses[0] ?? null;
   const addressLine = address ? formatLocationLine(address) : null;
@@ -153,6 +156,7 @@ export default async function CustomerDetailPage({
             timezone={timezone}
             canAllocate={canAllocate}
             showAllocation={!solo}
+            hourBudgetsEnabled={hourBudgetsEnabled}
           />
         ) : null}
         {tab === 'termine' ? <AppointmentsTab customerId={customerId} timezone={timezone} /> : null}
@@ -163,6 +167,7 @@ export default async function CustomerDetailPage({
             canAllocate={canAllocate}
             canManageBudgets={hasPermission(ctx, 'budgets.manage')}
             monthParam={monat}
+            hourBudgetsEnabled={hourBudgetsEnabled}
           />
         ) : null}
         {tab === 'mitarbeiter' ? <EmployeesTab customerId={customerId} customer={customer} /> : null}
@@ -188,16 +193,18 @@ async function OverviewTab({
   timezone,
   canAllocate,
   showAllocation,
+  hourBudgetsEnabled,
 }: {
   customerId: string;
   name: string;
   customer: NonNullable<Awaited<ReturnType<typeof getCustomerDetail>>['customer']>;
   address: { latitude: number | null; longitude: number | null } | null;
   addressLine: string | null;
-  stats: Awaited<ReturnType<typeof getCustomerAccountStats>>;
+  stats: Awaited<ReturnType<typeof getCustomerAccountStats>> | null;
   timezone: string;
   canAllocate: boolean;
   showAllocation: boolean;
+  hourBudgetsEnabled: boolean;
 }) {
   const [nextAppointment, recentActivity] = await Promise.all([
     db.appointment.findFirst({
@@ -220,12 +227,14 @@ async function OverviewTab({
 
   return (
     <>
-      <CustomerHourTiles
-        customerId={customerId}
-        stats={stats}
-        canAllocate={canAllocate}
-        showAllocation={showAllocation}
-      />
+      {hourBudgetsEnabled && stats ? (
+        <CustomerHourTiles
+          customerId={customerId}
+          stats={stats}
+          canAllocate={canAllocate}
+          showAllocation={showAllocation}
+        />
+      ) : null}
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Panel>
@@ -487,13 +496,62 @@ async function HoursTab({
   canAllocate,
   canManageBudgets,
   monthParam,
+  hourBudgetsEnabled,
 }: {
   customerId: string;
   timezone: string;
   canAllocate: boolean;
   canManageBudgets: boolean;
   monthParam?: string;
+  hourBudgetsEnabled: boolean;
 }) {
+  // Ohne Stundenbudgets kein Kunden-Stundenkonto – nur die (weiter mögliche)
+  // Zuweisung an Mitarbeiter samt aktueller Zuweisungen.
+  if (!hourBudgetsEnabled) {
+    const allocations = await db.hourAllocation.findMany({
+      where: { customerId, status: 'ACTIVE' },
+      include: { allocatedTo: { select: { firstName: true, lastName: true } } },
+      orderBy: { createdAt: 'asc' },
+    });
+    return (
+      <Panel>
+        <PanelHeader>
+          <PanelTitle>Stunden</PanelTitle>
+          {canAllocate ? (
+            <AllocateHoursButton customerId={customerId} label="Zuweisen" icon="clock" size="sm" />
+          ) : null}
+        </PanelHeader>
+        <PanelBody className="space-y-3">
+          <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+            Stundenbudgets sind für diese Organisation deaktiviert – ein Kunden-Stundenkonto
+            (Aufladungen, Guthaben) wird nicht geführt. Zuweisungen an Mitarbeiter bleiben möglich.
+          </p>
+          {allocations.length > 0 ? (
+            <ul className="divide-y divide-[var(--color-line-subtle)] overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-line-subtle)]">
+              {allocations.map((allocation) => (
+                <li
+                  key={allocation.id}
+                  className="flex items-center justify-between gap-3 px-3 py-2"
+                >
+                  <span className="text-[length:var(--text-sm)]">
+                    {allocation.allocatedTo.firstName} {allocation.allocatedTo.lastName}
+                  </span>
+                  <span className="tabular text-[length:var(--text-sm)] font-medium">
+                    {formatMinutesAsHours(allocation.allocatedMinutes)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+              Noch keine Zuweisungen.
+            </p>
+          )}
+        </PanelBody>
+      </Panel>
+    );
+  }
+
   const monthInput = parseMonthIso(monthParam, timezone);
   const account = await getCustomerHourAccountMonth(customerId, monthInput);
   const current = parseMonthIso(undefined, timezone);

@@ -10,7 +10,11 @@ import {
   requirePermission,
   scopeContains,
 } from '@/server/permissions';
-import { getCustomerAccountStatsBulk, getEmployeeHourStatsBulk } from '@/server/services/hours-service';
+import {
+  getCustomerAccountStatsBulk,
+  getEmployeeHourStatsBulk,
+  type CustomerAccountStats,
+} from '@/server/services/hours-service';
 
 /**
  * Auswertungen (Anforderung 20): belastbare Kennzahlen über gebündelte
@@ -111,21 +115,27 @@ export async function getReportData(filters: ReportFilters) {
     }),
   ]);
 
-  // Kundenstunden (Budget/zugewiesen/offen) für den Zeitraum.
+  // Kundenstunden (Budget/zugewiesen/offen) für den Zeitraum – nur bei aktiven
+  // Stundenbudgets; sonst weder Konto-Abfrage noch -Materialisierung.
+  const hourBudgetsEnabled = ctx.organization.hourBudgetsEnabled;
   const customerWhere = filters.customerId ? [filters.customerId] : undefined;
-  const customers = await db.customer.findMany({
-    where: {
-      organizationId: orgId,
-      deletedAt: null,
-      ...(customerWhere ? { id: { in: customerWhere } } : {}),
-    },
-    select: { id: true, firstName: true, lastName: true },
-  });
-  const customerStats = await getCustomerAccountStatsBulk(
-    orgId,
-    ctx.organization.timezone,
-    customers.map((c) => c.id),
-  );
+  const customers = hourBudgetsEnabled
+    ? await db.customer.findMany({
+        where: {
+          organizationId: orgId,
+          deletedAt: null,
+          ...(customerWhere ? { id: { in: customerWhere } } : {}),
+        },
+        select: { id: true, firstName: true, lastName: true },
+      })
+    : [];
+  const customerStats = hourBudgetsEnabled
+    ? await getCustomerAccountStatsBulk(
+        orgId,
+        ctx.organization.timezone,
+        customers.map((c) => c.id),
+      )
+    : new Map<string, CustomerAccountStats>();
 
   // Kundenkonto-Kennzahlen (kundenbezogen – folgen dem Kundenfilter).
   let budgetMinutes = 0;
@@ -162,6 +172,7 @@ export async function getReportData(filters: ReportFilters) {
 
   return {
     period: { from: filters.from, to: filters.to },
+    hourBudgetsEnabled,
     totals: {
       budgetMinutes,
       allocatedMinutes,

@@ -297,23 +297,30 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
   }
 
   // Offene Stunden: Solo = verplanbares Kundenguthaben; Mitarbeiter = zugewiesen minus verplant.
+  // Ohne Stundenbudgets gibt es kein Kundenguthaben → die Kachel entfällt im Solo-Fall.
+  const hourBudgetsEnabled = ctx.organization.hourBudgetsEnabled;
   let openMinutes = 0;
-  let openHint: string;
+  let openHint = '';
+  let showOpenHours = true;
   if (options.includeUnassigned) {
-    const customers = await db.customer.findMany({
-      where: { organizationId: orgId, deletedAt: null, status: 'ACTIVE' },
-      select: { id: true },
-    });
-    const stats = await getCustomerAccountStatsBulk(
-      orgId,
-      timezone,
-      customers.map((c) => c.id),
-    );
-    openMinutes = [...stats.values()].reduce(
-      (sum, stat) => sum + Math.max(0, stat.plannableMinutes),
-      0,
-    );
-    openHint = 'verplanbares Kundenguthaben (Konto)';
+    if (hourBudgetsEnabled) {
+      const customers = await db.customer.findMany({
+        where: { organizationId: orgId, deletedAt: null, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      const stats = await getCustomerAccountStatsBulk(
+        orgId,
+        timezone,
+        customers.map((c) => c.id),
+      );
+      openMinutes = [...stats.values()].reduce(
+        (sum, stat) => sum + Math.max(0, stat.plannableMinutes),
+        0,
+      );
+      openHint = 'verplanbares Kundenguthaben (Konto)';
+    } else {
+      showOpenHours = false;
+    }
   } else {
     const allocations = ownEmployeeId
       ? await db.hourAllocation.findMany({
@@ -413,6 +420,8 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
       weekPlannedMinutes,
       openMinutes,
       openHint,
+      /** Kachel „Offene Stunden" anzeigen (aus, wenn Budget-Guthaben nicht geführt wird). */
+      showOpenHours,
       /** Anzahl eigener heutiger Termine mit Hinweis (Konflikt/Verfügbarkeit). */
       conflictCount: conflictEntryIds.size,
       /** Voraussichtlicher Tagesverdienst (null ohne hinterlegten Stundenlohn). */
@@ -476,6 +485,7 @@ export async function getDashboardData(ctx: OrgContext) {
   const scopeFilter =
     scope === 'ALL' ? {} : { assignedEmployeeId: { in: scope.length > 0 ? scope : ['-'] } };
   const isPlanner = hasPermission(ctx, 'appointments.viewAll');
+  const hourBudgetsEnabled = ctx.organization.hourBudgetsEnabled;
 
   // ---- Basiszählungen -----------------------------------------------------
   const [
@@ -544,8 +554,10 @@ export async function getDashboardData(ctx: OrgContext) {
   ]);
 
   // ---- Kundenstunden (offene) --------------------------------------------
+  // Nur bei aktiven Stundenbudgets: sonst gibt es kein Kundenguthaben und die
+  // Konto-Materialisierung soll gar nicht laufen.
   let openHoursCustomers: { id: string; name: string; openMinutes: number }[] = [];
-  if (hasPermission(ctx, 'customers.read')) {
+  if (hourBudgetsEnabled && hasPermission(ctx, 'customers.read')) {
     const customers = await db.customer.findMany({
       where: { organizationId: orgId, deletedAt: null, status: 'ACTIVE' },
       select: { id: true, firstName: true, lastName: true },
@@ -934,7 +946,7 @@ export async function getDashboardData(ctx: OrgContext) {
       });
     }
   }
-  if (isPlanner) {
+  if (isPlanner && hourBudgetsEnabled) {
     // Konto-Modell: wiederkehrende Aufladungen, die bald auslaufen.
     const endingGrants = await db.customerRecurringHourGrant.findMany({
       where: {
@@ -992,5 +1004,7 @@ export async function getDashboardData(ctx: OrgContext) {
       expectedTravelSeconds: next7TravelSeconds,
     },
     isPlanner,
+    /** Kunden-Stundenkonten org-weit aktiv (steuert Konto-Kacheln/Schnellaktionen). */
+    hourBudgetsEnabled,
   };
 }

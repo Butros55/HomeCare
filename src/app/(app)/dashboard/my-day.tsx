@@ -104,13 +104,15 @@ export async function MyDayDashboard({
             }
             tone={data.firstDeparture ? 'default' : 'success'}
           />
-          <StatTile
-            icon={<Clock />}
-            label="Offene Stunden"
-            value={formatMinutesAsHours(data.counts.openMinutes)}
-            hint={data.counts.openHint}
-            tone={data.counts.openMinutes > 0 ? 'warning' : 'success'}
-          />
+          {data.counts.showOpenHours ? (
+            <StatTile
+              icon={<Clock />}
+              label="Offene Stunden"
+              value={formatMinutesAsHours(data.counts.openMinutes)}
+              hint={data.counts.openHint}
+              tone={data.counts.openMinutes > 0 ? 'warning' : 'success'}
+            />
+          ) : null}
           <StatTile
             icon={<CalendarDays />}
             label="Diese Woche"

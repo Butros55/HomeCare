@@ -271,6 +271,37 @@ export async function updateSoloModeAction(
   });
 }
 
+/**
+ * Kunden-Stundenkonten org-weit ein-/ausschalten. „Aus" blendet alle
+ * Konto-Ansichten/-Kennzahlen aus und schaltet die Deckungsprüfung ab
+ * (vorhandene Aufladungen/Gutschriften bleiben erhalten). Betrifft Kunden-,
+ * Report-, Dashboard-, Routen- und Einstellungs-Seiten → Layout revalidieren.
+ */
+export async function setHourBudgetsEnabledAction(
+  enabled: boolean,
+): Promise<ActionResult<{ enabled: boolean }>> {
+  return runAction(async () => {
+    const ctx = await requirePermission('settings.manage');
+    const next = Boolean(enabled);
+    if (next !== ctx.organization.hourBudgetsEnabled) {
+      await db.organization.update({
+        where: { id: ctx.organization.id },
+        data: { hourBudgetsEnabled: next },
+      });
+      await writeAuditLog({
+        organizationId: ctx.organization.id,
+        actorUserId: ctx.user.id,
+        action: 'organization.updated',
+        entityType: 'Organization',
+        entityId: ctx.organization.id,
+        metadata: { hourBudgetsEnabled: next },
+      });
+    }
+    revalidatePath('/', 'layout');
+    return { enabled: next };
+  });
+}
+
 const defaultPermissionsSchema = z.object({
   leadership: z.array(z.enum(EDITABLE_PERMISSIONS as [string, ...string[]])),
   employee: z.array(z.enum(EDITABLE_PERMISSIONS as [string, ...string[]])),

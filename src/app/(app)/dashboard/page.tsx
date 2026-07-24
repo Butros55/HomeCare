@@ -94,7 +94,7 @@ export default async function DashboardPage() {
           <Link href="/calendar" className="rounded-[var(--radius-xl)]">
             <StatTile icon={<CalendarDays />} label="Termine heute" value={data.counts.todayCount} hint="Zum Kalender" />
           </Link>
-          {data.isPlanner ? (
+          {data.isPlanner && data.hourBudgetsEnabled ? (
             <Link href="/customers?openHours=1" className="rounded-[var(--radius-xl)]">
               <StatTile
                 icon={<Clock />}
@@ -314,7 +314,7 @@ export default async function DashboardPage() {
                     </Button>
                   </>
                 ) : null}
-                {canAllocate ? (
+                {canAllocate && data.hourBudgetsEnabled ? (
                   <Button asChild variant="secondary" className="justify-start">
                     <Link href="/customers?openHours=1">
                       <Clock aria-hidden /> Stunden

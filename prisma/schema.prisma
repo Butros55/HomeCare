@@ -177,6 +177,9 @@ model Organization {
   defaultEmployeePermissions   Json?
   /// Solo-Modus: Leitung organisiert (noch) nur sich selbst – reduziertes UI ohne Mitarbeiter-/Zuweisungslogik
   soloMode                     Boolean  @default(false)
+  /// Kunden-Stundenkonten (Aufladungen/Guthaben/Verplanbar) org-weit nutzen. Aus = keine
+  /// Budgetierung/Deckungsprüfung; Konto-UI ausgeblendet, Vorschläge rein wirtschaftlich.
+  hourBudgetsEnabled           Boolean  @default(true)
   createdAt                    DateTime @default(now())
   updatedAt                    DateTime @updatedAt
 

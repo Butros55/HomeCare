@@ -53,6 +53,8 @@ export interface AllocationContext {
   balanceMinutes: number;
   /** Konto eingerichtet (Gutschrift oder Aufladungsregel vorhanden). */
   hasAccount: boolean;
+  /** Stundenbudgets org-weit aktiv – aus: keine Guthaben-Deckelung, kein Limit. */
+  hourBudgetsEnabled: boolean;
   recipients: AllocationRecipient[];
   currentAllocations: Array<{
     id: string;
@@ -105,6 +107,26 @@ async function availableMinutesFor(
   mode: 'org' | 'pool',
   customerId: string,
 ): Promise<{ availableMinutes: number; balanceMinutes: number; hasAccount: boolean }> {
+  // Ohne Stundenbudgets gibt es kein Kundenguthaben zum Deckeln: Zuweisungen
+  // bleiben als reine Mitarbeiter-Buchhaltung nutzbar (Org-Modus ohne Limit).
+  // Der Pool-Modus ist ohnehin unabhängig vom Kundenkonto.
+  if (!ctx.organization.hourBudgetsEnabled) {
+    if (mode === 'org') {
+      return { availableMinutes: Number.MAX_SAFE_INTEGER, balanceMinutes: 0, hasAccount: true };
+    }
+    const poolAllocations = await db.hourAllocation.findMany({
+      where: { customerId, status: 'ACTIVE' },
+    });
+    return {
+      availableMinutes: Math.max(
+        0,
+        getManagerSelfObligationMinutes(poolAllocations.map(toAllocationLike), ctx.employee!.id),
+      ),
+      balanceMinutes: 0,
+      hasAccount: true,
+    };
+  }
+
   const stats = (
     await getCustomerAccountStatsBulk(ctx.organization.id, ctx.organization.timezone, [customerId])
   ).get(customerId);
@@ -227,6 +249,7 @@ export async function getAllocationContext(customerId: string): Promise<Allocati
     availableMinutes,
     balanceMinutes,
     hasAccount,
+    hourBudgetsEnabled: ctx.organization.hourBudgetsEnabled,
     recipients,
     currentAllocations: customerAllocations.map((a) => ({
       id: a.id,
@@ -255,6 +278,18 @@ export async function listAllocatableCustomers(): Promise<
     },
     select: { id: true, firstName: true, lastName: true },
   });
+
+  // Ohne Stundenbudgets kein Guthaben-Filter: alle aktiven Kunden sind wählbar.
+  if (!ctx.organization.hourBudgetsEnabled) {
+    return customers
+      .map((customer) => ({
+        id: customer.id,
+        name: `${customer.firstName} ${customer.lastName}`,
+        availableMinutes: 0,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   const stats = await getCustomerAccountStatsBulk(
     ctx.organization.id,
     ctx.organization.timezone,

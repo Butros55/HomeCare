@@ -60,6 +60,8 @@ export default async function CustomersPage({
   ]);
 
   const timezone = ctx.organization.timezone;
+  // Ohne Stundenbudgets keine Konto-Spalten/Badges in der Liste.
+  const showAccount = result.hourBudgetsEnabled;
 
   const pageLink = (page: number) => {
     const sp = new URLSearchParams();
@@ -74,7 +76,7 @@ export default async function CustomersPage({
     <>
       <PageHeader
         title="Kunden"
-        description={`${result.total} ${result.total === 1 ? 'Kunde' : 'Kunden'} · Stundenwerte für den aktuellen Monat`}
+        description={`${result.total} ${result.total === 1 ? 'Kunde' : 'Kunden'}${showAccount ? ' · Stundenwerte für den aktuellen Monat' : ''}`}
         actions={
           <>
             <CustomerCsvActions canManage={result.canManage} />
@@ -141,22 +143,24 @@ export default async function CustomersPage({
                             : ' · kein Termin'}
                         </span>
                       </span>
-                      <span className="shrink-0 text-right">
-                        <span
-                          className="tabular block text-[length:var(--text-sm)] font-semibold"
-                          style={{
-                            color:
-                              stats.balanceMinutes - stats.allocatedMinutes > 0
-                                ? 'var(--color-warning)'
-                                : 'var(--color-success)',
-                          }}
-                        >
-                          {formatMinutesAsHours(stats.balanceMinutes - stats.allocatedMinutes)}
+                      {showAccount ? (
+                        <span className="shrink-0 text-right">
+                          <span
+                            className="tabular block text-[length:var(--text-sm)] font-semibold"
+                            style={{
+                              color:
+                                stats.balanceMinutes - stats.allocatedMinutes > 0
+                                  ? 'var(--color-warning)'
+                                  : 'var(--color-success)',
+                            }}
+                          >
+                            {formatMinutesAsHours(stats.balanceMinutes - stats.allocatedMinutes)}
+                          </span>
+                          <span className="block text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+                            offen
+                          </span>
                         </span>
-                        <span className="block text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
-                          offen
-                        </span>
-                      </span>
+                      ) : null}
                       <ChevronRight
                         className="size-4 shrink-0 text-[var(--color-ink-subtle)]"
                         aria-hidden
@@ -194,37 +198,39 @@ export default async function CustomersPage({
                       {statusOf(CUSTOMER_STATUS, customer.status).label}
                     </StatusPill>
                   </div>
-                  <dl className="mt-3 grid grid-cols-3 gap-2 text-center">
-                    <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-2 py-1.5">
-                      <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">Kontostand</dt>
-                      <dd
-                        className="tabular text-[length:var(--text-sm)] font-semibold"
-                        style={{ color: stats.balanceMinutes < 0 ? 'var(--color-danger)' : undefined }}
-                      >
-                        {formatMinutesAsHours(stats.balanceMinutes)}
-                      </dd>
-                    </div>
-                    <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-2 py-1.5">
-                      <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">Geplant</dt>
-                      <dd className="tabular text-[length:var(--text-sm)] font-semibold">
-                        {formatMinutesAsHours(stats.reservedMinutes)}
-                      </dd>
-                    </div>
-                    <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-2 py-1.5">
-                      <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">Offen</dt>
-                      <dd
-                        className="tabular text-[length:var(--text-sm)] font-semibold"
-                        style={{
-                          color:
-                            stats.balanceMinutes - stats.allocatedMinutes > 0
-                              ? 'var(--color-warning)'
-                              : 'var(--color-success)',
-                        }}
-                      >
-                        {formatMinutesAsHours(stats.balanceMinutes - stats.allocatedMinutes)}
-                      </dd>
-                    </div>
-                  </dl>
+                  {showAccount ? (
+                    <dl className="mt-3 grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-2 py-1.5">
+                        <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">Kontostand</dt>
+                        <dd
+                          className="tabular text-[length:var(--text-sm)] font-semibold"
+                          style={{ color: stats.balanceMinutes < 0 ? 'var(--color-danger)' : undefined }}
+                        >
+                          {formatMinutesAsHours(stats.balanceMinutes)}
+                        </dd>
+                      </div>
+                      <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-2 py-1.5">
+                        <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">Geplant</dt>
+                        <dd className="tabular text-[length:var(--text-sm)] font-semibold">
+                          {formatMinutesAsHours(stats.reservedMinutes)}
+                        </dd>
+                      </div>
+                      <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-2 py-1.5">
+                        <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">Offen</dt>
+                        <dd
+                          className="tabular text-[length:var(--text-sm)] font-semibold"
+                          style={{
+                            color:
+                              stats.balanceMinutes - stats.allocatedMinutes > 0
+                                ? 'var(--color-warning)'
+                                : 'var(--color-success)',
+                          }}
+                        >
+                          {formatMinutesAsHours(stats.balanceMinutes - stats.allocatedMinutes)}
+                        </dd>
+                      </div>
+                    </dl>
+                  ) : null}
                   {nextAppointmentAt ? (
                     <p className="mt-2 text-[length:var(--text-xs)] text-[var(--color-ink-muted)]">
                       Nächster Termin: {formatDateTime(nextAppointmentAt, timezone)}
@@ -251,12 +257,16 @@ export default async function CustomersPage({
                   </Th>
                   <Th>Telefon</Th>
                   <Th>Zuständig</Th>
-                  <Th className="text-right">Kontostand</Th>
-                  <Th className="text-right">Zugewiesen</Th>
-                  <Th className="text-right">Geplant</Th>
-                  <Th className="text-right">
-                    <SortHeader label="Offen" sortKey="openMinutes" />
-                  </Th>
+                  {showAccount ? (
+                    <>
+                      <Th className="text-right">Kontostand</Th>
+                      <Th className="text-right">Zugewiesen</Th>
+                      <Th className="text-right">Geplant</Th>
+                      <Th className="text-right">
+                        <SortHeader label="Offen" sortKey="openMinutes" />
+                      </Th>
+                    </>
+                  ) : null}
                   <Th>
                     <SortHeader label="Nächster Termin" sortKey="nextAppointment" />
                   </Th>
@@ -294,27 +304,31 @@ export default async function CustomersPage({
                           ? `${customer.preferredEmployee.firstName} ${customer.preferredEmployee.lastName}`
                           : '—'}
                       </Td>
-                      <Td
-                        className="tabular text-right"
-                        style={{ color: stats.balanceMinutes < 0 ? 'var(--color-danger)' : undefined }}
-                      >
-                        {formatMinutesAsHours(stats.balanceMinutes)}
-                      </Td>
-                      <Td className="tabular text-right">
-                        {formatMinutesAsHours(stats.allocatedMinutes)}
-                      </Td>
-                      <Td className="tabular text-right">{formatMinutesAsHours(stats.reservedMinutes)}</Td>
-                      <Td
-                        className="tabular text-right font-medium"
-                        style={{
-                          color:
-                            stats.balanceMinutes - stats.allocatedMinutes > 0
-                              ? 'var(--color-warning)'
-                              : 'var(--color-success)',
-                        }}
-                      >
-                        {formatMinutesAsHours(stats.balanceMinutes - stats.allocatedMinutes)}
-                      </Td>
+                      {showAccount ? (
+                        <>
+                          <Td
+                            className="tabular text-right"
+                            style={{ color: stats.balanceMinutes < 0 ? 'var(--color-danger)' : undefined }}
+                          >
+                            {formatMinutesAsHours(stats.balanceMinutes)}
+                          </Td>
+                          <Td className="tabular text-right">
+                            {formatMinutesAsHours(stats.allocatedMinutes)}
+                          </Td>
+                          <Td className="tabular text-right">{formatMinutesAsHours(stats.reservedMinutes)}</Td>
+                          <Td
+                            className="tabular text-right font-medium"
+                            style={{
+                              color:
+                                stats.balanceMinutes - stats.allocatedMinutes > 0
+                                  ? 'var(--color-warning)'
+                                  : 'var(--color-success)',
+                            }}
+                          >
+                            {formatMinutesAsHours(stats.balanceMinutes - stats.allocatedMinutes)}
+                          </Td>
+                        </>
+                      ) : null}
                       <Td className="whitespace-nowrap text-[var(--color-ink-muted)]">
                         {nextAppointmentAt ? formatDateTime(nextAppointmentAt, timezone) : '—'}
                       </Td>

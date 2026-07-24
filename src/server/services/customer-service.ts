@@ -23,7 +23,10 @@ import {
   type OrgContext,
 } from '@/server/permissions';
 import { geocodeAddressCached, getGeocodingProvider } from '@/server/providers/geocoding';
-import { getCustomerAccountStatsBulk } from '@/server/services/hours-service';
+import {
+  getCustomerAccountStatsBulk,
+  type CustomerAccountStats,
+} from '@/server/services/hours-service';
 import {
   customerFormSchema,
   type CustomerFormData,
@@ -120,8 +123,12 @@ export async function listCustomers(params: CustomerListParams) {
   const now = new Date();
   const period = monthPeriodInZone(now, ctx.organization.timezone);
   const ids = customers.map((c) => c.id);
+  // Ohne Stundenbudgets kein Kunden-Stundenkonto laden (auch keine Materialisierung).
+  const hourBudgetsEnabled = ctx.organization.hourBudgetsEnabled;
   const [statsMap, nextAppointments] = await Promise.all([
-    getCustomerAccountStatsBulk(ctx.organization.id, ctx.organization.timezone, ids),
+    hourBudgetsEnabled
+      ? getCustomerAccountStatsBulk(ctx.organization.id, ctx.organization.timezone, ids)
+      : Promise.resolve(new Map<string, CustomerAccountStats>()),
     db.appointment.groupBy({
       by: ['customerId'],
       where: {
@@ -154,10 +161,10 @@ export async function listCustomers(params: CustomerListParams) {
   const openOf = (stats: { balanceMinutes: number; allocatedMinutes: number }) =>
     stats.balanceMinutes - stats.allocatedMinutes;
 
-  if (params.openHours) {
+  if (params.openHours && hourBudgetsEnabled) {
     rows = rows.filter((row) => openOf(row.stats) > 0);
   }
-  if (params.sort === 'openMinutes') {
+  if (params.sort === 'openMinutes' && hourBudgetsEnabled) {
     rows.sort((a, b) =>
       params.dir === 'asc'
         ? openOf(a.stats) - openOf(b.stats)
@@ -185,6 +192,7 @@ export async function listCustomers(params: CustomerListParams) {
     pageCount: Math.max(1, Math.ceil(total / PAGE_SIZE)),
     period,
     canManage: hasPermission(ctx, 'customers.manage'),
+    hourBudgetsEnabled,
   };
 }
 
@@ -652,6 +660,8 @@ export async function importCustomersCsv(input: {
   const rows: ImportRow[] = [];
   const seenNumbers = new Set<string>();
   let budgetPermissionWarned = false;
+  let budgetDisabledWarned = false;
+  const hourBudgetsEnabled = ctx.organization.hourBudgetsEnabled;
 
   for (const record of parsed.records) {
     const value = (key: (typeof CUSTOMER_CSV_COLUMNS)[number]['key']): string => {
@@ -970,7 +980,17 @@ export async function importCustomersCsv(input: {
             },
           });
           if (row.monthlyHours && row.monthlyHours > 0) {
-            if (canBudgets) {
+            if (!hourBudgetsEnabled) {
+              // Stundenbudgets org-weit aus → „Stunden pro Monat" wird ignoriert.
+              if (!budgetDisabledWarned) {
+                budgetDisabledWarned = true;
+                warnings.push({
+                  line: row.line,
+                  message:
+                    '„Stunden pro Monat“ übersprungen – Stundenbudgets sind für diese Organisation deaktiviert.',
+                });
+              }
+            } else if (canBudgets) {
               // Konto-Modell: „Stunden pro Monat" → monatlich wiederkehrende
               // Aufladung ab Monatsanfang (füllt das Stundenkonto automatisch).
               await tx.customerRecurringHourGrant.create({

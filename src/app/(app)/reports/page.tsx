@@ -139,15 +139,19 @@ export default async function ReportsPage({
         <PersonalEarningsDashboard data={earnings} />
 
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-5" data-tour="reports-stats">
-          <StatTile label="Kundenstunden (Konto)" value={formatMinutesAsHours(data.totals.budgetMinutes)} />
+          {data.hourBudgetsEnabled ? (
+            <StatTile label="Kundenstunden (Konto)" value={formatMinutesAsHours(data.totals.budgetMinutes)} />
+          ) : null}
           <StatTile label="Zugewiesen" value={formatMinutesAsHours(data.totals.allocatedMinutes)} />
           <StatTile label="Geplant" value={formatMinutesAsHours(data.totals.plannedMinutes)} />
           <StatTile label="Geleistet" value={formatMinutesAsHours(data.totals.completedMinutes)} tone="success" />
-          <StatTile
-            label="Offen"
-            value={formatMinutesAsHours(data.totals.openMinutes)}
-            tone={data.totals.openMinutes > 0 ? 'warning' : 'success'}
-          />
+          {data.hourBudgetsEnabled ? (
+            <StatTile
+              label="Offen"
+              value={formatMinutesAsHours(data.totals.openMinutes)}
+              tone={data.totals.openMinutes > 0 ? 'warning' : 'success'}
+            />
+          ) : null}
           <StatTile
             label="Fahrtzeit"
             value={formatTravelSeconds(data.totals.travelSeconds)}
@@ -246,48 +250,50 @@ export default async function ReportsPage({
           </TableWrapper>
         </Panel>
 
-        <Panel>
-          <PanelHeader>
-            <PanelTitle>Kunden</PanelTitle>
-          </PanelHeader>
-          <TableWrapper className="rounded-t-none border-0 shadow-none">
-            <Table>
-              <THead>
-                <Tr>
-                  <Th>Kunde</Th>
-                  <Th className="text-right">Aufgeladen</Th>
-                  <Th className="text-right">Zugewiesen</Th>
-                  <Th className="text-right">Geplant</Th>
-                  <Th className="text-right">Geleistet</Th>
-                  <Th className="text-right">Offen</Th>
-                </Tr>
-              </THead>
-              <TBody>
-                {data.customerRows.map((row) => (
-                  <Tr key={row.id} interactive>
-                    <Td>
-                      <Link href={`/customers/${row.id}`} className="font-medium hover:text-[var(--color-brand)]">
-                        {row.name}
-                      </Link>
-                    </Td>
-                    <Td className="tabular text-right">{formatMinutesAsHours(row.budgetMinutes)}</Td>
-                    <Td className="tabular text-right">{formatMinutesAsHours(row.allocatedMinutes)}</Td>
-                    <Td className="tabular text-right">{formatMinutesAsHours(row.plannedMinutes)}</Td>
-                    <Td className="tabular text-right">{formatMinutesAsHours(row.completedMinutes)}</Td>
-                    <Td
-                      className="tabular text-right font-medium"
-                      style={{
-                        color: row.openMinutes > 0 ? 'var(--color-warning)' : 'var(--color-success)',
-                      }}
-                    >
-                      {formatMinutesAsHours(row.openMinutes)}
-                    </Td>
+        {data.hourBudgetsEnabled ? (
+          <Panel>
+            <PanelHeader>
+              <PanelTitle>Kunden</PanelTitle>
+            </PanelHeader>
+            <TableWrapper className="rounded-t-none border-0 shadow-none">
+              <Table>
+                <THead>
+                  <Tr>
+                    <Th>Kunde</Th>
+                    <Th className="text-right">Aufgeladen</Th>
+                    <Th className="text-right">Zugewiesen</Th>
+                    <Th className="text-right">Geplant</Th>
+                    <Th className="text-right">Geleistet</Th>
+                    <Th className="text-right">Offen</Th>
                   </Tr>
-                ))}
-              </TBody>
-            </Table>
-          </TableWrapper>
-        </Panel>
+                </THead>
+                <TBody>
+                  {data.customerRows.map((row) => (
+                    <Tr key={row.id} interactive>
+                      <Td>
+                        <Link href={`/customers/${row.id}`} className="font-medium hover:text-[var(--color-brand)]">
+                          {row.name}
+                        </Link>
+                      </Td>
+                      <Td className="tabular text-right">{formatMinutesAsHours(row.budgetMinutes)}</Td>
+                      <Td className="tabular text-right">{formatMinutesAsHours(row.allocatedMinutes)}</Td>
+                      <Td className="tabular text-right">{formatMinutesAsHours(row.plannedMinutes)}</Td>
+                      <Td className="tabular text-right">{formatMinutesAsHours(row.completedMinutes)}</Td>
+                      <Td
+                        className="tabular text-right font-medium"
+                        style={{
+                          color: row.openMinutes > 0 ? 'var(--color-warning)' : 'var(--color-success)',
+                        }}
+                      >
+                        {formatMinutesAsHours(row.openMinutes)}
+                      </Td>
+                    </Tr>
+                  ))}
+                </TBody>
+              </Table>
+            </TableWrapper>
+          </Panel>
+        ) : null}
       </div>
     </>
   );

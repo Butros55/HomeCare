@@ -158,6 +158,9 @@ export interface RouteSuggestionDto {
   endAt: string;
   durationMinutes: number;
   openMinutes: number;
+  /** Zusätzlicher Verdienst dieses Einsatzes (Lohn+Zuschlag auf die Kundenzeit
+   *  plus Kilometergeld für die Mehrstrecke), in Euro-Cent. Basis des „+X €". */
+  marginalEarningsCents: number;
   needsAllocation: boolean;
   isPreferredEmployee: boolean;
   position: number;
@@ -246,20 +249,39 @@ export async function loadOpenDemand(
   // Serieneinsätze als Reservierung zählen und nicht erneut vorgeschlagen werden.
   await ensureMaterializedUntil(ctx.organization.id, addDays(day.end, 1));
 
-  // Konto-Modell: verplanbares Guthaben je Kunde zum Planungstag
-  // (Gutschriften bis zum Tag inkl. wiederkehrender Aufladungen,
-  // minus Geleistetes, minus Reservierungen bis Tagesende).
-  const plannable = await getPlannableMinutesForDate(ctx.organization.id, timezone, date);
   const restrictSet =
     restrictCustomerIds && restrictCustomerIds.length > 0 ? new Set(restrictCustomerIds) : null;
-  const candidateIds = [...plannable.entries()]
-    .filter(
-      ([customerId, value]) =>
-        value.hasAccount &&
-        value.plannableMinutes >= MIN_SUGGESTION_MINUTES &&
-        (!restrictSet || restrictSet.has(customerId)),
-    )
-    .map(([customerId]) => customerId);
+
+  // Konto-Modell (Budget an): verplanbares Guthaben je Kunde zum Planungstag
+  // (Gutschriften bis zum Tag inkl. wiederkehrender Aufladungen, minus
+  // Geleistetes, minus Reservierungen bis Tagesende) begrenzt Bedarf & Dauer.
+  // Ohne Stundenbudgets zählt jeder aktive Kunde ohne Tagestermin als Bedarf –
+  // die Vorschlagsdauer richtet sich dann rein nach der Kunden-Standarddauer.
+  const hourBudgetsEnabled = ctx.organization.hourBudgetsEnabled;
+  let plannableMinutesByCustomer: Map<string, number> | null = null;
+  let candidateIds: string[];
+  if (hourBudgetsEnabled) {
+    const plannable = await getPlannableMinutesForDate(ctx.organization.id, timezone, date);
+    plannableMinutesByCustomer = new Map(
+      [...plannable.entries()].map(([id, value]) => [id, value.plannableMinutes]),
+    );
+    candidateIds = [...plannable.entries()]
+      .filter(
+        ([customerId, value]) =>
+          value.hasAccount &&
+          value.plannableMinutes >= MIN_SUGGESTION_MINUTES &&
+          (!restrictSet || restrictSet.has(customerId)),
+      )
+      .map(([customerId]) => customerId);
+  } else {
+    const activeCustomers = await db.customer.findMany({
+      where: { organizationId: ctx.organization.id, status: 'ACTIVE', deletedAt: null },
+      select: { id: true },
+    });
+    candidateIds = activeCustomers
+      .map((c) => c.id)
+      .filter((id) => !restrictSet || restrictSet.has(id));
+  }
   if (candidateIds.length === 0) return [];
 
   const [customers, dayAppointments] = await Promise.all([
@@ -296,7 +318,11 @@ export async function loadOpenDemand(
   const result: DemandCandidate[] = [];
   for (const customer of customers) {
     if (customersWithDayAppointment.has(customer.id)) continue;
-    const open = plannable.get(customer.id)?.plannableMinutes ?? 0;
+    // Budget an: verplanbares Guthaben; Budget aus: Kunden-Standarddauer als
+    // Obergrenze (kein Guthaben-Limit).
+    const open = hourBudgetsEnabled
+      ? (plannableMinutesByCustomer?.get(customer.id) ?? 0)
+      : customer.defaultAppointmentDurationMinutes;
     if (open < MIN_SUGGESTION_MINUTES) continue;
 
     const address = customer.addresses[0];
@@ -851,8 +877,30 @@ async function buildEmployeePanel(args: {
 
     const hasAllocation = allocatedCustomerIds.has(entry.candidate.customerId);
     const isPreferred = entry.candidate.preferredEmployeeId === employee.id;
-    // Priorität: Machbarkeit (gegeben) → Zuweisung/Wunschmitarbeiter → geringe Mehrkosten.
-    const rankScore = evaluation.score - (hasAllocation ? 100_000 : 0) - (isPreferred ? 50_000 : 0);
+
+    // Grenzverdienst dieses Einsatzes: Lohn + steuerfreier Zuschlag auf die
+    // Kundenzeit plus Kilometergeld für die zusätzliche Strecke (Euro-Cent).
+    const marginalEarningsCents = Math.round(
+      ((ctx.membership.hourlyWageCents + ctx.membership.taxFreeBonusCentsPerHour) *
+        entry.duration) /
+        60 +
+        ((ctx.membership.mileageRatePerKmCents ?? 0) * evaluation.impact.extraDistanceMeters) /
+          1000,
+    );
+
+    // Rangfolge (kleiner = besser):
+    //  - Budget an: Machbarkeit → Zuweisung/Wunschmitarbeiter → geringe Mehrkosten.
+    //  - Budget aus: rein wirtschaftlich – Verdienst je zusätzlicher Arbeitstag-
+    //    Minute (mehr €/Std. zuerst), bei Gleichstand wenig Fahrtzeit; der
+    //    Wunschmitarbeiter bleibt ein Bonus. Ohne Guthaben-Blick auf das Konto.
+    let rankScore: number;
+    if (ctx.organization.hourBudgetsEnabled) {
+      rankScore = evaluation.score - (hasAllocation ? 100_000 : 0) - (isPreferred ? 50_000 : 0);
+    } else {
+      const addedMinutes = Math.max(1, evaluation.impact.workdayDeltaSeconds / 60);
+      const earningsPerMinute = marginalEarningsCents / addedMinutes;
+      rankScore = -earningsPerMinute * 1000 + evaluation.score - (isPreferred ? 50_000 : 0);
+    }
 
     const startMinute = minutesOfDayInZone(evaluation.startAt, timezone);
     const insertAfterLabel = evaluation.insertAfterStopId
@@ -907,6 +955,7 @@ async function buildEmployeePanel(args: {
         endAt: evaluation.endAt.toISOString(),
         durationMinutes: entry.duration,
         openMinutes: entry.candidate.openMinutes,
+        marginalEarningsCents,
         needsAllocation: !hasAllocation,
         isPreferredEmployee: isPreferred,
         position: evaluation.position ?? 0,
@@ -1010,8 +1059,11 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
   if (employee.status !== 'ACTIVE' || employee.deletedAt) throw new AppError('SUGGESTION_STALE');
   if (customer.status !== 'ACTIVE' || customer.deletedAt) throw new AppError('SUGGESTION_STALE');
 
-  // Wiederkehrende Gutschriften vor der Transaktion buchen (idempotent).
-  await ensureRecurringTopupsMaterialized(ctx.organization.id, timezone);
+  // Wiederkehrende Gutschriften vor der Transaktion buchen (idempotent) –
+  // nur wenn Stundenbudgets geführt werden.
+  if (ctx.organization.hourBudgetsEnabled) {
+    await ensureRecurringTopupsMaterialized(ctx.organization.id, timezone);
+  }
 
   const address = customer.addresses[0];
   if (!address || address.latitude == null || address.longitude == null) {
@@ -1172,43 +1224,46 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
       //    Keine Zuweisungs-Validierung mehr – Zuweisungen sind reine
       //    Leitungs-Buchhaltung und blockieren die Annahme nicht (das führte
       //    früher zu „Budget vollständig zugewiesen"-Fehlern bei jedem Klick).
-      const [topupRows, grantRows, accountAppointments] = await Promise.all([
-        tx.customerHourTopup.findMany({
-          where: { customerId: customer.id },
-          select: { minutes: true, effectiveOn: true },
-        }),
-        tx.customerRecurringHourGrant.findMany({
-          where: { customerId: customer.id, active: true },
-        }),
-        tx.appointment.findMany({
-          where: { customerId: customer.id, deletedAt: null },
-          select: {
-            startAt: true,
-            durationMinutes: true,
-            status: true,
-            timeEntries: { where: { status: 'APPROVED' }, select: { workedMinutes: true } },
-          },
-        }),
-      ]);
-      const plannable = plannableMinutesAt({
-        topups: topupRows,
-        grants: grantRows,
-        appointments: accountAppointments.map((a) => ({
-          durationMinutes: a.durationMinutes,
-          status: a.status,
-          startAt: a.startAt,
-          workedMinutes:
-            a.timeEntries.length > 0
-              ? a.timeEntries.reduce((sum, t) => sum + t.workedMinutes, 0)
-              : null,
-        })),
-        date,
-        reservedBefore: day.end,
-      });
-      if (plannable < payload.dur) {
-        throw new AppError('SUGGESTION_STALE', {
-          message: 'Das Stundenguthaben reicht für diesen Vorschlag nicht mehr aus.',
+      //    Ohne Stundenbudgets entfällt die Guthaben-Prüfung ganz.
+      if (ctx.organization.hourBudgetsEnabled) {
+        const [topupRows, grantRows, accountAppointments] = await Promise.all([
+          tx.customerHourTopup.findMany({
+            where: { customerId: customer.id },
+            select: { minutes: true, effectiveOn: true },
+          }),
+          tx.customerRecurringHourGrant.findMany({
+            where: { customerId: customer.id, active: true },
+          }),
+          tx.appointment.findMany({
+            where: { customerId: customer.id, deletedAt: null },
+            select: {
+              startAt: true,
+              durationMinutes: true,
+              status: true,
+              timeEntries: { where: { status: 'APPROVED' }, select: { workedMinutes: true } },
+            },
+          }),
+        ]);
+        const plannable = plannableMinutesAt({
+          topups: topupRows,
+          grants: grantRows,
+          appointments: accountAppointments.map((a) => ({
+            durationMinutes: a.durationMinutes,
+            status: a.status,
+            startAt: a.startAt,
+            workedMinutes:
+              a.timeEntries.length > 0
+                ? a.timeEntries.reduce((sum, t) => sum + t.workedMinutes, 0)
+                : null,
+          })),
+          date,
+          reservedBefore: day.end,
         });
+        if (plannable < payload.dur) {
+          throw new AppError('SUGGESTION_STALE', {
+            message: 'Das Stundenguthaben reicht für diesen Vorschlag nicht mehr aus.',
+          });
+        }
       }
 
       // 7) PLANNED-Termin anlegen (Konto: Abzug entsteht beim Abschluss).

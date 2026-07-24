@@ -17,6 +17,7 @@ import {
   PasswordSettings,
   ProfileSettings,
 } from '@/features/settings/settings-forms';
+import { HourBudgetsSettings } from '@/features/settings/leadership-dialogs';
 import { LeadershipSettings } from '@/features/settings/leadership-settings';
 import { MembersSettings } from '@/features/settings/members-settings';
 import { PrivacySettings } from '@/features/settings/privacy-settings';
@@ -189,21 +190,24 @@ export default async function SettingsPage({
           <>
             {canManageMembers ? <LeadershipSettings /> : null}
             {canManageSettings ? (
-              <OrganizationSettings
-                initial={{
-                  name: ctx.organization.name,
-                  timezone: ctx.organization.timezone,
-                  startLocation: startLocation?.street
-                    ? {
-                        label: startLocation.label ?? 'Büro',
-                        street: startLocation.street ?? '',
-                        houseNumber: startLocation.houseNumber ?? '',
-                        postalCode: startLocation.postalCode ?? '',
-                        city: startLocation.city ?? '',
-                      }
-                    : null,
-                }}
-              />
+              <>
+                <HourBudgetsSettings enabled={ctx.organization.hourBudgetsEnabled} />
+                <OrganizationSettings
+                  initial={{
+                    name: ctx.organization.name,
+                    timezone: ctx.organization.timezone,
+                    startLocation: startLocation?.street
+                      ? {
+                          label: startLocation.label ?? 'Büro',
+                          street: startLocation.street ?? '',
+                          houseNumber: startLocation.houseNumber ?? '',
+                          postalCode: startLocation.postalCode ?? '',
+                          city: startLocation.city ?? '',
+                        }
+                      : null,
+                  }}
+                />
+              </>
             ) : null}
           </>
         ) : null}

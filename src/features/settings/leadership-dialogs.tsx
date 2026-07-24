@@ -8,10 +8,12 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
 import { FieldHint, Input, Label } from '@/components/ui/input';
+import { Switch } from '@/components/ui/misc';
 import { Panel, PanelBody, PanelHeader, PanelTitle } from '@/components/ui/panel';
 import { cn } from '@/lib/utils';
 import { inviteLeadershipAction } from '@/server/actions/member-actions';
 import {
+  setHourBudgetsEnabledAction,
   updateDefaultPermissionsAction,
   updateSoloModeAction,
 } from '@/server/actions/settings-actions';
@@ -89,6 +91,65 @@ export function ModeSettings({ soloMode }: { soloMode: boolean }) {
           ihre Zuordnungen automatisch wieder. Tipp: Für einen schnellen Blick auf die eigenen
           Termine reicht der Umschalter „Meine Ansicht“ oben in der Leiste – der ändert keine Daten.
         </p>
+      </PanelBody>
+    </Panel>
+  );
+}
+
+/**
+ * Org-weiter Schalter „Stundenbudgets nutzen". Aus = Kunden-Stundenkonten
+ * (Aufladungen/Guthaben/Verplanbar) ausgeblendet und ohne Deckungsprüfung;
+ * Terminvorschläge planen dann rein wirtschaftlich. Vorhandene Daten bleiben.
+ */
+export function HourBudgetsSettings({ enabled }: { enabled: boolean }) {
+  const router = useRouter();
+  const [pending, startTransition] = React.useTransition();
+
+  const toggle = (next: boolean) => {
+    if (next === enabled) return;
+    startTransition(async () => {
+      const result = await setHourBudgetsEnabledAction(next);
+      if (result.ok) {
+        toast.success(
+          next
+            ? 'Stundenbudgets aktiv – Kunden-Stundenkonten werden wieder geführt und berücksichtigt.'
+            : 'Stundenbudgets aus – Konten ausgeblendet; Vorschläge planen rein wirtschaftlich.',
+        );
+        router.refresh();
+      } else {
+        toast.error(result.message);
+      }
+    });
+  };
+
+  return (
+    <Panel>
+      <PanelHeader>
+        <PanelTitle>Stundenbudgets</PanelTitle>
+        <Switch
+          checked={enabled}
+          onCheckedChange={toggle}
+          disabled={pending}
+          aria-label="Stundenbudgets nutzen"
+        />
+      </PanelHeader>
+      <PanelBody>
+        <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+          Kunden-Stundenkonten (Aufladungen, Guthaben, verplanbare Stunden) organisationsweit führen.
+        </p>
+        <ul className="mt-2 space-y-1 text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+          <li>
+            <strong className="font-semibold text-[var(--color-ink-muted)]">Aktiv:</strong> Konten,
+            Aufladungen und Deckungsprüfung wie gewohnt; Terminvorschläge nutzen das verplanbare
+            Guthaben.
+          </li>
+          <li>
+            <strong className="font-semibold text-[var(--color-ink-muted)]">Aus:</strong>{' '}
+            Konto-Ansichten und -Kennzahlen ausgeblendet, keine Deckungsprüfung. Vorhandene Daten
+            bleiben erhalten. Terminvorschläge empfehlen die wirtschaftlichsten Einsätze (wenig
+            Fahrtzeit, Tagesziel, €/Std.).
+          </li>
+        </ul>
       </PanelBody>
     </Panel>
   );
