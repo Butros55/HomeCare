@@ -78,6 +78,12 @@ const ENTER_EASING = 'cubic-bezier(0.18, 1.35, 0.4, 1)';
 const LEAVE_EASING = 'cubic-bezier(0.4, 0, 1, 1)';
 /** Luft über den Karten, damit das Überschwingen nicht anschlägt. */
 const OVERSHOOT_HEADROOM = '2.5rem';
+/**
+ * Ruhezeit nach der letzten Scroll-Bewegung, bevor gesnappt wird. Bewusst
+ * nur nach dem Loslassen und wenn der Schwung ausgelaufen ist – ein
+ * kurzes Innehalten mit dem Finger darf das Scrollen nicht abbrechen.
+ */
+const SETTLE_IDLE_MS = 120;
 
 /**
  * Blätter-Karussell: die Seiten liegen als hochkante Papier-Karten direkt auf
@@ -121,8 +127,11 @@ export function NoteCarousel({
   const cardRefs = React.useRef<Map<string, HTMLElement>>(new Map());
   const frameRef = React.useRef<number | null>(null);
   const glideRef = React.useRef<number | null>(null);
-  const idleRef = React.useRef<number | null>(null);
-  const settlingRef = React.useRef(false);
+  const settleTimerRef = React.useRef<number | null>(null);
+  // Liegt gerade ein Finger auf? Touch-Events sind hier verlässlicher als
+  // Pointer-Events: sobald der Browser das Scrollen übernimmt, feuert
+  // `pointercancel`, obwohl der Finger noch auf dem Display liegt.
+  const touchActiveRef = React.useRef(false);
   const wasOpenRef = React.useRef(false);
   const seenIdsRef = React.useRef<Set<string>>(new Set(notes.map((note) => note.id)));
   const [editingId, setEditingId] = React.useState<string | null>(null);
@@ -165,31 +174,20 @@ export function NoteCarousel({
     });
   }, [applyFan]);
 
+  const clearSettleTimer = React.useCallback(() => {
+    if (settleTimerRef.current !== null) {
+      window.clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = null;
+    }
+  }, []);
+
   const stopGlide = React.useCallback(() => {
     if (glideRef.current !== null) {
       window.cancelAnimationFrame(glideRef.current);
       glideRef.current = null;
     }
-    if (idleRef.current !== null) {
-      window.cancelAnimationFrame(idleRef.current);
-      idleRef.current = null;
-    }
-    settlingRef.current = false;
-  }, []);
-
-  /**
-   * Restlichen Schwung verwerfen. Ohne das würde der Browser weiter scrollen
-   * und die eigene Animation überstimmen – es „ploppt" dann statt zu gleiten.
-   */
-  const killMomentum = React.useCallback(() => {
-    const scroller = scrollerRef.current;
-    if (!scroller) return;
-    const left = scroller.scrollLeft;
-    scroller.style.overflowX = 'hidden';
-    scroller.getBoundingClientRect();
-    scroller.style.overflowX = '';
-    scroller.scrollLeft = left;
-  }, []);
+    clearSettleTimer();
+  }, [clearSettleTimer]);
 
   /**
    * Eigene, bewusst gemächliche Scroll-Animation – `behavior: 'smooth'` wirkt
@@ -254,31 +252,23 @@ export function NoteCarousel({
   }, [centerOn, creating, notes]);
 
   /**
-   * Erst wenn der Schwung ausgelaufen ist, sanft zurückgleiten. So kämpft die
-   * eigene Animation nie gegen das Momentum – auch nicht bei einem kräftigen
-   * Wisch nach links.
+   * Snappt frühestens, wenn seit der letzten Scroll-Bewegung kurz Ruhe war
+   * UND kein Finger mehr auf dem Display liegt. Dadurch bricht ein Innehalten
+   * mitten im Ziehen das Scrollen nicht ab (der alte Fehler), und der Schwung
+   * darf vollständig auslaufen, bevor überhaupt etwas nachrückt.
+   *
+   * Wird bei jeder Scroll-Bewegung neu angestoßen (Debounce): solange gescrollt
+   * wird, verschiebt sich das Snappen weiter nach hinten.
    */
-  const settleWhenIdle = React.useCallback(() => {
-    const scroller = scrollerRef.current;
-    if (!scroller || settlingRef.current) return;
-    settlingRef.current = true;
-    let lastLeft = scroller.scrollLeft;
-    let stableFrames = 0;
-    const check = () => {
-      const current = scroller.scrollLeft;
-      stableFrames = Math.abs(current - lastLeft) < 0.5 ? stableFrames + 1 : 0;
-      lastLeft = current;
-      if (stableFrames < 3) {
-        idleRef.current = window.requestAnimationFrame(check);
-        return;
-      }
-      idleRef.current = null;
-      settlingRef.current = false;
-      killMomentum();
+  const scheduleSettle = React.useCallback(() => {
+    clearSettleTimer();
+    settleTimerRef.current = window.setTimeout(() => {
+      settleTimerRef.current = null;
+      // Finger noch unten → nichts tun, das Loslassen stößt es erneut an.
+      if (touchActiveRef.current) return;
       settleOnRealSheet();
-    };
-    idleRef.current = window.requestAnimationFrame(check);
-  }, [killMomentum, settleOnRealSheet]);
+    }, SETTLE_IDLE_MS);
+  }, [clearSettleTimer, settleOnRealSheet]);
 
   React.useEffect(() => {
     const scroller = scrollerRef.current;
@@ -306,16 +296,6 @@ export function NoteCarousel({
     if (!open || !selectedId) return;
     if (justOpened || isNewNote) centerOn(selectedId, justOpened ? 260 : 460);
   }, [centerOn, notes, open, selectedId]);
-
-  // Beim Loslassen zurückrutschen. `scrollend` deckt zusätzlich den Nachlauf
-  // des Schwungscrollens auf Touch-Geräten ab – ganz ohne Timer.
-  React.useEffect(() => {
-    const scroller = scrollerRef.current;
-    if (!scroller) return;
-    const onSettle = () => settleWhenIdle();
-    scroller.addEventListener('scrollend', onSettle);
-    return () => scroller.removeEventListener('scrollend', onSettle);
-  }, [settleWhenIdle]);
 
   React.useEffect(() => stopGlide, [stopGlide]);
 
@@ -397,7 +377,9 @@ export function NoteCarousel({
     >
       <div
         className={cn(
-          'flex items-center gap-2 px-3 pt-2 transition-opacity duration-200',
+          // touch-none: Ziehen auf der Kopfzeile scrollt NICHT die Seite
+          // (Tippen auf den Schließen-Knopf bleibt möglich).
+          'flex touch-none items-center gap-2 px-3 pt-2 transition-opacity duration-200',
           open ? 'opacity-100' : 'opacity-0',
         )}
       >
@@ -418,13 +400,31 @@ export function NoteCarousel({
 
       <div
         ref={scrollerRef}
-        onScroll={scheduleFan}
+        onScroll={() => {
+          scheduleFan();
+          scheduleSettle();
+        }}
         onPointerDown={stopGlide}
-        onPointerUp={settleWhenIdle}
-        onPointerCancel={settleWhenIdle}
+        onTouchStart={() => {
+          touchActiveRef.current = true;
+          stopGlide();
+        }}
+        onTouchEnd={(event) => {
+          if (event.touches.length > 0) return;
+          touchActiveRef.current = false;
+          scheduleSettle();
+        }}
+        onTouchCancel={(event) => {
+          if (event.touches.length > 0) return;
+          touchActiveRef.current = false;
+          scheduleSettle();
+        }}
         // Bewusst ohne CSS-scroll-snap: das würde die eigene, sanfte
         // Gleit-Animation sofort an den nächsten Punkt reißen.
-        className="scrollbar-none flex items-end gap-3 overflow-x-auto overflow-y-hidden pb-8"
+        // `touch-action: pan-x` lässt nur waagerechtes Wischen zu – ein
+        // senkrechter Wisch scrollt dadurch NICHT die ganze Seite;
+        // `overscroll-contain` verhindert das Weiterreichen am Rand.
+        className="scrollbar-none flex touch-pan-x items-end gap-3 overflow-x-auto overflow-y-hidden overscroll-contain pb-8"
         style={{
           paddingTop: OVERSHOOT_HEADROOM,
           paddingInline: `max(1rem, calc(50% - var(--sheet-h) / ${SHEET_RATIO * 2}))`,
