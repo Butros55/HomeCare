@@ -123,6 +123,7 @@ export function RoutesShell({
   ownEmployeeId,
   initialEmployeeId,
   initialDate,
+  autoPlan = false,
   canManage,
   canAccept,
   soloMode,
@@ -134,6 +135,8 @@ export function RoutesShell({
   ownEmployeeId: string | null;
   initialEmployeeId: string;
   initialDate: string;
+  /** Beim Öffnen (Deep-Link ?plan=1) den „Tag automatisch planen"-Dialog aufklappen. */
+  autoPlan?: boolean;
   canManage: boolean;
   /** Vorschläge übernehmen dürfen nur Leitungs-Konten. */
   canAccept: boolean;
@@ -182,6 +185,7 @@ export function RoutesShell({
                 canAccept={canAccept}
                 soloMode={soloMode}
                 timezone={timezone}
+                autoPlan={autoPlan}
                 showEmployeeSelect
               />
             </TabsContent>
@@ -213,6 +217,7 @@ export function RoutesShell({
             canAccept={canAccept}
             soloMode={soloMode}
             timezone={timezone}
+            autoPlan={autoPlan}
             showEmployeeSelect={false}
           />
         )}
@@ -239,6 +244,7 @@ function SingleRoutePlanner({
   canAccept,
   soloMode,
   timezone,
+  autoPlan = false,
   showEmployeeSelect,
 }: {
   employees: { id: string; name: string }[];
@@ -255,6 +261,8 @@ function SingleRoutePlanner({
   /** Alleine-Modus: sofort speichern statt speichern/freigeben. */
   soloMode: boolean;
   timezone: string;
+  /** Deep-Link ?plan=1: „Tag automatisch planen" gleich öffnen. */
+  autoPlan?: boolean;
   showEmployeeSelect: boolean;
 }) {
   const [employeeId, setEmployeeId] = React.useState(initialEmployeeId);
@@ -340,7 +348,7 @@ function SingleRoutePlanner({
   );
 
   // Tagesrouten-Generator (Popup mit kompletten Routen-Varianten).
-  const [dayDialogOpen, setDayDialogOpen] = React.useState(false);
+  const [dayDialogOpen, setDayDialogOpen] = React.useState(autoPlan && canManage);
 
   const reloadData = React.useCallback(
     async (options?: { keepRoute?: boolean; clear?: boolean }): Promise<string[] | null> => {

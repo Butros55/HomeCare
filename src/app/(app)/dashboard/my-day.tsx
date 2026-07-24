@@ -9,6 +9,7 @@ import {
   Navigation,
   Route as RouteIcon,
   Wallet,
+  Wand2,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -202,6 +203,19 @@ export async function MyDayDashboard({
                 >
                   Route öffnen →
                 </Link>
+              </div>
+            ) : data.needsRoutePlanning ? (
+              // Termine da, aber noch keine Route → direkt zum automatischen Planen.
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[var(--color-brand-subtle)] bg-[var(--color-brand-subtle)] px-4 py-2.5">
+                <span className="flex items-center gap-1.5 text-[length:var(--text-xs)] font-medium text-[var(--color-brand)]">
+                  <RouteIcon className="size-3.5" aria-hidden />
+                  Für heute ist noch keine Route geplant
+                </span>
+                <Button asChild variant="primary" size="sm" className="ml-auto">
+                  <Link href={`/routes?datum=${todayIso}&plan=1`}>
+                    <Wand2 aria-hidden /> Tag automatisch planen
+                  </Link>
+                </Button>
               </div>
             ) : null}
 

@@ -8,6 +8,7 @@ import {
   dayPeriodInZone,
   monthPeriodInZone,
   overlaps,
+  toDateInputValue,
   utcDate,
   weekPeriodInZone,
 } from '@/lib/dates';
@@ -39,6 +40,7 @@ export interface ActionItem {
     | 'ADDRESS_MISSING'
     | 'CONFLICT'
     | 'ASSIGNMENT_DECLINED'
+    | 'ROUTE_UNPLANNED'
     | 'BUDGET_ENDING';
   title: string;
   detail: string;
@@ -346,6 +348,17 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
     todayAppointments.find((appointment) => appointment.endAt.getTime() > now.getTime()) ?? null;
   const todayTravelSeconds = entries.reduce((sum, entry) => sum + (entry.travelSeconds ?? 0), 0);
 
+  // Für heute Termine, aber noch keine geplante Route? Dann direkt zum Planen anregen.
+  const routeRelevantTodayCount = ownEmployeeId
+    ? todayAppointments.filter(
+        (a) =>
+          a.assignedEmployeeId === ownEmployeeId &&
+          a.routeRelevant &&
+          !['CANCELLED', 'NO_SHOW'].includes(a.status),
+      ).length
+    : 0;
+  const needsRoutePlanning = routeStops.length === 0 && routeRelevantTodayCount >= 2;
+
   // Voraussichtlicher Tagesverdienst – exakt dieselbe Berechnung wie im
   // Routenplaner („Verdienst (Tag)"): Stundenlohn inkl. steuerfreiem Zuschlag
   // auf die Kundenzeit plus Kilometergeld. Als Verdienstbasis zählt – wenn eine
@@ -409,6 +422,8 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
     },
     nextAppointmentAt: nextAppointment?.startAt ?? null,
     firstDeparture: entries[0]?.departureAt ?? null,
+    /** Heute Termine, aber noch keine Route geplant → „Tag automatisch planen" anbieten. */
+    needsRoutePlanning,
     /**
      * Die im Routenplaner gespeicherte Tagesroute – bewusst getrennt von den
      * Terminen. `null`, solange für heute nichts geplant wurde.
@@ -858,6 +873,66 @@ export async function getDashboardData(ctx: OrgContext) {
       detail: 'Termine neu besetzen',
       href: '/calendar?zuweisung=abgelehnt',
     });
+  }
+  // Kommende Tage: Mitarbeiter mit ≥2 routenrelevanten Terminen an einem Tag, für
+  // den noch keine Route geplant ist → zum automatischen Planen anregen.
+  {
+    const horizonEnd = addDays(today.start, 7);
+    const [routeAppts, routePlansAhead] = await Promise.all([
+      db.appointment.findMany({
+        where: {
+          organizationId: orgId,
+          deletedAt: null,
+          routeRelevant: true,
+          assignedEmployeeId: { not: null },
+          status: { in: ['PLANNED', 'CONFIRMED', 'IN_PROGRESS'] },
+          startAt: { gte: today.start, lt: horizonEnd },
+          ...(isPlanner ? {} : scopeFilter),
+        },
+        select: { assignedEmployeeId: true, startAt: true },
+      }),
+      db.routePlan.findMany({
+        where: { organizationId: orgId, routeDate: { gte: today.start, lt: horizonEnd } },
+        select: { employeeId: true, routeDate: true },
+      }),
+    ]);
+    const plannedDays = new Set(
+      routePlansAhead.map((plan) => `${plan.employeeId}:${plan.routeDate.getTime()}`),
+    );
+    const dayCounts = new Map<string, number>();
+    for (const appointment of routeAppts) {
+      const parts = calendarDayInZone(appointment.startAt, timezone);
+      const routeDate = utcDate(parts.year, parts.month, parts.day);
+      const key = `${appointment.assignedEmployeeId}:${routeDate.getTime()}`;
+      dayCounts.set(key, (dayCounts.get(key) ?? 0) + 1);
+    }
+    const employeeName = new Map(employees.map((e) => [e.id, `${e.firstName} ${e.lastName}`]));
+    const unplannedByEmployee = new Map<string, { days: number; firstDate: Date }>();
+    for (const [key, count] of dayCounts) {
+      if (count < 2 || plannedDays.has(key)) continue;
+      const [empId, dateMs] = key.split(':');
+      const date = new Date(Number(dateMs));
+      const current = unplannedByEmployee.get(empId!);
+      if (!current) unplannedByEmployee.set(empId!, { days: 1, firstDate: date });
+      else {
+        current.days += 1;
+        if (date < current.firstDate) current.firstDate = date;
+      }
+    }
+    const needers = [...unplannedByEmployee.entries()]
+      .map(([empId, value]) => ({ empId, name: employeeName.get(empId) ?? 'Mitarbeiter', ...value }))
+      .filter((entry) => employeeName.has(entry.empId)) // nur im eigenen Verwaltungsbereich
+      .sort((a, b) => b.days - a.days)
+      .slice(0, 4);
+    for (const needer of needers) {
+      const dateIso = toDateInputValue(needer.firstDate, timezone);
+      actionItems.push({
+        kind: 'ROUTE_UNPLANNED',
+        title: `${needer.name}: ${needer.days} ${needer.days === 1 ? 'Tag' : 'Tage'} ohne geplante Route`,
+        detail: 'Termine vorhanden, aber keine Tagesroute – jetzt automatisch planen',
+        href: `/routes?mitarbeiter=${needer.empId}&datum=${dateIso}&plan=1`,
+      });
+    }
   }
   if (isPlanner) {
     // Konto-Modell: wiederkehrende Aufladungen, die bald auslaufen.

@@ -57,6 +57,7 @@ export default async function RoutesPage({
       ownEmployeeId={ownEmployeeId}
       initialEmployeeId={initialEmployeeId}
       initialDate={params.datum ?? toDateInputValue(new Date(), ctx.organization.timezone)}
+      autoPlan={params.plan === '1'}
       canManage={hasPermission(ctx, 'routes.manage')}
       canAccept={ctx.membership.role !== 'EMPLOYEE'}
       soloMode={mode === 'solo'}
