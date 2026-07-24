@@ -10,6 +10,7 @@ import {
   utcDate,
   weekPeriodInZone,
 } from '@/lib/dates';
+import { centsForKilometers, centsForMinutes } from '@/lib/earnings';
 import { estimateTravelSeconds } from '@/lib/geo';
 import { formatMinutesAsHours } from '@/lib/duration';
 import { getManagerSelfObligationMinutes } from '@/lib/hours';
@@ -294,6 +295,29 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
     todayAppointments.find((appointment) => appointment.endAt.getTime() > now.getTime()) ?? null;
   const todayTravelSeconds = entries.reduce((sum, entry) => sum + (entry.travelSeconds ?? 0), 0);
 
+  // Voraussichtlicher Tagesverdienst: eigene geplante Minuten × (Stundenlohn +
+  // steuerfreier Zuschlag) plus Kilometergeld für die gespeicherte Tagesroute.
+  // Nur eigene Termine zählen – im Solo-Modus können auch offene in der Liste sein.
+  const routeDistanceMeters = routeStops.reduce(
+    (sum, stop) => sum + stop.distanceMetersFromPrevious,
+    0,
+  );
+  const ownTodayMinutes = ownEmployeeId
+    ? todayAppointments
+        .filter((appointment) => appointment.assignedEmployeeId === ownEmployeeId)
+        .reduce((sum, appointment) => sum + appointment.durationMinutes, 0)
+    : 0;
+  // `?? 0`: robust, falls der (Dev-)Prisma-Client das Feld noch nicht kennt.
+  const mileageRatePerKmCents = ctx.membership.mileageRatePerKmCents ?? 0;
+  const projectedMileageCents = centsForKilometers(routeDistanceMeters, mileageRatePerKmCents);
+  const projectedEarningsCents =
+    ownEmployeeId && ctx.membership.hourlyWageCents > 0
+      ? centsForMinutes(
+          ownTodayMinutes,
+          ctx.membership.hourlyWageCents + ctx.membership.taxFreeBonusCentsPerHour,
+        ) + projectedMileageCents
+      : null;
+
   return {
     entries,
     upcoming: upcoming.map((appointment) => ({
@@ -310,6 +334,10 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
       weekPlannedMinutes,
       openMinutes,
       openHint,
+      /** Voraussichtlicher Tagesverdienst (null ohne hinterlegten Stundenlohn). */
+      projectedEarningsCents,
+      /** Kilometergeld-Anteil davon (0 ohne Satz oder Route). */
+      projectedMileageCents,
     },
     nextAppointmentAt: nextAppointment?.startAt ?? null,
     firstDeparture: entries[0]?.departureAt ?? null,

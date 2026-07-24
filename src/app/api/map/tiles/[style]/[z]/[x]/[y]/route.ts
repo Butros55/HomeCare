@@ -16,6 +16,10 @@ import { NextResponse, type NextRequest } from 'next/server';
 const STYLES = {
   light: { mapbox: 'mapbox/light-v11', carto: 'light_all' },
   dark: { mapbox: 'mapbox/dark-v11', carto: 'dark_all' },
+  streets: { mapbox: 'mapbox/streets-v12', carto: 'rastertiles/voyager' },
+  satellite: { mapbox: 'mapbox/satellite-streets-v12', carto: null },
+  /** Eigener Mapbox-Stil – die Referenz kommt streng geprüft aus `?ref=`. */
+  custom: { mapbox: null, carto: 'rastertiles/voyager' },
 } as const;
 
 type StyleKey = keyof typeof STYLES;
@@ -25,8 +29,11 @@ const CARTO_SUBDOMAINS = ['a', 'b', 'c', 'd'] as const;
 const CACHE_CONTROL = 'public, max-age=86400, stale-while-revalidate=604800';
 
 function isStyle(value: string): value is StyleKey {
-  return value === 'light' || value === 'dark';
+  return Object.hasOwn(STYLES, value);
 }
+
+/** Eigene Mapbox-Stile: exakt „username/style-id“, sonst nichts. */
+const CUSTOM_REF_PATTERN = /^[\w.-]{1,64}\/[\w.-]{1,64}$/;
 
 /** `y` trägt bei Retina-Displays das Suffix `@2x`. */
 function parseTileY(raw: string): { y: number; retina: boolean } | null {
@@ -60,11 +67,33 @@ export async function GET(
   const suffix = parsedY.retina ? '@2x' : '';
   const token = process.env.MAPBOX_ACCESS_TOKEN;
 
-  if (!token) {
-    // Kein Token: direkt zu CARTO schicken – kein Umweg über diesen Server.
+  // Eigener Mapbox-Stil: nur mit Token sinnvoll; Referenz streng validieren.
+  const customRef =
+    style === 'custom' ? (request.nextUrl.searchParams.get('ref') ?? '') : null;
+  if (style === 'custom' && customRef && !CUSTOM_REF_PATTERN.test(customRef)) {
+    return NextResponse.json({ error: 'VALIDATION_FAILED' }, { status: 400 });
+  }
+
+  const mapboxStyle =
+    style === 'custom' ? (token && customRef ? customRef : null) : STYLES[style].mapbox;
+
+  if (!token || !mapboxStyle) {
+    // Kein Token (oder kein nutzbarer Stil): frei verfügbare Kacheln.
+    //  - Satellit: Esri World Imagery (kein CARTO-Pendant).
+    //  - Sonst: CARTO-Basiskarte des Stils bzw. Voyager als Ersatz.
+    if (style === 'satellite') {
+      const target =
+        `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer` +
+        `/tile/${zoom}/${parsedY.y}/${column}`;
+      return NextResponse.redirect(target, {
+        status: 307,
+        headers: { 'Cache-Control': CACHE_CONTROL },
+      });
+    }
+    const carto = STYLES[style].carto ?? 'rastertiles/voyager';
     const subdomain = CARTO_SUBDOMAINS[(column + parsedY.y) % CARTO_SUBDOMAINS.length]!;
     const target =
-      `https://${subdomain}.basemaps.cartocdn.com/${STYLES[style].carto}` +
+      `https://${subdomain}.basemaps.cartocdn.com/${carto}` +
       `/${zoom}/${column}/${parsedY.y}${suffix}.png`;
     return NextResponse.redirect(target, {
       status: 307,
@@ -73,7 +102,7 @@ export async function GET(
   }
 
   const upstream =
-    `https://api.mapbox.com/styles/v1/${STYLES[style].mapbox}/tiles/512` +
+    `https://api.mapbox.com/styles/v1/${mapboxStyle}/tiles/512` +
     `/${zoom}/${column}/${parsedY.y}${suffix}` +
     `?access_token=${encodeURIComponent(token)}`;
 

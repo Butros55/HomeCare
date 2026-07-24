@@ -8,6 +8,21 @@ import type { RouteLeg, RoutePath, RoutingProvider } from '@/server/providers/ty
 /** Externe Routing-Aufrufe dürfen die Seite nie hängen lassen. */
 const PATH_TIMEOUT_MS = Number(process.env.ROUTING_TIMEOUT_MS ?? 8000);
 
+/**
+ * Sicherheitsaufschlag auf Fahrzeiten von Diensten OHNE Verkehrsdaten
+ * (OSRM/Mapbox/GraphHopper liefern Freifluss-Zeiten, die in der Praxis zu
+ * optimistisch sind – Navigations-Apps zeigen mehr an). Lieber leicht zu hoch
+ * schätzen als zu knapp; der eigentliche Terminpuffer bleibt `bufferMinutes`
+ * des Nutzers und wird hier bewusst NICHT verdoppelt.
+ * Google rechnet mit `departure_time=now` echten Verkehr ein und bekommt
+ * deshalb keinen Aufschlag. Mock ist bereits konservativ (30 km/h + Umweg).
+ */
+const FREE_FLOW_MARGIN = Number(process.env.ROUTING_TRAVEL_MARGIN ?? 1.12);
+
+function withFreeFlowMargin(seconds: number): number {
+  return Math.round(seconds * FREE_FLOW_MARGIN);
+}
+
 async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PATH_TIMEOUT_MS);
@@ -102,7 +117,7 @@ class OsrmRoutingProvider implements RoutingProvider {
     };
     const legs = data.routes?.[0]?.legs ?? [];
     return legs.map((leg) => ({
-      travelSeconds: Math.round(leg.duration),
+      travelSeconds: withFreeFlowMargin(leg.duration),
       distanceMeters: Math.round(leg.distance),
     }));
   }
@@ -122,7 +137,7 @@ class OsrmRoutingProvider implements RoutingProvider {
     const distances = data.distances ?? [];
     return durations.map((row, i) =>
       row.map((duration, j) => ({
-        travelSeconds: Math.round(duration ?? 0),
+        travelSeconds: withFreeFlowMargin(duration ?? 0),
         distanceMeters: Math.round(distances[i]?.[j] ?? 0),
       })),
     );
@@ -144,7 +159,7 @@ class OsrmRoutingProvider implements RoutingProvider {
       road: true,
       provider: this.name,
       distanceMeters: Math.round(route?.distance ?? 0),
-      travelSeconds: Math.round(route?.duration ?? 0),
+      travelSeconds: withFreeFlowMargin(route?.duration ?? 0),
     };
   }
 }
@@ -173,7 +188,7 @@ class MapboxRoutingProvider implements RoutingProvider {
     const data = await this.directions(points);
     const legs = data.routes?.[0]?.legs ?? [];
     return legs.map((leg) => ({
-      travelSeconds: Math.round(leg.duration ?? 0),
+      travelSeconds: withFreeFlowMargin(leg.duration ?? 0),
       distanceMeters: Math.round(leg.distance ?? 0),
     }));
   }
@@ -188,7 +203,7 @@ class MapboxRoutingProvider implements RoutingProvider {
     const distances = data.distances ?? [];
     return durations.map((row, i) =>
       row.map((duration, j) => ({
-        travelSeconds: Math.round(duration ?? 0),
+        travelSeconds: withFreeFlowMargin(duration ?? 0),
         distanceMeters: Math.round(distances[i]?.[j] ?? 0),
       })),
     );
@@ -204,7 +219,7 @@ class MapboxRoutingProvider implements RoutingProvider {
       road: true,
       provider: this.name,
       distanceMeters: Math.round(route?.distance ?? 0),
-      travelSeconds: Math.round(route?.duration ?? 0),
+      travelSeconds: withFreeFlowMargin(route?.duration ?? 0),
     };
   }
 }
@@ -233,7 +248,7 @@ class GraphhopperRoutingProvider implements RoutingProvider {
       const data = await this.route([points[i]!, points[i + 1]!]);
       const path = data.paths?.[0];
       legs.push({
-        travelSeconds: Math.round((path?.time ?? 0) / 1000),
+        travelSeconds: withFreeFlowMargin((path?.time ?? 0) / 1000),
         distanceMeters: Math.round(path?.distance ?? 0),
       });
     }
@@ -257,7 +272,7 @@ class GraphhopperRoutingProvider implements RoutingProvider {
     const distances = data.distances ?? [];
     return times.map((row, i) =>
       row.map((seconds, j) => ({
-        travelSeconds: Math.round(seconds ?? 0),
+        travelSeconds: withFreeFlowMargin(seconds ?? 0),
         distanceMeters: Math.round(distances[i]?.[j] ?? 0),
       })),
     );
@@ -273,12 +288,20 @@ class GraphhopperRoutingProvider implements RoutingProvider {
       road: true,
       provider: this.name,
       distanceMeters: Math.round(path?.distance ?? 0),
-      travelSeconds: Math.round((path?.time ?? 0) / 1000),
+      travelSeconds: withFreeFlowMargin((path?.time ?? 0) / 1000),
     };
   }
 }
 
-/** Google Directions – Zwischenstopps als `waypoints`. */
+/**
+ * Google Directions/Distance Matrix – Zwischenstopps als `waypoints`.
+ *
+ * Mit `departure_time=now` liefert Google verkehrsabhängige Fahrzeiten
+ * (`duration_in_traffic`, Modell `best_guess`) – die realistischste Schätzung,
+ * die wir bekommen können. Fehlt der Verkehrswert (z. B. bei Stopover-Waypoints
+ * in der Directions-API oder ohne Verkehrsdaten), greift die Freifluss-Zeit
+ * plus Sicherheitsaufschlag.
+ */
 class GoogleRoutingProvider implements RoutingProvider {
   readonly name = 'google';
   private readonly key = process.env.GOOGLE_MAPS_API_KEY ?? '';
@@ -296,21 +319,36 @@ class GoogleRoutingProvider implements RoutingProvider {
       `https://maps.googleapis.com/maps/api/directions/json` +
         `?origin=${encodeURIComponent(asParam(origin))}` +
         `&destination=${encodeURIComponent(asParam(destination))}` +
-        `${waypointParam}&mode=driving&key=${encodeURIComponent(this.key)}`,
+        `${waypointParam}&mode=driving&departure_time=now&traffic_model=best_guess` +
+        `&key=${encodeURIComponent(this.key)}`,
     )) as {
       status?: string;
       routes?: {
         overview_polyline?: { points?: string };
-        legs?: { distance?: { value?: number }; duration?: { value?: number } }[];
+        legs?: {
+          distance?: { value?: number };
+          duration?: { value?: number };
+          duration_in_traffic?: { value?: number };
+        }[];
       }[];
     };
+  }
+
+  /** Verkehrszeit bevorzugen; Freifluss-Zeiten bekommen den Aufschlag. */
+  private legSeconds(leg: {
+    duration?: { value?: number };
+    duration_in_traffic?: { value?: number };
+  }): number {
+    const traffic = leg.duration_in_traffic?.value;
+    if (traffic != null && traffic > 0) return Math.round(traffic);
+    return withFreeFlowMargin(leg.duration?.value ?? 0);
   }
 
   async computeRoute(points: LatLng[]): Promise<RouteLeg[]> {
     const data = await this.directions(points);
     const legs = data.routes?.[0]?.legs ?? [];
     return legs.map((leg) => ({
-      travelSeconds: Math.round(leg.duration?.value ?? 0),
+      travelSeconds: this.legSeconds(leg),
       distanceMeters: Math.round(leg.distance?.value ?? 0),
     }));
   }
@@ -320,13 +358,20 @@ class GoogleRoutingProvider implements RoutingProvider {
     const data = (await fetchJson(
       `https://maps.googleapis.com/maps/api/distancematrix/json` +
         `?origins=${encodeURIComponent(list)}&destinations=${encodeURIComponent(list)}` +
-        `&mode=driving&key=${encodeURIComponent(this.key)}`,
+        `&mode=driving&departure_time=now&traffic_model=best_guess` +
+        `&key=${encodeURIComponent(this.key)}`,
     )) as {
-      rows?: { elements?: { duration?: { value?: number }; distance?: { value?: number } }[] }[];
+      rows?: {
+        elements?: {
+          duration?: { value?: number };
+          duration_in_traffic?: { value?: number };
+          distance?: { value?: number };
+        }[];
+      }[];
     };
     return (data.rows ?? []).map((row) =>
       (row.elements ?? []).map((element) => ({
-        travelSeconds: Math.round(element.duration?.value ?? 0),
+        travelSeconds: this.legSeconds(element),
         distanceMeters: Math.round(element.distance?.value ?? 0),
       })),
     );
@@ -345,7 +390,7 @@ class GoogleRoutingProvider implements RoutingProvider {
       road: true,
       provider: this.name,
       distanceMeters: legs.reduce((sum, leg) => sum + (leg.distance?.value ?? 0), 0),
-      travelSeconds: legs.reduce((sum, leg) => sum + (leg.duration?.value ?? 0), 0),
+      travelSeconds: legs.reduce((sum, leg) => sum + this.legSeconds(leg), 0),
     };
   }
 }

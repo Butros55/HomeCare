@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { fromDateInputValue } from '@/lib/dates';
-import { centsForMinutes, computePersonalEarnings } from '@/lib/earnings';
+import { centsForKilometers, centsForMinutes, computePersonalEarnings } from '@/lib/earnings';
 import { computeNetPay, isCompensationProfileComplete } from '@/lib/net-pay';
 import { db } from '@/server/db';
 import { AppError } from '@/server/errors';
@@ -177,6 +177,28 @@ export async function getPersonalEarningsData(filters: PersonalEarningsFilters) 
         left.name.localeCompare(right.name, 'de'),
     );
 
+  // Kilometergeld: gefahrene Strecke der EIGENEN gespeicherten Tagesrouten im
+  // Zeitraum × persönlicher Satz. Steuerfrei (Kilometerpauschale) und bewusst
+  // nur für eigene Fahrten – Mitarbeiter-Routen zählen nicht.
+  // `?? 0`: robust, falls der (Dev-)Prisma-Client das Feld noch nicht kennt.
+  const mileageRatePerKmCents = ctx.membership.mileageRatePerKmCents ?? 0;
+  const ownRoutePlans =
+    ownEmployeeId && mileageRatePerKmCents > 0
+      ? await db.routePlan.findMany({
+          where: {
+            organizationId: ctx.organization.id,
+            employeeId: ownEmployeeId,
+            routeDate: { gte: period.start, lt: period.end },
+          },
+          select: { totalDistanceMeters: true },
+        })
+      : [];
+  const ownDrivenMeters = ownRoutePlans.reduce(
+    (sum, plan) => sum + plan.totalDistanceMeters,
+    0,
+  );
+  const mileageCents = centsForKilometers(ownDrivenMeters, mileageRatePerKmCents);
+
   // Brutto → Netto: nur schätzen, wenn das Vergütungsprofil vollständig ist.
   // Der steuerfreie Zuschlag (z. B. Werbepauschale) hängt an den eigenen
   // geleisteten Stunden, nicht an der Provision.
@@ -196,7 +218,7 @@ export async function getPersonalEarningsData(filters: PersonalEarningsFilters) 
   const netPay = isCompensationProfileComplete(profile)
     ? computeNetPay({
         taxableGrossCents: calculated.totalEarningsCents,
-        taxFreeCents: taxFreeBonusCents,
+        taxFreeCents: taxFreeBonusCents + mileageCents,
         profile,
       })
     : null;
@@ -210,9 +232,15 @@ export async function getPersonalEarningsData(filters: PersonalEarningsFilters) 
         ctx.membership.employeeCommissionCentsPerHour,
       taxFreeBonusCentsPerHour: membership.taxFreeBonusCentsPerHour,
       taxFreeBonusLabel: membership.taxFreeBonusLabel,
+      mileageRatePerKmCents,
     },
     /** Steuerfreier Zuschlag im Zeitraum (0, wenn keiner hinterlegt ist). */
     taxFreeBonusCents,
+    /** Kilometergeld: eigene Routen-Kilometer im Zeitraum × Satz (steuerfrei). */
+    mileage: {
+      drivenMeters: ownDrivenMeters,
+      cents: mileageCents,
+    },
     /**
      * Netto-Schätzung – `null`, solange die Angaben in den Einstellungen
      * fehlen. Dann zeigt der Bericht bewusst nur Brutto.

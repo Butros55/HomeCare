@@ -346,6 +346,8 @@ model OrganizationMembership {
   taxFreeBonusCentsPerHour       Int              @default(0)
   /// Bezeichnung des Zuschlags, erscheint so im Bericht.
   taxFreeBonusLabel              String           @default("Werbepauschale")
+  /// Kilometergeld je gefahrenem Kilometer in Euro-Cent (steuerfrei, nur eigene Fahrten).
+  mileageRatePerKmCents          Int              @default(0)
   invitedByUserId                String?
   invitedBy                      User?            @relation("MembershipInviter", fields: [invitedByUserId], references: [id], onDelete: SetNull)
   joinedAt                       DateTime         @default(now())

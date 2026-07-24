@@ -1,4 +1,4 @@
-import { Clock3, Euro, Sparkles, TrendingUp, UsersRound, Wallet } from 'lucide-react';
+import { Car, Clock3, Euro, Sparkles, TrendingUp, UsersRound, Wallet } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
@@ -6,6 +6,7 @@ import { Panel, PanelBody, PanelHeader, PanelTitle } from '@/components/ui/panel
 import { Table, TableWrapper, TBody, Td, Th, THead, Tr } from '@/components/ui/table';
 import { formatMinutesAsHours } from '@/lib/duration';
 import { formatEuroCents } from '@/lib/earnings';
+import { formatDistance } from '@/lib/geo';
 import { cn } from '@/lib/utils';
 import type { PersonalEarningsData } from '@/server/services/earnings-service';
 
@@ -19,6 +20,9 @@ export function PersonalEarningsDashboard({ data }: { data: PersonalEarningsData
   const missingCommissionRate =
     data.showCommission && data.rates.employeeCommissionCentsPerHour === 0;
   const needsRates = missingOwnRate || missingCommissionRate;
+  // Gesamtsumme inkl. steuerfreier Bestandteile (Zuschlag + Kilometergeld).
+  const grossTotalCents =
+    data.totalEarningsCents + data.taxFreeBonusCents + data.mileage.cents;
 
   return (
     <section className="space-y-4" aria-labelledby="personal-earnings-title">
@@ -46,7 +50,7 @@ export function PersonalEarningsDashboard({ data }: { data: PersonalEarningsData
               id="personal-earnings-title"
               className="tabular mt-1 text-[2.5rem] leading-none font-bold tracking-tight sm:text-[3rem]"
             >
-              {formatEuroCents(data.totalEarningsCents)}
+              {formatEuroCents(grossTotalCents)}
             </div>
             <p className="mt-2 text-[length:var(--text-xs)] text-white/75">
               Abgeschlossene Termine · {data.period.from} bis {data.period.to}
@@ -63,6 +67,9 @@ export function PersonalEarningsDashboard({ data }: { data: PersonalEarningsData
             />
             {data.showCommission ? (
               <HeroChip label="Provision" value={formatEuroCents(data.commission.earningsCents)} />
+            ) : null}
+            {data.mileage.cents > 0 ? (
+              <HeroChip label="Kilometergeld" value={formatEuroCents(data.mileage.cents)} />
             ) : null}
           </div>
         </div>
@@ -115,10 +122,19 @@ export function PersonalEarningsDashboard({ data }: { data: PersonalEarningsData
             icon={<Wallet />}
             accent="var(--color-success)"
             label="Gesamtverdienst"
-            value={formatEuroCents(data.totalEarningsCents)}
-            hint="aus eigenen abgeschlossenen Stunden"
+            value={formatEuroCents(grossTotalCents)}
+            hint="inkl. steuerfreier Bestandteile"
           />
         )}
+        {data.rates.mileageRatePerKmCents > 0 ? (
+          <MetricCard
+            icon={<Car />}
+            accent="var(--color-warning)"
+            label="Kilometergeld (eigene Fahrten)"
+            value={formatEuroCents(data.mileage.cents)}
+            hint={`${formatDistance(data.mileage.drivenMeters)} × ${formatEuroCents(data.rates.mileageRatePerKmCents)} / km`}
+          />
+        ) : null}
       </div>
 
       {/* Aufschlüsselung. */}
@@ -153,12 +169,19 @@ export function PersonalEarningsDashboard({ data }: { data: PersonalEarningsData
                 value={formatEuroCents(data.taxFreeBonusCents)}
               />
             ) : null}
+            {data.mileage.cents > 0 ? (
+              <BreakdownRow
+                label="Kilometergeld (steuerfrei)"
+                detail={`${formatDistance(data.mileage.drivenMeters)} eigene Routen zu ${formatEuroCents(data.rates.mileageRatePerKmCents)} je km`}
+                value={formatEuroCents(data.mileage.cents)}
+              />
+            ) : null}
             <div className="flex items-center justify-between gap-4 rounded-[var(--radius-lg)] bg-[var(--color-brand-subtle)] px-3 py-2.5">
               <dt className="text-[length:var(--text-base)] font-semibold">
                 {data.netPay ? 'Brutto gesamt' : 'Gesamt'}
               </dt>
               <dd className="tabular text-right text-[length:var(--text-xl)] font-bold text-[var(--color-brand)]">
-                {formatEuroCents(data.netPay?.grossCents ?? data.totalEarningsCents + data.taxFreeBonusCents)}
+                {formatEuroCents(data.netPay?.grossCents ?? grossTotalCents)}
               </dd>
             </div>
           </dl>
@@ -233,11 +256,18 @@ export function PersonalEarningsDashboard({ data }: { data: PersonalEarningsData
                   value={`− ${formatEuroCents(data.netPay.unemploymentCents)}`}
                 />
               ) : null}
-              {data.netPay.taxFreeCents > 0 ? (
+              {data.taxFreeBonusCents > 0 ? (
                 <BreakdownRow
                   label={`${data.rates.taxFreeBonusLabel} (ungekürzt)`}
                   detail="steuerfrei, keine Abzüge"
-                  value={formatEuroCents(data.netPay.taxFreeCents)}
+                  value={formatEuroCents(data.taxFreeBonusCents)}
+                />
+              ) : null}
+              {data.mileage.cents > 0 ? (
+                <BreakdownRow
+                  label="Kilometergeld (ungekürzt)"
+                  detail="steuerfrei, keine Abzüge"
+                  value={formatEuroCents(data.mileage.cents)}
                 />
               ) : null}
               <div className="flex items-center justify-between gap-4 rounded-[var(--radius-lg)] bg-[var(--color-success-soft)] px-3 py-2.5">

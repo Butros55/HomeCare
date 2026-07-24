@@ -239,6 +239,17 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
   );
   const droppedStopCount = (existingPlan?.stops.length ?? 0) - livingStops.length;
 
+  // Verdienst-Kennzahl: nur für die eigene Route und nur, wenn ein Stundenlohn
+  // hinterlegt ist (Kilometergeld zählt ausschließlich für eigene Fahrten).
+  const earningsRates =
+    isOwn && ctx.membership.hourlyWageCents > 0
+      ? {
+          hourlyWageCents: ctx.membership.hourlyWageCents,
+          // `?? 0`: robust, falls der (Dev-)Prisma-Client das Feld noch nicht kennt.
+          mileageRatePerKmCents: ctx.membership.mileageRatePerKmCents ?? 0,
+        }
+      : null;
+
   return {
     employeeName: `${employee.firstName} ${employee.lastName}`,
     isOwn,
@@ -250,6 +261,8 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
       home: home ? { label: home.label ?? 'Zuhause' } : null,
     },
     canManage: hasPermission(ctx, 'routes.manage'),
+    /** Stundenlohn/Kilometergeld des Betrachters – null, wenn nicht anwendbar. */
+    earningsRates,
     existingPlan: existingPlan
       ? {
           id: existingPlan.id,

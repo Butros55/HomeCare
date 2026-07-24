@@ -6,6 +6,7 @@ import {
   Contact,
   Navigation,
   Route as RouteIcon,
+  Wallet,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -17,6 +18,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { QuickCompleteButton } from '@/features/appointments/quick-complete-button';
 import { formatDate, formatDateTime, formatTime, formatWeekday, toDateInputValue } from '@/lib/dates';
 import { formatMinutesAsHours } from '@/lib/duration';
+import { formatEuroCents } from '@/lib/earnings';
 import { formatDistance, formatTravelSeconds, googleMapsDirectionsUrl } from '@/lib/geo';
 import {
   APPOINTMENT_STATUS,
@@ -88,6 +90,20 @@ export async function MyDayDashboard({
             value={formatMinutesAsHours(data.counts.weekPlannedMinutes)}
             hint="geplante Einsätze"
           />
+          {data.counts.projectedEarningsCents != null ? (
+            <StatTile
+              icon={<Wallet />}
+              label="Verdienst heute (voraussichtlich)"
+              value={formatEuroCents(data.counts.projectedEarningsCents)}
+              hint={
+                data.counts.projectedMileageCents > 0
+                  ? `inkl. ${formatEuroCents(data.counts.projectedMileageCents)} Kilometergeld`
+                  : 'aus den geplanten Einsätzen'
+              }
+              tone="success"
+              className="col-span-2 xl:col-span-4"
+            />
+          ) : null}
         </div>
 
         {/* Große Schnellaktionen – das tägliche Werkzeug. min-w-0 + truncate:

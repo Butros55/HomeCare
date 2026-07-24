@@ -21,6 +21,12 @@ import {
   type AcceptSuggestionResult,
   type GenerateSuggestionsResult,
 } from '@/server/services/route-suggestion-service';
+import {
+  acceptDayRoute,
+  generateDayRoutes,
+  type AcceptDayRouteResult,
+  type GenerateDayRoutesResult,
+} from '@/server/services/day-route-service';
 
 export async function getRoutePlanningDataAction(employeeId: string, date: string) {
   return runAction(() => getRoutePlanningData(employeeId, date));
@@ -139,6 +145,55 @@ export async function acceptRouteSuggestionAction(
       accepted = await acceptRouteSuggestion(parsed);
     } catch (error) {
       // Serialisierungskonflikt (paralleler Schreibzugriff) → als veraltet melden.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
+        throw new AppError('SUGGESTION_STALE');
+      }
+      throw error;
+    }
+    revalidatePath('/routes');
+    revalidatePath('/calendar');
+    revalidatePath('/dashboard');
+    return accepted;
+  });
+}
+
+// ------------------------- Tagesrouten-Generator ---------------------------
+
+const dayGenerateSchema = z.object({
+  employeeId: z.string().min(1),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  originType: z.enum(['office', 'home', 'gps']).optional(),
+  gps: gpsSchema,
+  bufferMinutes: z.number().int().min(0).max(120),
+  returnToStart: z.boolean(),
+  /** Zielarbeitszeit (Kundenzeit) in Minuten – optional. */
+  targetWorkMinutes: z.number().int().min(15).max(24 * 60).nullish(),
+  /** Frühestmögliche Abfahrt (Wandzeit-Minuten) – optional. */
+  earliestDepartureMinute: z.number().int().min(0).max(24 * 60 - 1).nullish(),
+  /** Späteste Rückkehr (Wandzeit-Minuten) – optional. */
+  latestReturnMinute: z.number().int().min(0).max(24 * 60).nullish(),
+});
+export type GenerateDayRoutesActionInput = z.input<typeof dayGenerateSchema>;
+
+export async function generateDayRoutesAction(
+  input: GenerateDayRoutesActionInput,
+): Promise<ActionResult<GenerateDayRoutesResult>> {
+  return runAction(async () => {
+    const data = dayGenerateSchema.parse(input);
+    return generateDayRoutes(data);
+  });
+}
+
+export async function acceptDayRouteAction(
+  token: string,
+  publish: boolean,
+): Promise<ActionResult<AcceptDayRouteResult>> {
+  return runAction(async () => {
+    const parsed = z.string().min(20).max(16_384).parse(token);
+    let accepted: AcceptDayRouteResult;
+    try {
+      accepted = await acceptDayRoute({ token: parsed, publish });
+    } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
         throw new AppError('SUGGESTION_STALE');
       }

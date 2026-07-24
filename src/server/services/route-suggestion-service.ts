@@ -206,7 +206,7 @@ export interface GenerateSuggestionsResult {
 // Offener Bedarf (organisationsweit je Planungstag)
 // ---------------------------------------------------------------------------
 
-interface DemandCandidate {
+export interface DemandCandidate {
   customerId: string;
   customerName: string;
   customerColor: string;
@@ -221,7 +221,13 @@ interface DemandCandidate {
   openMinutes: number;
 }
 
-async function loadOpenDemand(ctx: OrgContext, date: Date): Promise<DemandCandidate[]> {
+/**
+ * Offener Kundenbedarf am Planungstag (organisationsweit): Kunden mit
+ * verplanbarem Stundenguthaben, geokodierter Adresse und ohne bestehenden Termin
+ * an dem Tag. Wird von den Einzel-Vorschlägen UND vom Tagesrouten-Generator
+ * genutzt.
+ */
+export async function loadOpenDemand(ctx: OrgContext, date: Date): Promise<DemandCandidate[]> {
   const timezone = ctx.organization.timezone;
   const day = dayPeriodInZone(date, timezone);
   const weekday = isoWeekdayInZone(day.start, timezone);
@@ -300,7 +306,7 @@ async function loadOpenDemand(ctx: OrgContext, date: Date): Promise<DemandCandid
 }
 
 /** Hat der Kunde überhaupt Verfügbarkeiten gepflegt (irgendein Wochentag)? */
-async function loadCustomersWithAnyAvailability(customerIds: string[]): Promise<Set<string>> {
+export async function loadCustomersWithAnyAvailability(customerIds: string[]): Promise<Set<string>> {
   if (customerIds.length === 0) return new Set();
   const rows = await db.customerAvailability.findMany({
     where: { customerId: { in: customerIds } },

@@ -7,6 +7,7 @@ import * as React from 'react';
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
 
 import { useTheme } from '@/components/layout/theme-provider';
+import { normalizeCustomStyleRef, useMapStyle } from '@/features/map/map-style';
 import { tileConfiguration, type MapTheme } from '@/lib/map-tiles';
 
 export interface MapMarker {
@@ -113,7 +114,12 @@ export function LeafletMap({
     markers.length > 0 ? [markers[0]!.latitude, markers[0]!.longitude] : [51.9607, 7.6261];
   const hasRoad = Boolean(roadPath && roadPath.length > 1);
   const mapTheme = useResolvedTheme();
-  const tiles = tileConfiguration(mapTheme);
+  // Persönliche Kartendarstellung (Einstellungen → Darstellung).
+  const { style, customRef } = useMapStyle();
+  const tiles = tileConfiguration(mapTheme, {
+    style,
+    customRef: normalizeCustomStyleRef(customRef),
+  });
 
   return (
     <MapContainer

@@ -11,6 +11,7 @@ import {
   Clock,
   Home,
   LocateFixed,
+  Lock,
   MapPin,
   Navigation,
   Plus,
@@ -21,6 +22,8 @@ import {
   Sparkles,
   Trash2,
   Users,
+  Wallet,
+  Wand2,
   X,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
@@ -54,9 +57,11 @@ import { formatMinutesVerbose } from '@/lib/duration';
 import { cn } from '@/lib/utils';
 import { formatDistance, formatTravelSeconds, googleMapsDirectionsUrl } from '@/lib/geo';
 import {
+  acceptDayRouteAction,
   acceptRouteSuggestionAction,
   computeRouteAction,
   discardRouteAction,
+  generateDayRoutesAction,
   generateRouteSuggestionsAction,
   getRoutePathAction,
   getRoutePlanningDataAction,
@@ -71,6 +76,8 @@ import type {
   RouteSuggestionDto,
 } from '@/server/services/route-suggestion-service';
 import { SuggestionCard } from '@/features/routing/suggestion-card';
+import { DayRouteDialog, type DayRouteFormValues } from '@/features/routing/day-route-dialog';
+import { computeRouteEarnings, formatEuroCents } from '@/lib/earnings';
 
 const LeafletMap = dynamic(() => import('@/features/map/leaflet-map').then((m) => m.LeafletMap), {
   ssr: false,
@@ -262,6 +269,9 @@ function SingleRoutePlanner({
   const [declinedTokens, setDeclinedTokens] = React.useState<Set<string>>(new Set());
   const [generating, setGenerating] = React.useState(false);
   const [acceptingToken, setAcceptingToken] = React.useState<string | null>(null);
+
+  // Tagesrouten-Generator (Popup mit kompletten Routen-Varianten).
+  const [dayDialogOpen, setDayDialogOpen] = React.useState(false);
 
   const reloadData = React.useCallback(
     async (keepRoute = false): Promise<string[] | null> => {
@@ -472,9 +482,12 @@ function SingleRoutePlanner({
 
   const moveStop = (index: number, direction: -1 | 1) => {
     if (!route) return;
-    const ids = route.stops.map((s) => s.appointmentId);
     const target = index + direction;
-    if (target < 0 || target >= ids.length) return;
+    if (target < 0 || target >= route.stops.length) return;
+    // Fixe Termine sind verankert: sie lassen sich weder selbst verschieben
+    // noch von flexiblen Stopps überspringen (ihre Zeit steht fest).
+    if (!route.stops[index]!.isFlexible || !route.stops[target]!.isFlexible) return;
+    const ids = route.stops.map((s) => s.appointmentId);
     [ids[index], ids[target]] = [ids[target]!, ids[index]!];
     // Manuelle Reihenfolge behalten, still neu berechnen → Karte folgt sofort.
     compute(ids, { manual: true, silent: true });
@@ -572,6 +585,51 @@ function SingleRoutePlanner({
       next.delete(suggestion.token);
       return next;
     });
+  };
+
+  // ---- Tagesrouten-Generator ---------------------------------------------
+  const generateDayRoutes = async (form: DayRouteFormValues) => {
+    let gps: { latitude: number; longitude: number; timestamp: number } | undefined;
+    if (originType === 'gps') {
+      try {
+        gps = await requestGps();
+      } catch {
+        toast.error('Standortfreigabe verweigert – bitte Büro oder Zuhause als Startpunkt wählen.');
+        return null;
+      }
+    }
+    const result = await generateDayRoutesAction({
+      employeeId,
+      date,
+      originType,
+      gps,
+      bufferMinutes,
+      returnToStart,
+      targetWorkMinutes: form.targetWorkMinutes,
+      earliestDepartureMinute: form.earliestDepartureMinute,
+      latestReturnMinute: form.latestReturnMinute,
+    });
+    if (!result.ok) {
+      toast.error(result.message);
+      return null;
+    }
+    return result.data;
+  };
+
+  const acceptDayRoute = async (token: string): Promise<boolean> => {
+    // Alleine-Modus: direkt verbindlich; sonst als Entwurf (Freigeben wie gehabt).
+    const result = await acceptDayRouteAction(token, soloMode);
+    if (!result.ok) {
+      toast.error(result.message);
+      return false;
+    }
+    toast.success(
+      result.data.appointmentIds.length > 0
+        ? `Route übernommen – ${result.data.appointmentIds.length} neue${result.data.appointmentIds.length === 1 ? 'r Termin' : ' Termine'} angelegt.`
+        : 'Route übernommen.',
+    );
+    await reloadData();
+    return true;
   };
 
   // ---- Karte --------------------------------------------------------------
@@ -776,17 +834,27 @@ function SingleRoutePlanner({
           <span className="truncate">Rückkehr</span>
         </label>
 
-        <Button
-          size="sm"
-          variant="primary"
-          className="col-span-2 self-end sm:col-auto sm:ml-auto"
-          onClick={() => compute()}
-          loading={pending}
-          disabled={!data || selectedIds.length === 0}
-          data-tour="routes-compute-button"
-        >
-          <RefreshCcw aria-hidden /> Optimieren
-        </Button>
+        <div className="col-span-2 flex items-center gap-2 self-end sm:col-auto sm:ml-auto">
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setDayDialogOpen(true)}
+            disabled={!data || loading}
+            title="Kompletten Tag aus Terminen und offenen Stunden planen"
+          >
+            <Wand2 aria-hidden /> Tag planen
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={() => compute()}
+            loading={pending}
+            disabled={!data || selectedIds.length === 0}
+            data-tour="routes-compute-button"
+          >
+            <RefreshCcw aria-hidden /> Optimieren
+          </Button>
+        </div>
       </div>
 
 
@@ -887,21 +955,39 @@ function SingleRoutePlanner({
                         key={stop.appointmentId}
                         stop={stop}
                         index={index}
-                        total={route.stops.length}
                         canManage={canManage}
                         pending={pending}
                         timezone={timezone}
+                        // Fixe Stopps sind verankert – bewegen geht nur zwischen
+                        // zwei flexiblen Nachbarn.
+                        canMoveUp={
+                          index > 0 && stop.isFlexible && route.stops[index - 1]!.isFlexible
+                        }
+                        canMoveDown={
+                          index < route.stops.length - 1 &&
+                          stop.isFlexible &&
+                          route.stops[index + 1]!.isFlexible
+                        }
                         onMove={moveStop}
                         onRemove={(id) => setStopMembership(id, false)}
                       />
                     ))}
                   </ol>
                 ) : (
-                  <p className="px-4 py-6 text-center text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
-                    {allCandidates.length === 0
-                      ? 'Keine routenrelevanten Termine an diesem Tag.'
-                      : 'Noch keine Stopps – unten Termine hinzufügen.'}
-                  </p>
+                  <div className="flex flex-col items-center gap-3 px-4 py-6 text-center">
+                    <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+                      {allCandidates.length === 0
+                        ? 'Keine routenrelevanten Termine an diesem Tag.'
+                        : 'Noch keine Stopps – unten Termine hinzufügen.'}
+                    </p>
+                    <Button variant="primary" size="sm" onClick={() => setDayDialogOpen(true)}>
+                      <Wand2 aria-hidden /> Tag automatisch planen
+                    </Button>
+                    <p className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+                      Erstellt komplette Routenvorschläge aus offenen Kundenstunden
+                      {allCandidates.length > 0 ? ' und den Terminen des Tages' : ''}.
+                    </p>
+                  </div>
                 )}
               </PanelBody>
 
@@ -1052,14 +1138,44 @@ function SingleRoutePlanner({
                     icon={<MapPin aria-hidden />}
                     label="Distanz"
                     value={formatDistance(route.totalDistanceMeters)}
-                    className="col-span-2 @2xl:col-span-3"
+                    className={data.earningsRates ? undefined : 'col-span-2 @2xl:col-span-3'}
                   />
+                  {data.earningsRates ? (
+                    <StatTile
+                      icon={<Wallet aria-hidden />}
+                      label="Verdienst (Tag)"
+                      value={formatEuroCents(
+                        computeRouteEarnings({
+                          serviceMinutes: route.totalServiceMinutes,
+                          distanceMeters: route.totalDistanceMeters,
+                          hourlyWageCents: data.earningsRates.hourlyWageCents ?? 0,
+                          mileageRatePerKmCents: data.earningsRates.mileageRatePerKmCents ?? 0,
+                        }).totalCents,
+                      )}
+                      hint={
+                        data.earningsRates.mileageRatePerKmCents > 0
+                          ? 'inkl. Kilometergeld'
+                          : 'Kundenzeit × Stundenlohn'
+                      }
+                      tone="success"
+                      className="col-span-1 @2xl:col-span-2"
+                    />
+                  ) : null}
                 </div>
               ) : null}
             </div>
           </div>
         </div>
       )}
+
+      <DayRouteDialog
+        open={dayDialogOpen}
+        onOpenChange={setDayDialogOpen}
+        timezone={timezone}
+        canAccept={canAccept}
+        onGenerate={generateDayRoutes}
+        onAccept={acceptDayRoute}
+      />
     </div>
   );
 }
@@ -1362,19 +1478,22 @@ function ControlField({
 function StopRow({
   stop,
   index,
-  total,
   canManage,
   pending,
   timezone,
+  canMoveUp,
+  canMoveDown,
   onMove,
   onRemove,
 }: {
   stop: ComputedRoute['stops'][number];
   index: number;
-  total: number;
   canManage: boolean;
   pending: boolean;
   timezone: string;
+  /** false z. B. bei fixen Terminen – die sind zeitlich verankert. */
+  canMoveUp: boolean;
+  canMoveDown: boolean;
   onMove: (index: number, direction: -1 | 1) => void;
   onRemove: (appointmentId: string) => void;
 }) {
@@ -1397,13 +1516,20 @@ function StopRow({
           {stop.sequence}
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[length:var(--text-sm)] font-medium">
-            {stop.customerName}
+          <span className="flex items-center gap-1.5 truncate text-[length:var(--text-sm)] font-medium">
+            <span className="truncate">{stop.customerName}</span>
             {stop.isFlexible ? (
-              <span className="ml-1.5 text-[length:var(--text-2xs)] text-[var(--color-info)]">
+              <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--color-info-soft)] px-1.5 py-px text-[length:var(--text-2xs)] font-medium text-[var(--color-info)]">
                 flexibel
               </span>
-            ) : null}
+            ) : (
+              <span
+                className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-[var(--color-panel-sunken)] px-1.5 py-px text-[length:var(--text-2xs)] font-medium text-[var(--color-ink-muted)]"
+                title="Fester Termin – Zeit und Position sind verankert"
+              >
+                <Lock className="size-2.5" aria-hidden /> fix
+              </span>
+            )}
           </span>
           <span className="block truncate text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
             {formatTime(new Date(stop.serviceStartAt), timezone)}–
@@ -1427,24 +1553,39 @@ function StopRow({
           </Button>
           {canManage ? (
             <>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Stopp nach oben"
-                disabled={index === 0 || pending}
-                onClick={() => onMove(index, -1)}
-              >
-                <ArrowUp aria-hidden />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Stopp nach unten"
-                disabled={index === total - 1 || pending}
-                onClick={() => onMove(index, 1)}
-              >
-                <ArrowDown aria-hidden />
-              </Button>
+              {stop.isFlexible ? (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Stopp nach oben"
+                    disabled={!canMoveUp || pending}
+                    title={!canMoveUp && index > 0 ? 'Fixe Termine können nicht übersprungen werden.' : undefined}
+                    onClick={() => onMove(index, -1)}
+                  >
+                    <ArrowUp aria-hidden />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Stopp nach unten"
+                    disabled={!canMoveDown || pending}
+                    title={!canMoveDown ? 'Fixe Termine können nicht übersprungen werden.' : undefined}
+                    onClick={() => onMove(index, 1)}
+                  >
+                    <ArrowDown aria-hidden />
+                  </Button>
+                </>
+              ) : (
+                // Fixe Termine sind verankert – statt Pfeilen ein Schloss.
+                <span
+                  className="flex size-7 items-center justify-center text-[var(--color-ink-subtle)]"
+                  title="Fester Termin – Reihenfolge ergibt sich aus der Uhrzeit"
+                  aria-hidden
+                >
+                  <Lock className="size-3.5" />
+                </span>
+              )}
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -1483,15 +1624,22 @@ function AddRow({
         aria-hidden
       />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[length:var(--text-sm)] font-medium">
-          {candidate.customerName}
+        <span className="flex items-center gap-1.5 truncate text-[length:var(--text-sm)] font-medium">
+          <span className="truncate">{candidate.customerName}</span>
           {candidate.isFlexible ? (
-            <span className="ml-1.5 text-[length:var(--text-2xs)] text-[var(--color-info)]">
+            <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--color-info-soft)] px-1.5 py-px text-[length:var(--text-2xs)] font-medium text-[var(--color-info)]">
               flexibel
             </span>
-          ) : null}
+          ) : (
+            <span
+              className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-[var(--color-panel-sunken)] px-1.5 py-px text-[length:var(--text-2xs)] font-medium text-[var(--color-ink-muted)]"
+              title="Fester Termin – Zeit steht fest"
+            >
+              <Lock className="size-2.5" aria-hidden /> fix
+            </span>
+          )}
           {!candidate.assigned ? (
-            <span className="ml-1.5 text-[length:var(--text-2xs)] text-[var(--color-warning)]">
+            <span className="shrink-0 text-[length:var(--text-2xs)] text-[var(--color-warning)]">
               offen
             </span>
           ) : null}

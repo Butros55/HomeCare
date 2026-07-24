@@ -43,7 +43,20 @@ const PROXY_TILES: Record<MapTheme, string> = {
   dark: '/api/map/tiles/dark/{z}/{x}/{y}{r}',
 };
 
-export function tileConfiguration(theme: MapTheme): TileConfiguration {
+/** Persönliche Kartendarstellung (Einstellungen → Darstellung). */
+export interface MapStylePreference {
+  style: 'auto' | 'light' | 'dark' | 'streets' | 'satellite' | 'custom';
+  /** Nur für `custom`: Mapbox-Stil als „username/style-id“. */
+  customRef?: string | null;
+}
+
+const MAPBOX_ATTRIBUTION = `${OSM_ATTRIBUTION} &copy; CARTO &copy; Mapbox`;
+const SATELLITE_ATTRIBUTION = '&copy; Mapbox &copy; Maxar / Esri';
+
+export function tileConfiguration(
+  theme: MapTheme,
+  preference?: MapStylePreference,
+): TileConfiguration {
   const override = process.env.NEXT_PUBLIC_MAP_TILE_URL;
   if (override) {
     return {
@@ -54,10 +67,30 @@ export function tileConfiguration(theme: MapTheme): TileConfiguration {
     };
   }
 
+  const style = preference?.style ?? 'auto';
+
+  // Eigener Mapbox-Stil: die Referenz wandert als geprüfter Query-Parameter
+  // zum Proxy – der Schlüssel bleibt serverseitig.
+  if (style === 'custom' && preference?.customRef) {
+    return {
+      url: `/api/map/tiles/custom/{z}/{x}/{y}{r}?ref=${encodeURIComponent(preference.customRef)}`,
+      attribution: MAPBOX_ATTRIBUTION,
+      maxZoom: 20,
+    };
+  }
+  if (style === 'streets' || style === 'satellite') {
+    return {
+      url: `/api/map/tiles/${style}/{z}/{x}/{y}{r}`,
+      attribution: style === 'satellite' ? SATELLITE_ATTRIBUTION : MAPBOX_ATTRIBUTION,
+      maxZoom: 20,
+    };
+  }
+  const resolved: MapTheme = style === 'light' || style === 'dark' ? style : theme;
+
   // Ohne eigenen Tile-Server läuft alles über den Proxy: Er liefert Mapbox,
   // wenn ein Token hinterlegt ist, und verweist sonst direkt auf CARTO.
   return {
-    url: PROXY_TILES[theme],
+    url: PROXY_TILES[resolved],
     attribution: process.env.NEXT_PUBLIC_MAP_ATTRIBUTION ?? CARTO_ATTRIBUTION,
     maxZoom: 20,
   };

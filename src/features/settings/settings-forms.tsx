@@ -1,7 +1,7 @@
 'use client';
 
 import type { TaxEmploymentType } from '@prisma/client';
-import { Monitor, Moon, Sun } from 'lucide-react';
+import { Map as MapIcon, Monitor, Moon, Sun } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from '@/components/layout/theme-provider';
 import * as React from 'react';
@@ -21,6 +21,11 @@ import {
 } from '@/server/actions/preference-actions';
 import { updateOrganizationAction } from '@/server/actions/settings-actions';
 import { AddressAutocomplete } from '@/features/geo/address-autocomplete';
+import {
+  MAP_STYLE_OPTIONS,
+  normalizeCustomStyleRef,
+  useMapStyle,
+} from '@/features/map/map-style';
 
 // ---------------------------- Profil ---------------------------------------
 
@@ -129,6 +134,7 @@ export function EarningsSettings({
     applySolidarity: boolean;
     taxFreeBonusCentsPerHour: number;
     taxFreeBonusLabel: string;
+    mileageRatePerKmCents: number;
   };
   showCommission: boolean;
 }) {
@@ -153,6 +159,9 @@ export function EarningsSettings({
   const [applySolidarity, setApplySolidarity] = React.useState(initial.applySolidarity);
   const [bonus, setBonus] = React.useState(centsToInputValue(initial.taxFreeBonusCentsPerHour));
   const [bonusLabel, setBonusLabel] = React.useState(initial.taxFreeBonusLabel);
+  const [mileageRate, setMileageRate] = React.useState(
+    centsToInputValue(initial.mileageRatePerKmCents),
+  );
   const [error, setError] = React.useState<string | null>(null);
   const [pending, startTransition] = React.useTransition();
 
@@ -165,9 +174,11 @@ export function EarningsSettings({
     const employeeCommissionCentsPerHour =
       inputValueToCents(commission);
     const taxFreeBonusCentsPerHour = inputValueToCents(bonus);
+    const mileageRatePerKmCents = inputValueToCents(mileageRate);
     if (
       hourlyWageCents === null ||
       taxFreeBonusCentsPerHour === null ||
+      mileageRatePerKmCents === null ||
       (showCommission && employeeCommissionCentsPerHour === null)
     ) {
       setError('Bitte einen gültigen Betrag mit höchstens zwei Nachkommastellen eingeben.');
@@ -193,6 +204,7 @@ export function EarningsSettings({
         applySolidarity,
         taxFreeBonusCentsPerHour,
         taxFreeBonusLabel: bonusLabel.trim() || 'Werbepauschale',
+        mileageRatePerKmCents,
       });
       if (result.ok) {
         setError(null);
@@ -306,6 +318,27 @@ export function EarningsSettings({
                 onChange={(event) => setBonusLabel(event.target.value)}
               />
               <FieldHint>Erscheint so im Bericht.</FieldHint>
+            </div>
+            <div>
+              <Label htmlFor="earnings-mileage-rate">Kilometergeld</Label>
+              <div className="relative">
+                <Input
+                  id="earnings-mileage-rate"
+                  inputMode="decimal"
+                  value={mileageRate}
+                  onChange={(event) => setMileageRate(event.target.value)}
+                  className="pr-12"
+                />
+                <span
+                  className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[length:var(--text-sm)] text-[var(--color-ink-subtle)]"
+                  aria-hidden
+                >
+                  €/km
+                </span>
+              </div>
+              <FieldHint>
+                Steuerfrei je gefahrenem Routen-Kilometer – zählt nur für deine eigenen Fahrten.
+              </FieldHint>
             </div>
           </div>
 
@@ -625,35 +658,112 @@ export function AppearanceSettings() {
   ] as const;
 
   return (
+    <>
+      <Panel>
+        <PanelHeader>
+          <PanelTitle>Darstellung</PanelTitle>
+        </PanelHeader>
+        <PanelBody>
+          <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Farbschema">
+            {options.map((option) => {
+              const Icon = option.icon;
+              const active = mounted && theme === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => setTheme(option.value)}
+                  className={cn(
+                    'flex min-w-28 flex-col items-center gap-2 rounded-[var(--radius-lg)] border px-5 py-4 transition-colors',
+                    active
+                      ? 'border-[var(--color-brand)] bg-[var(--color-brand-subtle)] text-[var(--color-brand)]'
+                      : 'border-[var(--color-line)] text-[var(--color-ink-muted)] hover:border-[var(--color-line-strong)]',
+                  )}
+                >
+                  <Icon className="size-5" aria-hidden />
+                  <span className="text-[length:var(--text-sm)] font-medium">{option.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </PanelBody>
+      </Panel>
+
+      <MapStyleSettings mounted={mounted} />
+    </>
+  );
+}
+
+/**
+ * Kartendarstellung: Stil aller Karten in der Anwendung (Routen, Kunden,
+ * Mein Tag). Wird pro Gerät gespeichert und wirkt sofort – Kacheln laufen
+ * weiterhin über den Server-Proxy, Schlüssel bleiben serverseitig.
+ */
+function MapStyleSettings({ mounted }: { mounted: boolean }) {
+  const { style, customRef, setStyle, setCustomRef } = useMapStyle();
+  const customValid = customRef.trim() === '' || normalizeCustomStyleRef(customRef) !== null;
+
+  return (
     <Panel>
       <PanelHeader>
-        <PanelTitle>Darstellung</PanelTitle>
+        <PanelTitle>
+          <span className="inline-flex items-center gap-1.5">
+            <MapIcon className="size-4 text-[var(--color-brand)]" aria-hidden />
+            Kartendarstellung
+          </span>
+        </PanelTitle>
       </PanelHeader>
-      <PanelBody>
-        <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Farbschema">
-          {options.map((option) => {
-            const Icon = option.icon;
-            const active = mounted && theme === option.value;
+      <PanelBody className="space-y-3">
+        <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+          Gilt für alle Karten in der Anwendung und wird auf diesem Gerät gespeichert.
+          „Automatisch“ folgt dem Farbschema.
+        </p>
+        <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Kartenstil">
+          {MAP_STYLE_OPTIONS.map((option) => {
+            const active = mounted && style === option.value;
             return (
               <button
                 key={option.value}
                 type="button"
                 role="radio"
                 aria-checked={active}
-                onClick={() => setTheme(option.value)}
+                onClick={() => setStyle(option.value)}
                 className={cn(
-                  'flex min-w-28 flex-col items-center gap-2 rounded-[var(--radius-lg)] border px-5 py-4 transition-colors',
+                  'flex min-w-28 flex-col items-center gap-1 rounded-[var(--radius-lg)] border px-4 py-3 transition-colors',
                   active
                     ? 'border-[var(--color-brand)] bg-[var(--color-brand-subtle)] text-[var(--color-brand)]'
                     : 'border-[var(--color-line)] text-[var(--color-ink-muted)] hover:border-[var(--color-line-strong)]',
                 )}
               >
-                <Icon className="size-5" aria-hidden />
                 <span className="text-[length:var(--text-sm)] font-medium">{option.label}</span>
+                <span className="text-[length:var(--text-2xs)] opacity-80">{option.hint}</span>
               </button>
             );
           })}
         </div>
+        {mounted && style === 'custom' ? (
+          <div className="max-w-xl">
+            <Label htmlFor="map-custom-style">Eigener Mapbox-Stil</Label>
+            <Input
+              id="map-custom-style"
+              placeholder="mapbox://styles/dein-name/stil-id"
+              value={customRef}
+              invalid={!customValid}
+              onChange={(event) => setCustomRef(event.target.value)}
+            />
+            <FieldHint>
+              Stil-URL aus Mapbox Studio („Share“ → Style URL) oder direkt „name/stil-id“.
+              Wirkt nur, wenn auf dem Server ein Mapbox-Schlüssel hinterlegt ist – sonst
+              zeigt die Karte die Standard-Darstellung.
+            </FieldHint>
+          </div>
+        ) : null}
+        <p className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+          Straßen- und Satellitenstil nutzen Mapbox, wenn ein Schlüssel hinterlegt ist, und
+          sonst freie Kartenquellen.
+        </p>
       </PanelBody>
     </Panel>
   );

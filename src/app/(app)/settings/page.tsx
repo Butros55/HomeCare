@@ -142,6 +142,7 @@ export default async function SettingsPage({
                 applySolidarity: ctx.membership.applySolidarity,
                 taxFreeBonusCentsPerHour: ctx.membership.taxFreeBonusCentsPerHour,
                 taxFreeBonusLabel: ctx.membership.taxFreeBonusLabel,
+                mileageRatePerKmCents: ctx.membership.mileageRatePerKmCents ?? 0,
               }}
               showCommission={
                 isLeadershipRole(ctx.membership.role) &&

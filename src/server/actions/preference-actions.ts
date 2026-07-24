@@ -110,6 +110,12 @@ const earningsSettingsSchema = z.object({
     .max(1_000_000, 'Der Zuschlag ist zu hoch.')
     .optional(),
   taxFreeBonusLabel: z.string().trim().min(1).max(60).optional(),
+  mileageRatePerKmCents: z
+    .number()
+    .int()
+    .min(0, 'Das Kilometergeld darf nicht negativ sein.')
+    .max(100_000, 'Das Kilometergeld ist zu hoch.')
+    .optional(),
 });
 
 /**
@@ -170,6 +176,9 @@ export async function saveEarningsSettingsAction(
             : {}),
           ...(data.taxFreeBonusLabel !== undefined
             ? { taxFreeBonusLabel: data.taxFreeBonusLabel }
+            : {}),
+          ...(data.mileageRatePerKmCents !== undefined
+            ? { mileageRatePerKmCents: data.mileageRatePerKmCents }
             : {}),
         },
       });
