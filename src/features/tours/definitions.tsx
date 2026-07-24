@@ -5,7 +5,7 @@ import {
   Download,
   PanelLeft,
   Plus,
-  Route as RouteIcon,
+  RefreshCcw,
   ShieldCheck,
   UserPlus,
   UsersRound,
@@ -399,19 +399,18 @@ export const TOUR_DEFINITIONS: TourDefinition[] = [
       {
         id: 'candidates',
         target: 'routes-candidates',
-        title: 'Termine auswählen',
-        body: 'Alle routenrelevanten Termine des Tages. Termine ohne Zuordnung erscheinen als Vorschläge – die Auswahl ändert keine Zuweisung.',
+        title: 'Route bearbeiten',
+        body: 'Hier steckt die ganze Route: geplante Stopps oben (Reihenfolge ändern, entfernen), darunter Termine zum Hinzufügen und Vorschläge aus offenen Stunden. Jede Änderung aktualisiert Karte und Kennzahlen sofort.',
         placement: 'right',
       },
       {
         id: 'compute',
         target: 'routes-compute-button',
-        title: 'Route berechnen',
+        title: 'Optimieren',
         body: (
           <p>
-            <UiPrimary icon={<RouteIcon />}>Route berechnen</UiPrimary> ermittelt die optimale Reihenfolge
-            mit Fahrzeiten. Danach siehst du Stopps, Karte und Kennzahlen – und kannst speichern oder
-            freigeben.
+            <UiPrimary icon={<RefreshCcw />}>Optimieren</UiPrimary> ermittelt die beste Reihenfolge mit
+            den kürzesten Fahrzeiten. Stopps, Karte und Kennzahlen aktualisieren sich dabei sofort.
           </p>
         ),
         placement: 'left',

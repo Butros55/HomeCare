@@ -72,7 +72,10 @@ export function SuggestionCard({
   }
 
   return (
-    <div className="space-y-3 rounded-[var(--radius-lg)] border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
+    // @container: die Kennzahlen richten sich nach der KARTENBREITE, nicht dem
+    // Viewport – im schmalen Routen-Editor 2–3 Spalten, in der breiten
+    // Teamansicht bis zu 6. So läuft nichts mehr über.
+    <div className="@container space-y-3 rounded-[var(--radius-lg)] border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2.5">
           <span
@@ -125,7 +128,7 @@ export function SuggestionCard({
         </span>
       </p>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-2 @xs:grid-cols-3 @2xl:grid-cols-6">
         <DeltaTile
           label="Fahrzeit"
           value={signedMinutes(impact.extraTravelSeconds)}
@@ -148,8 +151,8 @@ export function SuggestionCard({
         />
       </div>
 
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="min-w-0 text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
           {impact.previousDepartureAt ? (
             <span className="inline-flex items-center gap-1">
               <Car className="size-3" aria-hidden />

@@ -7,9 +7,12 @@ import {
   Building2,
   Car,
   Check,
+  Clock,
   Home,
   LocateFixed,
+  MapPin,
   Navigation,
+  Plus,
   RefreshCcw,
   Route as RouteIcon,
   Save,
@@ -245,6 +248,9 @@ function SingleRoutePlanner({
   const [route, setRoute] = React.useState<ComputedRoute | null>(null);
   const [manualOrder, setManualOrder] = React.useState<string[] | null>(null);
   const [pending, startTransition] = React.useTransition();
+  // Nach dem Laden einmal rechnen, wenn es Termine, aber noch keine
+  // gespeicherte Route gibt – so ist sofort eine Route zum Optimieren da.
+  const pendingInitialComputeRef = React.useRef(false);
 
   // Vorschläge (nur eigene Route).
   const isOwn = employeeId === ownEmployeeId;
@@ -279,6 +285,13 @@ function SingleRoutePlanner({
             setOriginType(plan.originType);
             setBufferMinutes(plan.bufferMinutes);
             setReturnToStart(plan.returnToStart);
+          } else {
+            // Sinnvoller Standard-Startpunkt für die erste Berechnung.
+            const officeOk = Boolean(result.data.origins.office);
+            const homeOk = Boolean(result.data.origins.home);
+            setOriginType(
+              officeOk ? 'office' : homeOk ? 'home' : employeeId === ownEmployeeId ? 'gps' : 'office',
+            );
           }
           // Ohne Zuhause-Adresse fällt der Startpunkt sichtbar auf das Büro zurück.
           if (!result.data.origins.home) {
@@ -288,6 +301,9 @@ function SingleRoutePlanner({
             // Gespeicherte Route direkt anzeigen – sie überlebt den Seitenwechsel.
             setRoute(result.data.savedRoute);
             setManualOrder(null);
+            // Keine gespeicherte Route, aber Termine da → gleich einmal rechnen
+            // (nur anzeigen, noch nicht speichern).
+            pendingInitialComputeRef.current = !result.data.savedRoute && ids.length > 0;
           }
           if (plan?.droppedStopCount) {
             toast.info(
@@ -305,7 +321,7 @@ function SingleRoutePlanner({
         setLoading(false);
       }
     },
-    [employeeId, date, setBufferMinutes, setReturnToStart],
+    [employeeId, date, ownEmployeeId, setBufferMinutes, setReturnToStart],
   );
 
   React.useEffect(() => {
@@ -376,26 +392,51 @@ function SingleRoutePlanner({
     if (!result.ok) toast.error(`Route konnte nicht gespeichert werden: ${result.message}`);
   };
 
-  const compute = (order?: string[], options?: { manual?: boolean }) => {
+  /**
+   * Route neu berechnen und anzeigen.
+   *  - `silent`: keine Erfolgs-Toasts (für Live-Bearbeitung – nur die Karte und
+   *    die Kennzahlen sollen sich sofort ändern, nicht die Meldungen häufen).
+   *  - `skipPersist`: nicht speichern (nur zum Anzeigen beim Laden – der Nutzer
+   *    hat ja noch nichts geändert).
+   */
+  const compute = (
+    order?: string[],
+    options?: { manual?: boolean; silent?: boolean; skipPersist?: boolean },
+  ) => {
     startTransition(async () => {
       const input = await buildInput(order, options?.manual);
       if (!input) return;
       const result = await computeRouteAction(input);
-      if (result.ok) {
-        setRoute(result.data);
-        setManualOrder(order ?? null);
-        if (result.data.warnings.length > 0) {
-          toast.warning(`Route berechnet – ${result.data.warnings.length} Warnung(en).`);
-        } else if (!soloMode) {
-          toast.success('Route berechnet.');
-        }
-        await autoPersist(input, result.data);
-        if (soloMode && result.data.warnings.length === 0) toast.success('Route gespeichert.');
-      } else {
+      if (!result.ok) {
         toast.error(result.message);
+        return;
+      }
+      setRoute(result.data);
+      setManualOrder(order ?? null);
+      if (result.data.warnings.length > 0) {
+        toast.warning(`Route aktualisiert – ${result.data.warnings.length} Hinweis(e).`);
+      } else if (!options?.silent && !soloMode) {
+        toast.success('Route berechnet.');
+      }
+      if (!options?.skipPersist) {
+        await autoPersist(input, result.data);
+        if (!options?.silent && soloMode && result.data.warnings.length === 0) {
+          toast.success('Route gespeichert.');
+        }
       }
     });
   };
+
+  // Beim Laden ohne gespeicherte Route einmal rechnen, damit die zugeordneten
+  // Termine sofort als Route und auf der Karte erscheinen (noch nicht gesichert).
+  React.useEffect(() => {
+    if (!pendingInitialComputeRef.current) return;
+    if (!data || selectedIds.length === 0) return;
+    pendingInitialComputeRef.current = false;
+    compute(selectedIds, { manual: false, silent: true, skipPersist: true });
+    // compute bewusst nicht in den Deps – der Ref-Guard sichert die Einmaligkeit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, selectedIds]);
 
   const save = (publish: boolean) => {
     startTransition(async () => {
@@ -432,32 +473,27 @@ function SingleRoutePlanner({
     const target = index + direction;
     if (target < 0 || target >= ids.length) return;
     [ids[index], ids[target]] = [ids[target]!, ids[index]!];
-    compute(ids);
+    // Manuelle Reihenfolge behalten, still neu berechnen → Karte folgt sofort.
+    compute(ids, { manual: true, silent: true });
   };
 
-  const excludeStop = (appointmentId: string) => {
-    const next = selectedIds.filter((id) => id !== appointmentId);
-    setSelectedIds(next);
-    if (next.length > 0) compute(next);
-    else setRoute(null);
-  };
-
-  const toggleSelection = (appointmentId: string, checked: boolean) => {
-    const next = checked
+  /**
+   * Termin zur Route hinzufügen oder daraus entfernen – die einzige Stelle für
+   * beides. Die Route wird sofort neu berechnet (Karte + Kennzahlen folgen live)
+   * und im Alleine-Modus gleich gesichert. Kein „Abhaken" mehr an anderer Stelle.
+   */
+  const setStopMembership = (appointmentId: string, include: boolean) => {
+    const next = include
       ? [...selectedIds, appointmentId]
       : selectedIds.filter((id) => id !== appointmentId);
     setSelectedIds(next);
-    // Alleine-Modus: An-/Abhaken plant sofort um und sichert das Ergebnis.
-    // Bewusst ohne manuelle Reihenfolge – die neue Auswahl wird optimiert.
-    if (soloMode && canManage) {
-      if (next.length > 0) compute(next, { manual: false });
-      else {
-        setRoute(null);
-        void discardRouteAction(employeeId, date);
-      }
-      return;
+    if (next.length > 0) {
+      compute(next, { manual: false, silent: true });
+    } else {
+      setRoute(null);
+      setManualOrder(null);
+      if (soloMode && canManage) void discardRouteAction(employeeId, date);
     }
-    setRoute(null);
   };
 
   // ---- Vorschläge ---------------------------------------------------------
@@ -646,62 +682,70 @@ function SingleRoutePlanner({
   const visibleSuggestions = suggestions?.filter((s) => !declinedTokens.has(s.token)) ?? null;
   const declinedList = suggestions?.filter((s) => declinedTokens.has(s.token)) ?? [];
 
+  // Termine, die man der Route noch hinzufügen kann: mit Koordinaten und noch
+  // nicht Teil der Route. Zugeordnete UND offene Termine des Tages.
+  const inRoute = new Set(selectedIds);
+  const availableCandidates = allCandidates.filter(
+    (candidate) =>
+      candidate.latitude != null &&
+      candidate.longitude != null &&
+      !inRoute.has(candidate.appointmentId),
+  );
+
   return (
     <div className="space-y-4">
-      {/* Parameter */}
-      <Panel data-tour="routes-params">
-        <PanelBody className="grid grid-cols-2 gap-3 lg:grid-cols-12">
-          {showEmployeeSelect ? (
-            <div className="col-span-2 lg:col-span-3">
-              <Label htmlFor="route-employee">Mitarbeiter</Label>
-              <Select value={employeeId} onValueChange={setEmployeeId}>
-                <SelectTrigger id="route-employee">
-                  <SelectValue placeholder="Mitarbeiter wählen" />
-                </SelectTrigger>
-                <SelectContent>
-                  {employees.map((employee) => (
-                    <SelectItem key={employee.id} value={employee.id}>
-                      {employee.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : null}
-          <div className="lg:col-span-2">
-            <Label htmlFor="route-date">Datum</Label>
-            <Input
-              id="route-date"
-              type="date"
-              value={date}
-              onChange={(event) => setDate(event.target.value)}
-            />
-          </div>
-          <div className={showEmployeeSelect ? 'col-span-2 lg:col-span-3' : 'col-span-2 lg:col-span-4'}>
-            <Label htmlFor="route-origin">Startpunkt</Label>
-            <Select value={originType} onValueChange={(v) => setOriginType(v as OriginType)}>
-              <SelectTrigger id="route-origin" data-tour="routes-origin">
-                <SelectValue />
+      {/* Kompakte Steuerleiste: Tag & Rahmen auf einer Zeile statt großer Box. */}
+      <div
+        className="flex flex-wrap items-end gap-x-3 gap-y-2 rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] bg-[var(--color-panel)] px-3 py-2.5 shadow-[var(--shadow-panel)]"
+        data-tour="routes-params"
+      >
+        {showEmployeeSelect ? (
+          <ControlField label="Mitarbeiter">
+            <Select value={employeeId} onValueChange={setEmployeeId}>
+              <SelectTrigger id="route-employee" className="h-8 w-[11rem]">
+                <SelectValue placeholder="Mitarbeiter wählen" />
               </SelectTrigger>
               <SelectContent>
-                {originOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value} disabled={option.disabled}>
-                    <span className="inline-flex items-center gap-1.5">
-                      {option.icon}
-                      {option.label}
-                      {option.hint ? (
-                        <span className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
-                          · {option.hint}
-                        </span>
-                      ) : null}
-                    </span>
+                {employees.map((employee) => (
+                  <SelectItem key={employee.id} value={employee.id}>
+                    {employee.name}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-          </div>
-          <div className="lg:col-span-2">
-            <Label htmlFor="route-buffer">Puffer (Min.)</Label>
+          </ControlField>
+        ) : null}
+
+        <ControlField label="Datum">
+          <Input
+            id="route-date"
+            type="date"
+            value={date}
+            onChange={(event) => setDate(event.target.value)}
+            className="h-8 w-[9.5rem]"
+          />
+        </ControlField>
+
+        <ControlField label="Startpunkt">
+          <Select value={originType} onValueChange={(v) => setOriginType(v as OriginType)}>
+            <SelectTrigger id="route-origin" data-tour="routes-origin" className="h-8 w-[11rem]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {originOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value} disabled={option.disabled}>
+                  <span className="inline-flex items-center gap-1.5">
+                    {option.icon}
+                    {option.label}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </ControlField>
+
+        <ControlField label="Puffer">
+          <div className="relative">
             <Input
               id="route-buffer"
               type="number"
@@ -709,464 +753,304 @@ function SingleRoutePlanner({
               max={120}
               value={bufferMinutes}
               onChange={(event) => setBufferMinutes(Number(event.target.value))}
+              className="h-8 w-[5.75rem] pr-9"
             />
-          </div>
-          <div className="flex items-end gap-2 lg:col-span-2">
-            <label className="flex h-9 pointer-coarse:h-11 flex-1 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-line)] bg-[var(--color-panel-sunken)] px-3 text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
-              <Checkbox
-                checked={returnToStart}
-                onCheckedChange={(checked) => setReturnToStart(checked === true)}
-              />
-              Rückkehr
-            </label>
-          </div>
-          <div className="col-span-2 flex items-end gap-2 lg:col-span-12">
-            {loading ? (
-              <Skeleton className="h-3 min-w-0 flex-1 rounded-full" />
-            ) : (
-              <p className="min-w-0 flex-1 truncate text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                Die Abfahrtszeit wird automatisch berechnet (späteste empfohlene Abfahrt).
-                {' · '}Verkehrsmittel: Auto
-              </p>
-            )}
-            <Button
-              variant="primary"
-              onClick={() => compute()}
-              loading={pending}
-              disabled={!data}
-              data-tour="routes-compute-button"
+            <span
+              className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]"
+              aria-hidden
             >
-              <RouteIcon aria-hidden /> Route berechnen
-            </Button>
+              Min.
+            </span>
           </div>
-        </PanelBody>
-      </Panel>
+        </ControlField>
 
-      {/* Subtile Kennzahlen-Leiste über Karte & Terminen: Gesamtdauer unterwegs,
-          Fahrt-, Warte- und Kundenzeit auf einen Blick. */}
-      {route ? (
-        <div
-          className="flex flex-wrap items-center gap-x-5 gap-y-1.5 rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] bg-[var(--color-panel)] px-4 py-2 text-[length:var(--text-xs)] shadow-[var(--shadow-panel)]"
-          data-tour="routes-kpi-bar"
-        >
-          <RouteKpiInline label="Unterwegs" value={formatTravelSeconds(route.workdaySeconds)} strong />
-          <RouteKpiInline label="Fahrt" value={formatTravelSeconds(route.totalTravelSeconds)} />
-          <RouteKpiInline
-            label="Wartezeit"
-            value={route.totalWaitSeconds > 0 ? formatTravelSeconds(route.totalWaitSeconds) : 'keine'}
+        <label className="flex h-8 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-line)] bg-[var(--color-panel-sunken)] px-2.5 text-[length:var(--text-xs)] text-[var(--color-ink-muted)]">
+          <Checkbox
+            checked={returnToStart}
+            onCheckedChange={(checked) => setReturnToStart(checked === true)}
           />
-          <RouteKpiInline label="Kundenzeit" value={formatMinutesVerbose(route.totalServiceMinutes)} />
-          <RouteKpiInline label="Distanz" value={formatDistance(route.totalDistanceMeters)} />
-          <span className="ml-auto text-[var(--color-ink-subtle)]">
-            Abfahrt {formatTime(new Date(route.departureAt), timezone)}
-            {route.returnArrivalAt
-              ? ` → Rückkehr ${formatTime(new Date(route.returnArrivalAt), timezone)}`
-              : ''}
-          </span>
-        </div>
-      ) : null}
+          Rückkehr zum Start
+        </label>
+
+        <Button
+          size="sm"
+          variant="primary"
+          className="ml-auto"
+          onClick={() => compute()}
+          loading={pending}
+          disabled={!data || selectedIds.length === 0}
+          data-tour="routes-compute-button"
+        >
+          <RefreshCcw aria-hidden /> Optimieren
+        </Button>
+      </div>
+
 
       {loading ? (
         <RoutePlanningDataSkeleton />
+      ) : !data ? (
+        <Panel>
+          <PanelBody>
+            <EmptyState
+              className="border-0"
+              icon={<Car />}
+              title="Keine Routendaten"
+              description="Die Planungsdaten konnten nicht geladen werden."
+            />
+          </PanelBody>
+        </Panel>
       ) : (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
-          {/* Terminauswahl */}
-          <Panel className="xl:col-span-2" data-tour="routes-candidates">
-            <PanelHeader>
-              <PanelTitle>
-                Termine {data ? `(${selectedIds.length}/${allCandidates.length} gewählt)` : ''}
-              </PanelTitle>
-              {data?.existingPlan ? (
-                <span className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                  Gespeichert: {data.existingPlan.status === 'PUBLISHED' ? 'freigegeben' : 'Entwurf'}
-                </span>
-              ) : null}
-            </PanelHeader>
-            <PanelBody className="max-h-[420px] space-y-1.5 overflow-y-auto p-3">
-              {!data ? (
-                <EmptyState
-                  className="border-0"
-                  icon={<Car />}
-                  title="Keine Routendaten"
-                  description="Die Planungsdaten konnten nicht geladen werden."
-                />
-              ) : allCandidates.length === 0 ? (
-                <EmptyState
-                  className="border-0"
-                  icon={<Car />}
-                  title="Keine routenrelevanten Termine"
-                  description="Für diesen Tag gibt es keine passenden Termine. Über „Vorschläge generieren“ lassen sich offene Kundenstunden einplanen."
-                />
-              ) : (
-                <>
-                  {data.suggestions.length > 0 ? (
-                    <div className="flex items-start gap-2 rounded-[var(--radius-md)] bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)] px-2.5 py-2 text-[length:var(--text-xs)]">
-                      <AlertTriangle
-                        className="mt-0.5 size-3.5 shrink-0 text-[var(--color-warning)]"
-                        aria-hidden
-                      />
-                      <span>
-                        {data.suggestions.length === 1
-                          ? 'Ein Termin an diesem Tag hat noch keine Zuordnung.'
-                          : `${data.suggestions.length} Termine an diesem Tag haben noch keine Zuordnung.`}{' '}
-                        <a
-                          href="/calendar?zuweisung=offen"
-                          className="font-medium text-[var(--color-brand)] hover:underline"
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-5">
+          {/* Ein Editor: geplante Stopps oben, Termine zum Hinzufügen darunter,
+              darunter die Vorschläge – die Karte rechts folgt jeder Änderung. */}
+          <div className="space-y-3 xl:col-span-2">
+            {route && route.warnings.length > 0 ? (
+              <div className="space-y-1.5">
+                {route.warnings.map((warning, index) => (
+                  <p
+                    key={index}
+                    className="flex items-start gap-2 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-soft)] px-3 py-2 text-[length:var(--text-xs)] text-[var(--color-warning)]"
+                  >
+                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                    {warning}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+
+            <Panel data-tour="routes-candidates">
+              <PanelHeader>
+                <PanelTitle>
+                  <span className="inline-flex items-center gap-1.5">
+                    <RouteIcon className="size-4 text-[var(--color-brand)]" aria-hidden />
+                    Route
+                    {route ? (
+                      <span className="text-[length:var(--text-xs)] font-normal text-[var(--color-ink-subtle)]">
+                        · {route.stops.length} {route.stops.length === 1 ? 'Stopp' : 'Stopps'}
+                      </span>
+                    ) : null}
+                  </span>
+                </PanelTitle>
+                {canManage ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {soloMode ? (
+                      route ? (
+                        <span className="flex items-center gap-1.5 text-[length:var(--text-2xs)] text-[var(--color-success)]">
+                          <Check className="size-3.5" aria-hidden />
+                          {route.feasible ? 'Automatisch gespeichert' : 'Unzulässig – nicht gespeichert'}
+                        </span>
+                      ) : null
+                    ) : (
+                      <>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => save(false)}
+                          loading={pending}
+                          disabled={!route || !route.feasible}
+                          title={route && !route.feasible ? 'Unzulässige Routen können nicht gespeichert werden.' : undefined}
                         >
+                          <Save aria-hidden /> Speichern
+                        </Button>
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={() => save(true)}
+                          loading={pending}
+                          disabled={!route || !route.feasible}
+                          title={route && !route.feasible ? 'Unzulässige Routen können nicht freigegeben werden.' : undefined}
+                        >
+                          <Send aria-hidden /> Freigeben
+                        </Button>
+                      </>
+                    )}
+                    {data.existingPlan ? (
+                      <Button variant="danger" size="sm" onClick={discard} loading={pending}>
+                        <Trash2 aria-hidden /> Verwerfen
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </PanelHeader>
+
+              {/* Geplante Stopps: Reihenfolge ändern und entfernen. */}
+              <PanelBody className="max-h-[460px] overflow-y-auto p-0">
+                {route && route.stops.length > 0 ? (
+                  <ol className="divide-y divide-[var(--color-line-subtle)]">
+                    {route.stops.map((stop, index) => (
+                      <StopRow
+                        key={stop.appointmentId}
+                        stop={stop}
+                        index={index}
+                        total={route.stops.length}
+                        canManage={canManage}
+                        pending={pending}
+                        timezone={timezone}
+                        onMove={moveStop}
+                        onRemove={(id) => setStopMembership(id, false)}
+                      />
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="px-4 py-6 text-center text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+                    {allCandidates.length === 0
+                      ? 'Keine routenrelevanten Termine an diesem Tag.'
+                      : 'Noch keine Stopps – unten Termine hinzufügen.'}
+                  </p>
+                )}
+              </PanelBody>
+
+              {/* Termine hinzufügen (zugeordnete + offene des Tages). */}
+              {canManage ? (
+                <div className="border-t border-[var(--color-line-subtle)] p-3">
+                  <p className="mb-2 text-[length:var(--text-2xs)] font-semibold tracking-wider text-[var(--color-ink-subtle)] uppercase">
+                    Termine hinzufügen
+                  </p>
+                  {availableCandidates.length === 0 ? (
+                    <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                      {allCandidates.length === 0
+                        ? 'Keine passenden Termine.'
+                        : 'Alle verfügbaren Termine sind eingeplant.'}
+                    </p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {availableCandidates.map((candidate) => (
+                        <AddRow
+                          key={candidate.appointmentId}
+                          candidate={candidate}
+                          pending={pending}
+                          timezone={timezone}
+                          onAdd={(id) => setStopMembership(id, true)}
+                        />
+                      ))}
+                    </ul>
+                  )}
+                  {data.suggestions.length > 0 ? (
+                    <p className="mt-2 flex items-start gap-1.5 text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+                      <AlertTriangle className="mt-0.5 size-3 shrink-0 text-[var(--color-warning)]" aria-hidden />
+                      <span>
+                        {data.suggestions.length === 1 ? 'Ein Termin ist' : `${data.suggestions.length} Termine sind`}{' '}
+                        ohne Zuordnung – Hinzufügen ändert die Zuweisung nicht.{' '}
+                        <a href="/calendar?zuweisung=offen" className="font-medium text-[var(--color-brand)] hover:underline">
                           Im Kalender zuweisen
                         </a>
                       </span>
-                    </div>
-                  ) : null}
-                  {data.assigned.map((candidate) => (
-                    <CandidateRow
-                      key={candidate.appointmentId}
-                      candidate={candidate}
-                      checked={selectedIds.includes(candidate.appointmentId)}
-                      onToggle={toggleSelection}
-                      timezone={timezone}
-                    />
-                  ))}
-                  {data.suggestions.length > 0 ? (
-                    <>
-                      <p className="pt-2 text-[length:var(--text-2xs)] font-semibold tracking-wider text-[var(--color-ink-subtle)] uppercase">
-                        Ohne Zuordnung (Auswahl ändert die Zuweisung nicht)
-                      </p>
-                      {data.suggestions.map((candidate) => (
-                        <CandidateRow
-                          key={candidate.appointmentId}
-                          candidate={candidate}
-                          checked={selectedIds.includes(candidate.appointmentId)}
-                          onToggle={toggleSelection}
-                          timezone={timezone}
-                        />
-                      ))}
-                    </>
-                  ) : null}
-                </>
-              )}
-            </PanelBody>
-          </Panel>
-
-          {/* Karte */}
-          <Panel className="xl:col-span-3">
-            <PanelHeader>
-              <PanelTitle>Karte</PanelTitle>
-              {/* Sichtbar machen, ob die echte Strecke oder nur die Luftlinie liegt. */}
-              {polyline && polyline.length > 1 ? (
-                <span className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
-                  {activeRoadPath
-                    ? 'Tatsächliche Fahrstrecke'
-                    : roadPath && roadPath.key === pathKey
-                      ? 'Luftlinie – kein Routendienst erreichbar'
-                      : 'Fahrstrecke wird geladen …'}
-                </span>
-              ) : null}
-            </PanelHeader>
-            <PanelBody className="p-3">
-              <div className="h-[400px] overflow-hidden rounded-[var(--radius-lg)]">
-                {markers.length > 0 ? (
-                  <LeafletMap markers={markers} polyline={polyline} roadPath={activeRoadPath} />
-                ) : (
-                  <div className="flex h-full items-center justify-center rounded-[var(--radius-lg)] bg-[var(--color-panel-sunken)] text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
-                    Termine wählen und Route berechnen.
-                  </div>
-                )}
-              </div>
-            </PanelBody>
-          </Panel>
-        </div>
-      )}
-
-      {/* Ergebnis */}
-      {route ? (
-        <>
-          {route.warnings.length > 0 ? (
-            <div className="space-y-1.5">
-              {route.warnings.map((warning, index) => (
-                <p
-                  key={index}
-                  className="flex items-start gap-2 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-soft)] px-4 py-2.5 text-[length:var(--text-sm)] text-[var(--color-warning)]"
-                >
-                  <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
-                  {warning}
-                </p>
-              ))}
-            </div>
-          ) : null}
-
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-6" data-tour="routes-stats">
-            <StatTile
-              label="Späteste Abfahrt"
-              value={formatTime(new Date(route.departureAt), timezone)}
-            />
-            <StatTile
-              label="Kundenzeit"
-              value={formatMinutesVerbose(route.totalServiceMinutes)}
-              tone="success"
-            />
-            <StatTile label="Fahrtzeit" value={formatTravelSeconds(route.totalTravelSeconds)} />
-            <StatTile
-              label="Wartezeit"
-              value={
-                route.totalWaitSeconds > 0
-                  ? formatTravelSeconds(route.totalWaitSeconds)
-                  : 'keine'
-              }
-            />
-            <StatTile label="Distanz" value={formatDistance(route.totalDistanceMeters)} />
-            <StatTile
-              label="Rückkehr"
-              value={
-                route.returnArrivalAt ? formatTime(new Date(route.returnArrivalAt), timezone) : '—'
-              }
-            />
-          </div>
-
-          <Panel>
-            <PanelHeader>
-              <PanelTitle>Stoppliste & Zeitachse</PanelTitle>
-              {canManage ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="secondary" size="sm" onClick={() => compute()} loading={pending}>
-                    <RefreshCcw aria-hidden /> Neu optimieren
-                  </Button>
-
-                  {/* Alleine-Modus: nichts freizugeben – Änderungen sind schon gesichert. */}
-                  {soloMode ? (
-                    <span className="flex items-center gap-1.5 text-[length:var(--text-2xs)] text-[var(--color-success)]">
-                      <Check className="size-3.5" aria-hidden />
-                      {route.feasible
-                        ? 'Automatisch gespeichert'
-                        : 'Nicht gespeichert – Route ist unzulässig'}
-                    </span>
-                  ) : (
-                    <>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => save(false)}
-                        loading={pending}
-                        disabled={!route.feasible}
-                        title={route.feasible ? undefined : 'Unzulässige Routen können nicht gespeichert werden.'}
-                      >
-                        <Save aria-hidden /> Speichern
-                      </Button>
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        onClick={() => save(true)}
-                        loading={pending}
-                        disabled={!route.feasible}
-                        title={route.feasible ? undefined : 'Unzulässige Routen können nicht freigegeben werden.'}
-                      >
-                        <Send aria-hidden /> Freigeben
-                      </Button>
-                    </>
-                  )}
-
-                  {data?.existingPlan ? (
-                    <Button variant="danger" size="sm" onClick={discard} loading={pending}>
-                      <Trash2 aria-hidden /> Verwerfen
-                    </Button>
+                    </p>
                   ) : null}
                 </div>
               ) : null}
-            </PanelHeader>
-            <PanelBody className="p-0">
-              <ol className="divide-y divide-[var(--color-line-subtle)]">
-                {route.stops.map((stop, index) => (
-                  <li key={stop.appointmentId} className="px-4 py-3">
-                    {stop.travelSecondsFromPrevious > 0 ? (
-                      <p className="mb-1.5 flex items-center gap-1.5 text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                        <Car className="size-3.5" aria-hidden />
-                        {formatTravelSeconds(stop.travelSecondsFromPrevious)} ·{' '}
-                        {formatDistance(stop.distanceMetersFromPrevious)}
-                        {stop.waitSeconds > 60
-                          ? ` · ${Math.round(stop.waitSeconds / 60)} Min. Wartezeit`
-                          : ''}
-                      </p>
-                    ) : null}
-                    <div className="flex items-center gap-3">
-                      <span
-                        className="flex size-7 shrink-0 items-center justify-center rounded-full text-[length:var(--text-xs)] font-bold text-white"
-                        style={{ backgroundColor: stop.customerColor }}
-                        aria-hidden
-                      >
-                        {stop.sequence}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[length:var(--text-sm)] font-medium">
-                          {stop.customerName} · {stop.title}
-                          {stop.isFlexible ? (
-                            <span className="ml-1.5 text-[length:var(--text-2xs)] text-[var(--color-info)]">
-                              flexibel
-                            </span>
-                          ) : null}
-                        </span>
-                        <span className="block truncate text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                          Ankunft {formatTime(new Date(stop.arrivalAt), timezone)} · Einsatz{' '}
-                          {formatTime(new Date(stop.serviceStartAt), timezone)}–
-                          {formatTime(new Date(stop.serviceEndAt), timezone)} · {stop.addressLine}
-                        </span>
-                        {stop.warning ? (
-                          <span className="mt-0.5 flex items-center gap-1 text-[length:var(--text-xs)] text-[var(--color-warning)]">
-                            <AlertTriangle className="size-3" aria-hidden /> {stop.warning}
-                          </span>
-                        ) : null}
-                      </span>
-                      <div className="flex shrink-0 items-center gap-0.5">
-                        <Button asChild variant="ghost" size="icon-sm" aria-label="Navigation zum Stopp">
-                          <a
-                            href={googleMapsDirectionsUrl({ latitude: stop.latitude, longitude: stop.longitude })}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            <Navigation aria-hidden />
-                          </a>
-                        </Button>
-                        {canManage ? (
-                          <>
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label="Stopp nach oben"
-                              disabled={index === 0 || pending}
-                              onClick={() => moveStop(index, -1)}
-                            >
-                              <ArrowUp aria-hidden />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label="Stopp nach unten"
-                              disabled={index === route.stops.length - 1 || pending}
-                              onClick={() => moveStop(index, 1)}
-                            >
-                              <ArrowDown aria-hidden />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label="Stopp ausschließen"
-                              className="text-[var(--color-danger)]"
-                              disabled={pending}
-                              onClick={() => excludeStop(stop.appointmentId)}
-                            >
-                              <X aria-hidden />
-                            </Button>
-                          </>
-                        ) : null}
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            </PanelBody>
-          </Panel>
-        </>
-      ) : null}
+            </Panel>
 
-      {/* Terminvorschläge (nur eigene Route) */}
-      {isOwn ? (
-        <Panel data-tour="routes-suggestions">
-          <PanelHeader>
-            <PanelTitle>
-              <span className="inline-flex items-center gap-1.5">
-                <Sparkles className="size-4 text-[var(--color-brand)]" aria-hidden />
-                Terminvorschläge aus offenen Kundenstunden
-              </span>
-            </PanelTitle>
-            <div className="flex items-center gap-2">
-              {suggestionInfo ? (
-                <span className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
-                  {suggestionInfo.aiUsed ? 'Reihenfolge: KI (Ollama)' : 'Reihenfolge: regelbasiert'}
-                </span>
-              ) : null}
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => generateSuggestions()}
-                loading={generating}
-                disabled={loading || !data}
-              >
-                <Sparkles aria-hidden /> Vorschläge generieren
-              </Button>
-            </div>
-          </PanelHeader>
-          <PanelBody className="space-y-2.5">
-            {generating ? (
-              <div className="space-y-2.5" aria-label="Vorschläge werden berechnet">
-                {[0, 1, 2].map((i) => (
-                  <div
-                    key={i}
-                    className="space-y-2 rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] p-4"
-                  >
-                    <Skeleton className="h-4 w-2/5 rounded-full" />
-                    <Skeleton className="h-3 w-3/5 rounded-full" />
-                    <div className="grid grid-cols-3 gap-2 lg:grid-cols-6">
-                      {[...Array(6)].map((_, j) => (
-                        <Skeleton key={j} className="h-11 rounded-[var(--radius-md)]" />
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : suggestions === null ? (
-              <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
-                Prüft Kunden mit offenen Stunden und Verfügbarkeit am {date} und schlägt Einsätze
-                vor, die zur aktuellen Route passen – inklusive Auswirkungen auf Fahrzeit,
-                Wartezeit und Arbeitstag.
-              </p>
-            ) : visibleSuggestions && visibleSuggestions.length === 0 && declinedList.length === 0 ? (
-              <EmptyState
-                className="border-0"
-                icon={<Check />}
-                title="Keine passenden Vorschläge"
-                description="Alle Kunden sind versorgt, nicht verfügbar oder würden die Route unzulässig machen."
+            {/* Vorschläge aus offenen Kundenstunden – angenommene werden zu Stopps. */}
+            {isOwn ? (
+              <OpenHoursSuggestions
+                date={date}
+                hasData={Boolean(data)}
+                generating={generating}
+                loading={loading}
+                suggestions={suggestions}
+                suggestionInfo={suggestionInfo}
+                visibleSuggestions={visibleSuggestions}
+                declinedList={declinedList}
+                canAccept={canAccept}
+                acceptingToken={acceptingToken}
+                timezone={timezone}
+                onGenerate={() => generateSuggestions()}
+                onAccept={acceptSuggestion}
+                onDecline={declineSuggestion}
+                onUndoDecline={undoDecline}
               />
-            ) : (
-              <>
-                {visibleSuggestions?.map((suggestion) => (
-                  <SuggestionCard
-                    key={suggestion.token}
-                    suggestion={suggestion}
-                    timezone={timezone}
-                    canAccept={canAccept}
-                    declined={false}
-                    pending={acceptingToken === suggestion.token}
-                    onAccept={acceptSuggestion}
-                    onDecline={declineSuggestion}
-                    onUndoDecline={undoDecline}
+            ) : showEmployeeSelect ? (
+              <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                Terminvorschläge für Mitarbeiter gibt es gesammelt im Tab „Teamplanung“.
+              </p>
+            ) : null}
+          </div>
+
+          {/* Karte + Kennzahlen – bleiben beim Scrollen zusammen sichtbar und
+              folgen jeder Bearbeitung sofort. Mobil stapeln sie unter den Editor. */}
+          <div className="xl:col-span-3">
+            <div className="@container space-y-3 xl:sticky xl:top-4">
+              <Panel>
+                <PanelHeader>
+                  <PanelTitle>Karte</PanelTitle>
+                  {polyline && polyline.length > 1 ? (
+                    <span className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+                      {activeRoadPath
+                        ? 'Tatsächliche Fahrstrecke'
+                        : roadPath && roadPath.key === pathKey
+                          ? 'Luftlinie – kein Routendienst erreichbar'
+                          : 'Fahrstrecke wird geladen …'}
+                    </span>
+                  ) : null}
+                </PanelHeader>
+                <PanelBody className="p-3">
+                  <div className="h-[360px] overflow-hidden rounded-[var(--radius-lg)] xl:h-[460px]">
+                    {markers.length > 0 ? (
+                      <LeafletMap markers={markers} polyline={polyline} roadPath={activeRoadPath} />
+                    ) : (
+                      <div className="flex h-full items-center justify-center rounded-[var(--radius-lg)] bg-[var(--color-panel-sunken)] text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+                        Termine hinzufügen, um die Route zu sehen.
+                      </div>
+                    )}
+                  </div>
+                </PanelBody>
+              </Panel>
+
+              {/* Alle Kennzahlen mit Farb-Chips – aktualisieren sich sofort. */}
+              {route ? (
+                <div
+                  className="grid grid-cols-2 gap-2.5 @2xl:grid-cols-3"
+                  data-tour="routes-kpi-bar"
+                >
+                  <StatTile
+                    icon={<Navigation aria-hidden />}
+                    label="Späteste Abfahrt"
+                    value={formatTime(new Date(route.departureAt), timezone)}
                   />
-                ))}
-                {declinedList.map((suggestion) => (
-                  <SuggestionCard
-                    key={suggestion.token}
-                    suggestion={suggestion}
-                    timezone={timezone}
-                    canAccept={canAccept}
-                    declined
-                    pending={false}
-                    onAccept={acceptSuggestion}
-                    onDecline={declineSuggestion}
-                    onUndoDecline={undoDecline}
+                  <StatTile
+                    icon={<Home aria-hidden />}
+                    label="Rückkehr (zuhause)"
+                    value={
+                      route.returnArrivalAt
+                        ? formatTime(new Date(route.returnArrivalAt), timezone)
+                        : '—'
+                    }
                   />
-                ))}
-                {!canAccept ? (
-                  <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                    Vorschläge können nur von der Leitung übernommen werden.
-                  </p>
-                ) : null}
-              </>
-            )}
-          </PanelBody>
-        </Panel>
-      ) : showEmployeeSelect ? (
-        <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-          Terminvorschläge für Mitarbeiter gibt es gesammelt im Tab „Teamplanung“.
-        </p>
-      ) : null}
+                  <StatTile
+                    icon={<Clock aria-hidden />}
+                    label="Unterwegs"
+                    value={formatTravelSeconds(route.workdaySeconds)}
+                  />
+                  <StatTile
+                    icon={<Car aria-hidden />}
+                    label="Fahrtzeit"
+                    value={formatTravelSeconds(route.totalTravelSeconds)}
+                  />
+                  <StatTile
+                    icon={<Check aria-hidden />}
+                    label="Kundenzeit"
+                    value={formatMinutesVerbose(route.totalServiceMinutes)}
+                    tone="success"
+                  />
+                  <StatTile
+                    icon={<Clock aria-hidden />}
+                    label="Wartezeit"
+                    value={route.totalWaitSeconds > 0 ? formatTravelSeconds(route.totalWaitSeconds) : 'keine'}
+                    tone={route.totalWaitSeconds > 20 * 60 ? 'warning' : 'default'}
+                  />
+                  <StatTile
+                    icon={<MapPin aria-hidden />}
+                    label="Distanz"
+                    value={formatDistance(route.totalDistanceMeters)}
+                    className="col-span-2 @2xl:col-span-3"
+                  />
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1445,58 +1329,139 @@ function TeamEmployeePanel({
 
 // ---------------------------------------------------------------------------
 
-/** Ein Kennzahlen-Element der subtilen Routen-Leiste (Label + Wert inline). */
-function RouteKpiInline({
-  label,
-  value,
-  strong = false,
-}: {
-  label: string;
-  value: string;
-  strong?: boolean;
-}) {
+/** Kompaktes Steuerelement mit Mini-Beschriftung für die Routenleiste. */
+function ControlField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <span className="flex items-baseline gap-1.5">
-      <span className="text-[var(--color-ink-subtle)]">{label}</span>
-      <span
-        className={
-          strong
-            ? 'tabular font-semibold text-[var(--color-ink)]'
-            : 'tabular font-medium text-[var(--color-ink)]'
-        }
-      >
-        {value}
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <span className="text-[length:var(--text-2xs)] font-medium text-[var(--color-ink-subtle)]">
+        {label}
       </span>
-    </span>
+      {children}
+    </div>
   );
 }
 
-function CandidateRow({
-  candidate,
-  checked,
-  onToggle,
+/** Ein Stopp der geplanten Route: Reihenfolge ändern und entfernen. */
+function StopRow({
+  stop,
+  index,
+  total,
+  canManage,
+  pending,
   timezone,
+  onMove,
+  onRemove,
+}: {
+  stop: ComputedRoute['stops'][number];
+  index: number;
+  total: number;
+  canManage: boolean;
+  pending: boolean;
+  timezone: string;
+  onMove: (index: number, direction: -1 | 1) => void;
+  onRemove: (appointmentId: string) => void;
+}) {
+  return (
+    <li className="px-3 py-2.5">
+      {stop.travelSecondsFromPrevious > 0 ? (
+        <p className="mb-1.5 flex items-center gap-1.5 text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+          <Car className="size-3" aria-hidden />
+          {formatTravelSeconds(stop.travelSecondsFromPrevious)} ·{' '}
+          {formatDistance(stop.distanceMetersFromPrevious)}
+          {stop.waitSeconds > 60 ? ` · ${Math.round(stop.waitSeconds / 60)} Min. Warten` : ''}
+        </p>
+      ) : null}
+      <div className="flex items-center gap-2.5">
+        <span
+          className="flex size-6 shrink-0 items-center justify-center rounded-full text-[length:var(--text-2xs)] font-bold text-white"
+          style={{ backgroundColor: stop.customerColor }}
+          aria-hidden
+        >
+          {stop.sequence}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[length:var(--text-sm)] font-medium">
+            {stop.customerName}
+            {stop.isFlexible ? (
+              <span className="ml-1.5 text-[length:var(--text-2xs)] text-[var(--color-info)]">
+                flexibel
+              </span>
+            ) : null}
+          </span>
+          <span className="block truncate text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+            {formatTime(new Date(stop.serviceStartAt), timezone)}–
+            {formatTime(new Date(stop.serviceEndAt), timezone)} · {stop.addressLine}
+          </span>
+          {stop.warning ? (
+            <span className="mt-0.5 flex items-center gap-1 text-[length:var(--text-2xs)] text-[var(--color-warning)]">
+              <AlertTriangle className="size-3 shrink-0" aria-hidden /> {stop.warning}
+            </span>
+          ) : null}
+        </span>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <Button asChild variant="ghost" size="icon-sm" aria-label="Navigation zum Stopp">
+            <a
+              href={googleMapsDirectionsUrl({ latitude: stop.latitude, longitude: stop.longitude })}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <Navigation aria-hidden />
+            </a>
+          </Button>
+          {canManage ? (
+            <>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Stopp nach oben"
+                disabled={index === 0 || pending}
+                onClick={() => onMove(index, -1)}
+              >
+                <ArrowUp aria-hidden />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Stopp nach unten"
+                disabled={index === total - 1 || pending}
+                onClick={() => onMove(index, 1)}
+              >
+                <ArrowDown aria-hidden />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Stopp entfernen"
+                className="text-[var(--color-danger)]"
+                disabled={pending}
+                onClick={() => onRemove(stop.appointmentId)}
+              >
+                <X aria-hidden />
+              </Button>
+            </>
+          ) : null}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+/** Ein noch nicht eingeplanter Termin: kompakt mit „+"-Knopf zum Hinzufügen. */
+function AddRow({
+  candidate,
+  pending,
+  timezone,
+  onAdd,
 }: {
   candidate: RouteCandidate;
-  checked: boolean;
-  onToggle: (appointmentId: string, checked: boolean) => void;
+  pending: boolean;
   timezone: string;
+  onAdd: (appointmentId: string) => void;
 }) {
-  const hasCoords = candidate.latitude != null && candidate.longitude != null;
   return (
-    <label
-      className={`flex cursor-pointer items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-2 transition-colors ${
-        checked ? 'bg-[var(--color-brand-subtle)]' : 'hover:bg-[var(--color-panel-raised)]'
-      }`}
-    >
-      <Checkbox
-        checked={checked}
-        disabled={!hasCoords}
-        onCheckedChange={(value) => onToggle(candidate.appointmentId, value === true)}
-        aria-label={`${candidate.customerName} einplanen`}
-      />
+    <li className="flex items-center gap-2 rounded-[var(--radius-md)] px-1.5 py-1 hover:bg-[var(--color-panel-raised)]">
       <span
-        className="h-8 w-1 shrink-0 rounded-full"
+        className="h-7 w-1 shrink-0 rounded-full"
         style={{ backgroundColor: candidate.customerColor }}
         aria-hidden
       />
@@ -1504,23 +1469,167 @@ function CandidateRow({
         <span className="block truncate text-[length:var(--text-sm)] font-medium">
           {candidate.customerName}
           {candidate.isFlexible ? (
-            <span className="ml-1.5 text-[length:var(--text-2xs)] text-[var(--color-info)]">flexibel</span>
+            <span className="ml-1.5 text-[length:var(--text-2xs)] text-[var(--color-info)]">
+              flexibel
+            </span>
           ) : null}
           {!candidate.assigned ? (
-            <span className="ml-1.5 text-[length:var(--text-2xs)] text-[var(--color-warning)]">offen</span>
+            <span className="ml-1.5 text-[length:var(--text-2xs)] text-[var(--color-warning)]">
+              offen
+            </span>
           ) : null}
         </span>
-        <span className="block truncate text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+        <span className="block truncate text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
           {candidate.isFlexible
             ? `Fenster ${candidate.earliestStartAt ? formatTime(new Date(candidate.earliestStartAt), timezone) : '—'}–${candidate.latestEndAt ? formatTime(new Date(candidate.latestEndAt), timezone) : '—'}`
             : `${formatTime(new Date(candidate.startAt), timezone)}–${formatTime(new Date(candidate.endAt), timezone)}`}
           {' · '}
           {formatMinutesVerbose(candidate.durationMinutes)}
-          {candidate.addressLine ? ` · ${candidate.addressLine}` : ''}
-          {!hasCoords ? ' · keine Koordinaten' : ''}
         </span>
       </span>
-      {checked ? <Check className="size-4 shrink-0 text-[var(--color-brand)]" aria-hidden /> : null}
-    </label>
+      <Button
+        variant="secondary"
+        size="icon-sm"
+        aria-label={`${candidate.customerName} hinzufügen`}
+        disabled={pending}
+        onClick={() => onAdd(candidate.appointmentId)}
+      >
+        <Plus aria-hidden />
+      </Button>
+    </li>
+  );
+}
+
+/**
+ * Vorschläge aus offenen Kundenstunden – als eigener Block direkt unter der
+ * Route. Angenommene Vorschläge werden zu echten Terminen und landen sofort
+ * als Stopp in der Route (die Karte oben folgt).
+ */
+function OpenHoursSuggestions({
+  date,
+  hasData,
+  generating,
+  loading,
+  suggestions,
+  suggestionInfo,
+  visibleSuggestions,
+  declinedList,
+  canAccept,
+  acceptingToken,
+  timezone,
+  onGenerate,
+  onAccept,
+  onDecline,
+  onUndoDecline,
+}: {
+  date: string;
+  hasData: boolean;
+  generating: boolean;
+  loading: boolean;
+  suggestions: RouteSuggestionDto[] | null;
+  suggestionInfo: { aiUsed: boolean } | null;
+  visibleSuggestions: RouteSuggestionDto[] | null;
+  declinedList: RouteSuggestionDto[];
+  canAccept: boolean;
+  acceptingToken: string | null;
+  timezone: string;
+  onGenerate: () => void;
+  onAccept: (suggestion: RouteSuggestionDto) => void;
+  onDecline: (suggestion: RouteSuggestionDto) => void;
+  onUndoDecline: (suggestion: RouteSuggestionDto) => void;
+}) {
+  return (
+    <Panel data-tour="routes-suggestions">
+      <PanelHeader>
+        <PanelTitle>
+          <span className="inline-flex items-center gap-1.5">
+            <Sparkles className="size-4 text-[var(--color-brand)]" aria-hidden />
+            Vorschläge aus offenen Stunden
+          </span>
+        </PanelTitle>
+        <div className="flex items-center gap-2">
+          {suggestionInfo ? (
+            <span className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+              {suggestionInfo.aiUsed ? 'Reihenfolge: KI' : 'Reihenfolge: regelbasiert'}
+            </span>
+          ) : null}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={onGenerate}
+            loading={generating}
+            disabled={loading || !hasData}
+          >
+            <Sparkles aria-hidden /> Generieren
+          </Button>
+        </div>
+      </PanelHeader>
+      <PanelBody className="space-y-2.5">
+        {generating ? (
+          <div className="space-y-2.5" aria-label="Vorschläge werden berechnet">
+            {[0, 1].map((i) => (
+              <div
+                key={i}
+                className="space-y-2 rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] p-4"
+              >
+                <Skeleton className="h-4 w-2/5 rounded-full" />
+                <Skeleton className="h-3 w-3/5 rounded-full" />
+                <div className="grid grid-cols-3 gap-2">
+                  {[...Array(3)].map((_, j) => (
+                    <Skeleton key={j} className="h-11 rounded-[var(--radius-md)]" />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : suggestions === null ? (
+          <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+            Prüft Kunden mit offenen Stunden und Verfügbarkeit am {date} und schlägt Einsätze vor,
+            die zur aktuellen Route passen – inklusive Auswirkung auf Fahrzeit und Arbeitstag.
+          </p>
+        ) : visibleSuggestions && visibleSuggestions.length === 0 && declinedList.length === 0 ? (
+          <EmptyState
+            className="border-0"
+            icon={<Check />}
+            title="Keine passenden Vorschläge"
+            description="Alle Kunden sind versorgt, nicht verfügbar oder würden die Route unzulässig machen."
+          />
+        ) : (
+          <>
+            {visibleSuggestions?.map((suggestion) => (
+              <SuggestionCard
+                key={suggestion.token}
+                suggestion={suggestion}
+                timezone={timezone}
+                canAccept={canAccept}
+                declined={false}
+                pending={acceptingToken === suggestion.token}
+                onAccept={onAccept}
+                onDecline={onDecline}
+                onUndoDecline={onUndoDecline}
+              />
+            ))}
+            {declinedList.map((suggestion) => (
+              <SuggestionCard
+                key={suggestion.token}
+                suggestion={suggestion}
+                timezone={timezone}
+                canAccept={canAccept}
+                declined
+                pending={false}
+                onAccept={onAccept}
+                onDecline={onDecline}
+                onUndoDecline={onUndoDecline}
+              />
+            ))}
+            {!canAccept ? (
+              <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                Vorschläge können nur von der Leitung übernommen werden.
+              </p>
+            ) : null}
+          </>
+        )}
+      </PanelBody>
+    </Panel>
   );
 }
