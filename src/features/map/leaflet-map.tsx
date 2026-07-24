@@ -77,6 +77,27 @@ function FitBounds({ markers, path }: { markers: MapMarker[]; path?: [number, nu
   return null;
 }
 
+/**
+ * Karte an ihre Containergröße anpassen. Die Routen-Ansicht gibt der Karte eine
+ * flexible Höhe (die Sticky-Spalte richtet sich nach der Fensterhöhe, damit
+ * Karte und Kennzahlen immer zusammen in die Ansicht passen). Ändert sich diese
+ * Höhe, muss Leaflet neu vermessen – sonst bleiben nach dem Verkleinern oder
+ * Vergrößern graue Kachelränder stehen.
+ */
+function InvalidateOnResize() {
+  const map = useMap();
+  React.useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') return;
+    const container = map.getContainer();
+    const observer = new ResizeObserver(() => {
+      map.invalidateSize({ animate: false });
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [map]);
+  return null;
+}
+
 export function LeafletMap({
   markers,
   polyline,
@@ -149,6 +170,7 @@ export function LeafletMap({
         </Marker>
       ))}
       <FitBounds markers={markers} path={hasRoad ? roadPath : polyline} />
+      <InvalidateOnResize />
     </MapContainer>
   );
 }

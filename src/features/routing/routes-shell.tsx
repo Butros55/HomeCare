@@ -975,8 +975,12 @@ function SingleRoutePlanner({
           {/* Karte + Kennzahlen – bleiben beim Scrollen zusammen sichtbar und
               folgen jeder Bearbeitung sofort. Mobil stehen sie oben (order-1). */}
           <div className="order-1 xl:order-none xl:col-span-3">
-            <div className="@container space-y-3 xl:sticky xl:top-4">
-              <Panel>
+            {/* Karte + Kennzahlen füllen zusammen höchstens die sichtbare Höhe
+                (Fenster minus Topbar), damit die Sticky-Spalte immer komplett
+                einrastet. Die Karte ist der flexible Teil und schrumpft, damit
+                die Kennzahlen darunter nie abgeschnitten werden. */}
+            <div className="@container flex flex-col gap-3 xl:sticky xl:top-4 xl:max-h-[calc(100dvh_-_var(--spacing-topbar)_-_2rem)]">
+              <Panel className="xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
                 <PanelHeader>
                   <PanelTitle>Karte</PanelTitle>
                   {polyline && polyline.length > 1 ? (
@@ -989,8 +993,8 @@ function SingleRoutePlanner({
                     </span>
                   ) : null}
                 </PanelHeader>
-                <PanelBody className="p-3">
-                  <div className="h-[360px] overflow-hidden rounded-[var(--radius-lg)] xl:h-[460px]">
+                <PanelBody className="p-3 xl:flex xl:min-h-0 xl:flex-1 xl:flex-col">
+                  <div className="h-[360px] overflow-hidden rounded-[var(--radius-lg)] xl:h-auto xl:min-h-[8rem] xl:flex-1">
                     {markers.length > 0 ? (
                       <LeafletMap markers={markers} polyline={polyline} roadPath={activeRoadPath} />
                     ) : (
@@ -1005,7 +1009,7 @@ function SingleRoutePlanner({
               {/* Alle Kennzahlen mit Farb-Chips – aktualisieren sich sofort. */}
               {route ? (
                 <div
-                  className="grid grid-cols-2 gap-2.5 @2xl:grid-cols-3"
+                  className="grid shrink-0 grid-cols-2 gap-2.5 @2xl:grid-cols-3"
                   data-tour="routes-kpi-bar"
                 >
                   <StatTile
