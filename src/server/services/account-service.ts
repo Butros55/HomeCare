@@ -284,6 +284,214 @@ export async function getCustomerHourAccount(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Monatsansicht
+// ---------------------------------------------------------------------------
+
+export interface MonthAccountView {
+  /** Betrachteter Monat als „YYYY-MM". */
+  monthIso: string;
+  prevMonthIso: string;
+  nextMonthIso: string;
+  /** Kontostand & Verplanbar zum MONATSENDE (kumuliert, inkl. vorgemerkter Aufladungen). */
+  summary: HourAccountSummary;
+  /** Bewegungen NUR dieses Monats. */
+  month: {
+    creditedMinutes: number;
+    completedMinutes: number;
+    reservedMinutes: number;
+  };
+  /** Kontostand zu Monatsbeginn (Übertrag aus Vormonaten). */
+  carryInMinutes: number;
+  hasAccount: boolean;
+  grants: RecurringGrantDto[];
+  /** Alle Bewegungen des Monats (Client blendet sie portionsweise ein). */
+  history: AccountHistoryEntryDto[];
+}
+
+function monthIso(year: number, month1: number): string {
+  return `${year}-${String(month1).padStart(2, '0')}`;
+}
+
+/** Parst „YYYY-MM"; fällt bei Unsinn auf den aktuellen Monat zurück. */
+export function parseMonthIso(value: string | undefined, timezone: string): { year: number; month1: number } {
+  const match = value?.match(/^(\d{4})-(\d{2})$/);
+  if (match) {
+    const year = Number(match[1]);
+    const month1 = Number(match[2]);
+    if (month1 >= 1 && month1 <= 12) return { year, month1 };
+  }
+  const today = todayUtcDate(timezone);
+  return { year: today.getUTCFullYear(), month1: today.getUTCMonth() + 1 };
+}
+
+/**
+ * Stundenkonto-Sicht für EINEN Monat. Die Zahlen gelten für den gewählten Monat:
+ *  - `summary` ist der Stand zum MONATSENDE (kumuliert) inkl. der bis dahin
+ *    vorgemerkten wiederkehrenden Aufladungen – so sieht man auch für künftige
+ *    Monate, ob überbucht wird.
+ *  - `month` sind die Bewegungen NUR dieses Monats (aufgeladen/geplant/geleistet).
+ *  - Wiederkehrende Aufladungen zukünftiger Monate erscheinen als „vorgemerkt".
+ */
+export async function getCustomerHourAccountMonth(
+  customerId: string,
+  monthInput: { year: number; month1: number },
+): Promise<MonthAccountView> {
+  const ctx = await requireOrganizationMembership();
+  const customer = await db.customer.findUnique({
+    where: { id: customerId },
+    select: { id: true, organizationId: true },
+  });
+  assertSameOrg(ctx, customer);
+
+  const timezone = ctx.organization.timezone;
+  await ensureRecurringTopupsMaterialized(ctx.organization.id, timezone);
+  const today = todayUtcDate(timezone);
+
+  const { year, month1 } = monthInput;
+  const month0 = month1 - 1;
+  const viewedIndex = year * 12 + month0;
+  const daysInMonth = new Date(Date.UTC(year, month1, 0)).getUTCDate();
+  const monthEndInclusive = utcDate(year, month1, daysInMonth);
+  const prev = new Date(Date.UTC(year, month0 - 1, 1));
+  const next = new Date(Date.UTC(year, month0 + 1, 1));
+
+  const [topups, grants, appointments] = await Promise.all([
+    db.customerHourTopup.findMany({ where: { customerId }, orderBy: { effectiveOn: 'desc' } }),
+    db.customerRecurringHourGrant.findMany({ where: { customerId }, orderBy: { createdAt: 'asc' } }),
+    db.appointment.findMany({
+      where: { customerId, deletedAt: null },
+      select: {
+        id: true,
+        title: true,
+        startAt: true,
+        durationMinutes: true,
+        status: true,
+        timeEntries: { where: { status: 'APPROVED' }, select: { workedMinutes: true } },
+      },
+    }),
+  ]);
+
+  const workedOf = (a: (typeof appointments)[number]) =>
+    a.timeEntries.length > 0 ? a.timeEntries.reduce((sum, t) => sum + t.workedMinutes, 0) : null;
+  const monthIndexOf = (date: Date) => {
+    const parts = calendarDayInZone(date, timezone);
+    return parts.year * 12 + (parts.month - 1);
+  };
+
+  // Stand zum Monatsende: nur Termine bis einschließlich dieses Monats zählen,
+  // plus die bis Monatsende vorgemerkten wiederkehrenden Aufladungen.
+  const summary = computeHourAccount({
+    topups,
+    appointments: appointments
+      .filter((a) => monthIndexOf(a.startAt) <= viewedIndex)
+      .map((a) => ({ durationMinutes: a.durationMinutes, status: a.status, workedMinutes: workedOf(a) })),
+    until: monthEndInclusive,
+    extraCreditMinutes: projectedGrantMinutes(grants as RecurringGrantLike[], monthEndInclusive),
+  });
+
+  // Bewegungen NUR dieses Monats.
+  const topupsThisMonth = topups.filter(
+    (t) => t.effectiveOn.getUTCFullYear() === year && t.effectiveOn.getUTCMonth() === month0,
+  );
+  const materializedCredit = topupsThisMonth.reduce((sum, t) => sum + t.minutes, 0);
+
+  // Vorgemerkte wiederkehrende Aufladungen dieses Monats (noch nicht gebucht).
+  const projectedOccurrences: { grantId: string; date: Date; minutes: number; note: string | null }[] = [];
+  for (const grant of grants as GrantRecord[]) {
+    const occurrences = grantOccurrencesBetween(
+      { ...grant, active: grant.active },
+      grant.materializedUntil,
+      monthEndInclusive,
+    ).filter((o) => o.getUTCFullYear() === year && o.getUTCMonth() === month0);
+    for (const date of occurrences) {
+      projectedOccurrences.push({ grantId: grant.id, date, minutes: grant.minutes, note: grant.note });
+    }
+  }
+  const projectedCredit = projectedOccurrences.reduce((sum, o) => sum + o.minutes, 0);
+
+  const inMonth = appointments.filter((a) => monthIndexOf(a.startAt) === viewedIndex);
+  const completedThisMonth = inMonth
+    .filter((a) => a.status === 'COMPLETED')
+    .reduce((sum, a) => sum + (workedOf(a) ?? a.durationMinutes), 0);
+  const reservedThisMonth = inMonth
+    .filter((a) => ['DRAFT', 'PLANNED', 'CONFIRMED', 'IN_PROGRESS'].includes(a.status))
+    .reduce((sum, a) => sum + a.durationMinutes, 0);
+  const creditedThisMonth = materializedCredit + projectedCredit;
+
+  // ---- Historie dieses Monats ----------------------------------------------
+  const entries: AccountHistoryEntryDto[] = [];
+  for (const topup of topupsThisMonth) {
+    const kind: AccountEntryKind =
+      topup.kind === 'RECURRING' ? 'TOPUP_RECURRING' : topup.kind === 'CORRECTION' ? 'CORRECTION' : 'TOPUP_MANUAL';
+    entries.push({
+      id: `topup:${topup.id}`,
+      kind,
+      dateIso: topup.effectiveOn.toISOString(),
+      minutes: topup.minutes,
+      label:
+        topup.kind === 'RECURRING'
+          ? 'Automatische Aufladung'
+          : topup.kind === 'CORRECTION'
+            ? `Korrektur: ${topup.note ?? 'ohne Begründung'}`
+            : topup.note?.trim() || 'Stunden aufgeladen',
+      pending: topup.effectiveOn > today,
+      appointmentId: null,
+    });
+  }
+  for (const occurrence of projectedOccurrences) {
+    entries.push({
+      id: `grant:${occurrence.grantId}:${occurrence.date.toISOString().slice(0, 10)}`,
+      kind: 'TOPUP_RECURRING',
+      dateIso: occurrence.date.toISOString(),
+      minutes: occurrence.minutes,
+      label: 'Automatische Aufladung',
+      pending: true,
+      appointmentId: null,
+    });
+  }
+  for (const appointment of inMonth) {
+    if (appointment.status === 'COMPLETED') {
+      entries.push({
+        id: `done:${appointment.id}`,
+        kind: 'COMPLETED',
+        dateIso: appointment.startAt.toISOString(),
+        minutes: -(workedOf(appointment) ?? appointment.durationMinutes),
+        label: `Durchgeführt: ${appointment.title}`,
+        pending: false,
+        appointmentId: appointment.id,
+      });
+    } else if (['DRAFT', 'PLANNED', 'CONFIRMED', 'IN_PROGRESS'].includes(appointment.status)) {
+      entries.push({
+        id: `plan:${appointment.id}`,
+        kind: 'RESERVED',
+        dateIso: appointment.startAt.toISOString(),
+        minutes: -appointment.durationMinutes,
+        label: `Geplant: ${appointment.title}`,
+        pending: true,
+        appointmentId: appointment.id,
+      });
+    }
+  }
+  entries.sort((a, b) => (a.dateIso < b.dateIso ? 1 : a.dateIso > b.dateIso ? -1 : 0));
+
+  return {
+    monthIso: monthIso(year, month1),
+    prevMonthIso: monthIso(prev.getUTCFullYear(), prev.getUTCMonth() + 1),
+    nextMonthIso: monthIso(next.getUTCFullYear(), next.getUTCMonth() + 1),
+    summary,
+    month: {
+      creditedMinutes: creditedThisMonth,
+      completedMinutes: completedThisMonth,
+      reservedMinutes: reservedThisMonth,
+    },
+    carryInMinutes: summary.balanceMinutes - creditedThisMonth + completedThisMonth,
+    hasAccount: topups.length > 0 || grants.length > 0,
+    grants: (grants as GrantRecord[]).map((grant) => grantToDto(grant, today)),
+    history: entries,
+  };
+}
+
 /** Konto-Zusammenfassungen für Listen (N+1-frei). */
 export async function getAccountSummariesBulk(
   organizationId: string,

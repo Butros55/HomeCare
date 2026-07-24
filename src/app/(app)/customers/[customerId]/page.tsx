@@ -6,7 +6,7 @@ import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
 import { EntityAvatar } from '@/components/ui/misc';
-import { EmptyState, Panel, PanelBody, PanelHeader, PanelTitle } from '@/components/ui/panel';
+import { EmptyState, Panel, PanelBody, PanelHeader, PanelTitle, StatTile } from '@/components/ui/panel';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Table, TableWrapper, TBody, Td, Th, THead, Tr } from '@/components/ui/table';
 import { formatDate, formatDateTime, toDateInputValue } from '@/lib/dates';
@@ -24,7 +24,10 @@ import { AppError } from '@/server/errors';
 import { db } from '@/server/db';
 import { hasPermission, uiModeFor } from '@/server/permissions';
 import { getCustomerDetail } from '@/server/services/customer-service';
-import { getCustomerHourAccount } from '@/server/services/account-service';
+import {
+  getCustomerHourAccountMonth,
+  parseMonthIso,
+} from '@/server/services/account-service';
 import { getCustomerAccountStats } from '@/server/services/hours-service';
 import { ContactActions } from '@/features/customers/contact-actions';
 import { CustomerLocationMap } from '@/features/map/location-map';
@@ -37,6 +40,7 @@ import {
   TopupButton,
 } from '@/features/hours/account-dialogs';
 import { CustomerHourTiles } from '@/features/hours/hour-detail-tiles';
+import { AccountHistoryList, AccountMonthSwitcher } from '@/features/hours/account-month';
 import { CustomerAppointmentButtons } from '@/features/appointments/create-appointment-button';
 
 export const metadata: Metadata = { title: 'Kunde' };
@@ -58,10 +62,10 @@ export default async function CustomerDetailPage({
   searchParams,
 }: {
   params: Promise<{ customerId: string }>;
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; monat?: string }>;
 }) {
   const { customerId } = await params;
-  const { tab: rawTab } = await searchParams;
+  const { tab: rawTab, monat } = await searchParams;
   let tab: TabKey = (TABS.some((t) => t.key === rawTab) ? rawTab : 'uebersicht') as TabKey;
 
   let detail: Awaited<ReturnType<typeof getCustomerDetail>>;
@@ -158,8 +162,7 @@ export default async function CustomerDetailPage({
             timezone={timezone}
             canAllocate={canAllocate}
             canManageBudgets={hasPermission(ctx, 'budgets.manage')}
-            stats={stats}
-            showAllocation={!solo}
+            monthParam={monat}
           />
         ) : null}
         {tab === 'mitarbeiter' ? <EmployeesTab customerId={customerId} customer={customer} /> : null}
@@ -483,18 +486,25 @@ async function HoursTab({
   timezone,
   canAllocate,
   canManageBudgets,
-  stats,
-  showAllocation,
+  monthParam,
 }: {
   customerId: string;
   timezone: string;
   canAllocate: boolean;
   canManageBudgets: boolean;
-  stats: Awaited<ReturnType<typeof getCustomerAccountStats>>;
-  showAllocation: boolean;
+  monthParam?: string;
 }) {
-  const account = await getCustomerHourAccount(customerId);
+  const monthInput = parseMonthIso(monthParam, timezone);
+  const account = await getCustomerHourAccountMonth(customerId, monthInput);
+  const current = parseMonthIso(undefined, timezone);
+  const currentMonthIso = `${current.year}-${String(current.month1).padStart(2, '0')}`;
   const todayInput = toDateInputValue(new Date(), timezone);
+
+  const monthName = new Intl.DateTimeFormat('de-DE', { month: 'long', year: 'numeric' }).format(
+    new Date(Date.UTC(monthInput.year, monthInput.month1 - 1, 1)),
+  );
+  const plannable = account.summary.plannableMinutes;
+  const overbooked = plannable < 0;
 
   const intervalLabel = (grant: (typeof account.grants)[number]) => {
     const unit = grant.intervalUnit === 'WEEK' ? 'Woche' : 'Monat';
@@ -504,16 +514,58 @@ async function HoursTab({
 
   return (
     <>
-      <CustomerHourTiles
-        customerId={customerId}
-        stats={stats}
-        canAllocate={canAllocate}
-        showFunnel
-        showAllocation={showAllocation}
-      />
+      {/* Monatswechsler – alle Zahlen unten gelten für den gewählten Monat. */}
+      <div className="rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] bg-[var(--color-panel)] px-3 py-2 shadow-[var(--shadow-panel)]">
+        <AccountMonthSwitcher
+          monthIso={account.monthIso}
+          prevMonthIso={account.prevMonthIso}
+          nextMonthIso={account.nextMonthIso}
+          currentMonthIso={currentMonthIso}
+        />
+      </div>
 
+      {/* Monats-Kennzahlen. */}
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile
+          label="Kontostand (Monatsende)"
+          value={formatMinutesAsHours(account.summary.balanceMinutes)}
+          hint={
+            overbooked
+              ? `${formatMinutesAsHours(-plannable)} überbucht`
+              : `${formatMinutesAsHours(plannable)} verplanbar`
+          }
+          tone={overbooked ? 'danger' : 'default'}
+        />
+        <StatTile
+          label="Aufgeladen"
+          value={formatMinutesAsHours(account.month.creditedMinutes)}
+          hint="in diesem Monat"
+        />
+        <StatTile
+          label="Geplant"
+          value={formatMinutesAsHours(account.month.reservedMinutes)}
+          hint="Termine in diesem Monat"
+          tone="warning"
+        />
+        <StatTile
+          label="Geleistet"
+          value={formatMinutesAsHours(account.month.completedMinutes)}
+          hint="abgeschlossen"
+          tone="success"
+        />
+      </div>
+
+      <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+        Übertrag aus Vormonaten:{' '}
+        <strong className="tabular text-[var(--color-ink)]">
+          {formatMinutesAsHours(account.carryInMinutes)}
+        </strong>
+        . Wiederkehrende Aufladungen künftiger Monate sind als „vorgemerkt“ bereits eingerechnet.
+      </p>
+
+      {/* Aktionen: mobil in einer scrollbaren Reihe (nicht gestapelt), ab sm rechtsbündig. */}
       {canAllocate || canManageBudgets ? (
-        <div className="flex flex-wrap justify-end gap-2">
+        <div className="scrollbar-none flex gap-2 overflow-x-auto sm:flex-wrap sm:justify-end sm:overflow-visible">
           {canManageBudgets ? (
             <>
               <TopupButton customerId={customerId} defaultDate={todayInput} />
@@ -522,12 +574,12 @@ async function HoursTab({
             </>
           ) : null}
           {canAllocate ? (
-            <AllocateHoursButton customerId={customerId} label="Stunden zuweisen" icon="clock" />
+            <AllocateHoursButton customerId={customerId} label="Zuweisen" icon="clock" size="sm" />
           ) : null}
         </div>
       ) : null}
 
-      {/* Wiederkehrende Aufladungen */}
+      {/* Wiederkehrende Aufladungen (gelten fortlaufend, nicht nur diesen Monat). */}
       {account.grants.length > 0 ? (
         <Panel>
           <PanelHeader>
@@ -572,60 +624,13 @@ async function HoursTab({
         </Panel>
       ) : null}
 
-      {/* Kontobewegungen */}
+      {/* Kontobewegungen dieses Monats – paginiert (10 + „Mehr anzeigen"). */}
       <Panel>
         <PanelHeader>
-          <PanelTitle>Kontobewegungen</PanelTitle>
+          <PanelTitle>Kontobewegungen · {monthName}</PanelTitle>
         </PanelHeader>
         <PanelBody>
-          {account.history.length === 0 ? (
-            <EmptyState
-              icon={<Clock />}
-              title="Noch keine Bewegungen"
-              description="Lade Stunden auf, um das Konto des Kunden zu füllen."
-            />
-          ) : (
-            <ul className="divide-y divide-[var(--color-line-subtle)]">
-              {account.history.map((entry) => (
-                <li key={entry.id} className="flex items-center justify-between gap-3 py-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-[length:var(--text-sm)]">
-                      {entry.appointmentId ? (
-                        <Link
-                          href={`/calendar?termin=${entry.appointmentId}`}
-                          className="hover:text-[var(--color-brand)]"
-                        >
-                          {entry.label}
-                        </Link>
-                      ) : (
-                        entry.label
-                      )}
-                      {entry.pending ? (
-                        <span className="text-[var(--color-ink-subtle)]"> · vorgemerkt</span>
-                      ) : null}
-                    </div>
-                    <div className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                      {formatDate(new Date(entry.dateIso), timezone)}
-                    </div>
-                  </div>
-                  <span
-                    className="tabular shrink-0 font-semibold"
-                    style={{
-                      color:
-                        entry.minutes > 0
-                          ? 'var(--color-success)'
-                          : entry.minutes < 0
-                            ? 'var(--color-danger)'
-                            : 'var(--color-ink)',
-                    }}
-                  >
-                    {entry.minutes >= 0 ? '+' : '−'}
-                    {formatMinutesAsHours(Math.abs(entry.minutes))}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
+          <AccountHistoryList key={account.monthIso} entries={account.history} timezone={timezone} />
         </PanelBody>
       </Panel>
     </>

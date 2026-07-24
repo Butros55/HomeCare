@@ -69,7 +69,7 @@ export function TopupButton({
   return (
     <>
       <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
-        <Plus aria-hidden /> Stunden aufladen
+        <Plus aria-hidden /> Aufladen
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
@@ -152,7 +152,7 @@ export function CorrectionButton({ customerId }: { customerId: string }) {
   return (
     <>
       <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
-        <Scale aria-hidden /> Korrekturbuchung
+        <Scale aria-hidden /> Korrektur
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
@@ -366,7 +366,7 @@ export function CreateRecurringGrantButton({
   return (
     <>
       <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
-        <RefreshCcw aria-hidden /> Wiederkehrende Aufladung
+        <RefreshCcw aria-hidden /> Wiederkehrend
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent
