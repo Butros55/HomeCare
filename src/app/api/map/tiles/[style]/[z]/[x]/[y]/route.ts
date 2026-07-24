@@ -6,20 +6,44 @@ import { NextResponse, type NextRequest } from 'next/server';
  *  - Mit `MAPBOX_ACCESS_TOKEN`: Die Kacheln werden serverseitig geholt und
  *    durchgereicht. Der Schlüssel bleibt dadurch auf dem Server und landet
  *    nicht im Client-Bundle.
- *  - Ohne Token: Weiterleitung auf die frei nutzbaren CARTO-Basiskarten. So
- *    lädt der Browser direkt dort und der Server bleibt aus dem Weg.
+ *  - Ohne Token (oder wenn Mapbox nicht liefert): Weiterleitung auf frei
+ *    nutzbare Quellen (CARTO-Basiskarten, Esri-Luftbild für Satellit). Die
+ *    Karte bleibt dadurch IMMER sichtbar – ein Kachel-Fehler zeigt nie Grau.
+ *  - `?labels=0` blendet Beschriftungen aus, wo der Anbieter eine Variante
+ *    ohne Labels hat (CARTO `*_nolabels`, Mapbox Satellit ohne Straßen).
  *
  * Die Pfadsegmente werden streng geprüft (nur Zahlen, feste Stilnamen) – der
  * Proxy darf niemals zu einer beliebigen Ziel-URL werden.
  */
 
 const STYLES = {
-  light: { mapbox: 'mapbox/light-v11', carto: 'light_all' },
-  dark: { mapbox: 'mapbox/dark-v11', carto: 'dark_all' },
-  streets: { mapbox: 'mapbox/streets-v12', carto: 'rastertiles/voyager' },
-  satellite: { mapbox: 'mapbox/satellite-streets-v12', carto: null },
-  /** Eigener Mapbox-Stil – die Referenz kommt streng geprüft aus `?ref=`. */
-  custom: { mapbox: null, carto: 'rastertiles/voyager' },
+  light: {
+    mapbox: 'mapbox/light-v11',
+    carto: 'light_all',
+    cartoNoLabels: 'light_nolabels',
+  },
+  dark: {
+    mapbox: 'mapbox/dark-v11',
+    carto: 'dark_all',
+    cartoNoLabels: 'dark_nolabels',
+  },
+  streets: {
+    mapbox: 'mapbox/streets-v12',
+    carto: 'rastertiles/voyager',
+    cartoNoLabels: 'rastertiles/voyager_nolabels',
+  },
+  outdoors: {
+    mapbox: 'mapbox/outdoors-v12',
+    carto: 'rastertiles/voyager',
+    cartoNoLabels: 'rastertiles/voyager_nolabels',
+  },
+  satellite: {
+    // Mit Beschriftung Straßen-Overlay, ohne reines Luftbild.
+    mapbox: 'mapbox/satellite-streets-v12',
+    mapboxNoLabels: 'mapbox/satellite-v9',
+    carto: null,
+    cartoNoLabels: null,
+  },
 } as const;
 
 type StyleKey = keyof typeof STYLES;
@@ -32,15 +56,42 @@ function isStyle(value: string): value is StyleKey {
   return Object.hasOwn(STYLES, value);
 }
 
-/** Eigene Mapbox-Stile: exakt „username/style-id“, sonst nichts. */
-const CUSTOM_REF_PATTERN = /^[\w.-]{1,64}\/[\w.-]{1,64}$/;
-
 /** `y` trägt bei Retina-Displays das Suffix `@2x`. */
 function parseTileY(raw: string): { y: number; retina: boolean } | null {
   const retina = raw.endsWith('@2x');
   const digits = retina ? raw.slice(0, -3) : raw;
   if (!/^\d{1,7}$/.test(digits)) return null;
   return { y: Number(digits), retina };
+}
+
+/** Freie Ersatzquelle: CARTO-Basiskarte bzw. Esri-Luftbild für Satellit. */
+function fallbackRedirect(
+  style: StyleKey,
+  labels: boolean,
+  zoom: number,
+  column: number,
+  y: number,
+  suffix: string,
+): NextResponse {
+  if (style === 'satellite') {
+    const target =
+      `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer` +
+      `/tile/${zoom}/${y}/${column}`;
+    return NextResponse.redirect(target, {
+      status: 307,
+      headers: { 'Cache-Control': CACHE_CONTROL },
+    });
+  }
+  // Nach dem Satellit-Frühausstieg haben alle übrigen Stile CARTO-Varianten.
+  const entry = STYLES[style as Exclude<StyleKey, 'satellite'>];
+  const carto = labels ? entry.carto : entry.cartoNoLabels;
+  const subdomain = CARTO_SUBDOMAINS[(column + y) % CARTO_SUBDOMAINS.length]!;
+  const target =
+    `https://${subdomain}.basemaps.cartocdn.com/${carto}` + `/${zoom}/${column}/${y}${suffix}.png`;
+  return NextResponse.redirect(target, {
+    status: 307,
+    headers: { 'Cache-Control': CACHE_CONTROL },
+  });
 }
 
 export async function GET(
@@ -65,40 +116,22 @@ export async function GET(
   }
 
   const suffix = parsedY.retina ? '@2x' : '';
+  const labels = request.nextUrl.searchParams.get('labels') !== '0';
   const token = process.env.MAPBOX_ACCESS_TOKEN;
 
-  // Eigener Mapbox-Stil: nur mit Token sinnvoll; Referenz streng validieren.
-  const customRef =
-    style === 'custom' ? (request.nextUrl.searchParams.get('ref') ?? '') : null;
-  if (style === 'custom' && customRef && !CUSTOM_REF_PATTERN.test(customRef)) {
-    return NextResponse.json({ error: 'VALIDATION_FAILED' }, { status: 400 });
-  }
-
+  // Beschriftungen aus: Mapbox-Rasterstile haben (außer Satellit) keine
+  // Variante ohne Labels – dann liefert CARTO die saubere „nolabels“-Karte.
   const mapboxStyle =
-    style === 'custom' ? (token && customRef ? customRef : null) : STYLES[style].mapbox;
+    style === 'satellite'
+      ? labels
+        ? STYLES.satellite.mapbox
+        : STYLES.satellite.mapboxNoLabels
+      : labels
+        ? STYLES[style].mapbox
+        : null;
 
   if (!token || !mapboxStyle) {
-    // Kein Token (oder kein nutzbarer Stil): frei verfügbare Kacheln.
-    //  - Satellit: Esri World Imagery (kein CARTO-Pendant).
-    //  - Sonst: CARTO-Basiskarte des Stils bzw. Voyager als Ersatz.
-    if (style === 'satellite') {
-      const target =
-        `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer` +
-        `/tile/${zoom}/${parsedY.y}/${column}`;
-      return NextResponse.redirect(target, {
-        status: 307,
-        headers: { 'Cache-Control': CACHE_CONTROL },
-      });
-    }
-    const carto = STYLES[style].carto ?? 'rastertiles/voyager';
-    const subdomain = CARTO_SUBDOMAINS[(column + parsedY.y) % CARTO_SUBDOMAINS.length]!;
-    const target =
-      `https://${subdomain}.basemaps.cartocdn.com/${carto}` +
-      `/${zoom}/${column}/${parsedY.y}${suffix}.png`;
-    return NextResponse.redirect(target, {
-      status: 307,
-      headers: { 'Cache-Control': CACHE_CONTROL },
-    });
+    return fallbackRedirect(style, labels, zoom, column, parsedY.y, suffix);
   }
 
   const upstream =
@@ -114,7 +147,9 @@ export async function GET(
       signal: request.signal,
     });
     if (!response.ok) {
-      return NextResponse.json({ error: 'TILE_UNAVAILABLE' }, { status: 502 });
+      // Mapbox liefert nicht (Kontingent, Token-Rechte …) → freie Quelle
+      // statt grauer Karte.
+      return fallbackRedirect(style, labels, zoom, column, parsedY.y, suffix);
     }
     return new NextResponse(response.body, {
       status: 200,
@@ -124,6 +159,6 @@ export async function GET(
       },
     });
   } catch {
-    return NextResponse.json({ error: 'TILE_UNAVAILABLE' }, { status: 502 });
+    return fallbackRedirect(style, labels, zoom, column, parsedY.y, suffix);
   }
 }

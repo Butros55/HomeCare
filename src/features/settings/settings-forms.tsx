@@ -1,7 +1,7 @@
 'use client';
 
 import type { TaxEmploymentType } from '@prisma/client';
-import { Map as MapIcon, Monitor, Moon, Sun } from 'lucide-react';
+import { Monitor, Moon, Sun } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useTheme } from '@/components/layout/theme-provider';
 import * as React from 'react';
@@ -21,11 +21,7 @@ import {
 } from '@/server/actions/preference-actions';
 import { updateOrganizationAction } from '@/server/actions/settings-actions';
 import { AddressAutocomplete } from '@/features/geo/address-autocomplete';
-import {
-  MAP_STYLE_OPTIONS,
-  normalizeCustomStyleRef,
-  useMapStyle,
-} from '@/features/map/map-style';
+import { MapAppearanceCard, type MapPreviewCenter } from '@/features/map/map-appearance';
 
 // ---------------------------- Profil ---------------------------------------
 
@@ -642,7 +638,7 @@ export function PasswordSettings() {
 
 // -------------------------- Darstellung ------------------------------------
 
-export function AppearanceSettings() {
+export function AppearanceSettings({ mapCenter }: { mapCenter: MapPreviewCenter | null }) {
   const { theme, setTheme } = useTheme();
   // Hydration-sicher: Theme erst nach Mount anzeigen (useSyncExternalStore-Muster).
   const mounted = React.useSyncExternalStore(
@@ -691,81 +687,9 @@ export function AppearanceSettings() {
         </PanelBody>
       </Panel>
 
-      <MapStyleSettings mounted={mounted} />
+      {/* Karten-Vorschau mit „Bearbeiten"-Popup (Einstellungen links, Karte rechts). */}
+      <MapAppearanceCard center={mapCenter} />
     </>
-  );
-}
-
-/**
- * Kartendarstellung: Stil aller Karten in der Anwendung (Routen, Kunden,
- * Mein Tag). Wird pro Gerät gespeichert und wirkt sofort – Kacheln laufen
- * weiterhin über den Server-Proxy, Schlüssel bleiben serverseitig.
- */
-function MapStyleSettings({ mounted }: { mounted: boolean }) {
-  const { style, customRef, setStyle, setCustomRef } = useMapStyle();
-  const customValid = customRef.trim() === '' || normalizeCustomStyleRef(customRef) !== null;
-
-  return (
-    <Panel>
-      <PanelHeader>
-        <PanelTitle>
-          <span className="inline-flex items-center gap-1.5">
-            <MapIcon className="size-4 text-[var(--color-brand)]" aria-hidden />
-            Kartendarstellung
-          </span>
-        </PanelTitle>
-      </PanelHeader>
-      <PanelBody className="space-y-3">
-        <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-          Gilt für alle Karten in der Anwendung und wird auf diesem Gerät gespeichert.
-          „Automatisch“ folgt dem Farbschema.
-        </p>
-        <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Kartenstil">
-          {MAP_STYLE_OPTIONS.map((option) => {
-            const active = mounted && style === option.value;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                onClick={() => setStyle(option.value)}
-                className={cn(
-                  'flex min-w-28 flex-col items-center gap-1 rounded-[var(--radius-lg)] border px-4 py-3 transition-colors',
-                  active
-                    ? 'border-[var(--color-brand)] bg-[var(--color-brand-subtle)] text-[var(--color-brand)]'
-                    : 'border-[var(--color-line)] text-[var(--color-ink-muted)] hover:border-[var(--color-line-strong)]',
-                )}
-              >
-                <span className="text-[length:var(--text-sm)] font-medium">{option.label}</span>
-                <span className="text-[length:var(--text-2xs)] opacity-80">{option.hint}</span>
-              </button>
-            );
-          })}
-        </div>
-        {mounted && style === 'custom' ? (
-          <div className="max-w-xl">
-            <Label htmlFor="map-custom-style">Eigener Mapbox-Stil</Label>
-            <Input
-              id="map-custom-style"
-              placeholder="mapbox://styles/dein-name/stil-id"
-              value={customRef}
-              invalid={!customValid}
-              onChange={(event) => setCustomRef(event.target.value)}
-            />
-            <FieldHint>
-              Stil-URL aus Mapbox Studio („Share“ → Style URL) oder direkt „name/stil-id“.
-              Wirkt nur, wenn auf dem Server ein Mapbox-Schlüssel hinterlegt ist – sonst
-              zeigt die Karte die Standard-Darstellung.
-            </FieldHint>
-          </div>
-        ) : null}
-        <p className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
-          Straßen- und Satellitenstil nutzen Mapbox, wenn ein Schlüssel hinterlegt ist, und
-          sonst freie Kartenquellen.
-        </p>
-      </PanelBody>
-    </Panel>
   );
 }
 

@@ -91,6 +91,32 @@ export default async function SettingsPage({
       }
     : null;
 
+  // Ort für die Karten-Vorschau (Darstellung): Zuhause, ersatzweise das Büro.
+  const homeCoords = (ctx.employee?.startLocation ?? null) as {
+    latitude?: number;
+    longitude?: number;
+    label?: string;
+  } | null;
+  const officeCoords = (ctx.organization.defaultStartLocation ?? null) as {
+    latitude?: number;
+    longitude?: number;
+    label?: string;
+  } | null;
+  const mapCenter =
+    homeCoords?.latitude != null && homeCoords.longitude != null
+      ? {
+          latitude: homeCoords.latitude,
+          longitude: homeCoords.longitude,
+          label: homeCoords.label ?? 'Zuhause',
+        }
+      : officeCoords?.latitude != null && officeCoords.longitude != null
+        ? {
+            latitude: officeCoords.latitude,
+            longitude: officeCoords.longitude,
+            label: officeCoords.label ?? 'Büro',
+          }
+        : null;
+
   return (
     <>
       <PageHeader title="Einstellungen" description={ctx.organization.name}>
@@ -153,7 +179,7 @@ export default async function SettingsPage({
             <PasswordSettings />
           </>
         ) : null}
-        {tab === 'darstellung' ? <AppearanceSettings /> : null}
+        {tab === 'darstellung' ? <AppearanceSettings mapCenter={mapCenter} /> : null}
         {tab === 'benachrichtigungen' ? (
           <NotificationPrefsSettings
             initial={(preference?.notificationPrefs as Record<string, boolean> | null) ?? {}}

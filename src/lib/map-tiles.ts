@@ -34,20 +34,11 @@ export const CARTO_TILES: Record<MapTheme, string> = {
 
 const CARTO_ATTRIBUTION = `${OSM_ATTRIBUTION} &copy; CARTO`;
 
-/**
- * Der Proxy entscheidet serverseitig, ob Mapbox verfügbar ist – der Client
- * kennt weder Token noch Anbieter.
- */
-const PROXY_TILES: Record<MapTheme, string> = {
-  light: '/api/map/tiles/light/{z}/{x}/{y}{r}',
-  dark: '/api/map/tiles/dark/{z}/{x}/{y}{r}',
-};
-
 /** Persönliche Kartendarstellung (Einstellungen → Darstellung). */
 export interface MapStylePreference {
-  style: 'auto' | 'light' | 'dark' | 'streets' | 'satellite' | 'custom';
-  /** Nur für `custom`: Mapbox-Stil als „username/style-id“. */
-  customRef?: string | null;
+  style: 'auto' | 'light' | 'dark' | 'streets' | 'outdoors' | 'satellite';
+  /** Beschriftungen anzeigen (Standard: ja). */
+  labels?: boolean;
 }
 
 const MAPBOX_ATTRIBUTION = `${OSM_ATTRIBUTION} &copy; CARTO &copy; Mapbox`;
@@ -68,30 +59,20 @@ export function tileConfiguration(
   }
 
   const style = preference?.style ?? 'auto';
-
-  // Eigener Mapbox-Stil: die Referenz wandert als geprüfter Query-Parameter
-  // zum Proxy – der Schlüssel bleibt serverseitig.
-  if (style === 'custom' && preference?.customRef) {
-    return {
-      url: `/api/map/tiles/custom/{z}/{x}/{y}{r}?ref=${encodeURIComponent(preference.customRef)}`,
-      attribution: MAPBOX_ATTRIBUTION,
-      maxZoom: 20,
-    };
-  }
-  if (style === 'streets' || style === 'satellite') {
-    return {
-      url: `/api/map/tiles/${style}/{z}/{x}/{y}{r}`,
-      attribution: style === 'satellite' ? SATELLITE_ATTRIBUTION : MAPBOX_ATTRIBUTION,
-      maxZoom: 20,
-    };
-  }
-  const resolved: MapTheme = style === 'light' || style === 'dark' ? style : theme;
+  const resolved = style === 'auto' ? theme : style;
+  // Beschriftungen aus? Der Proxy wählt dann die passende „nolabels“-Variante.
+  const labelsQuery = preference?.labels === false ? '?labels=0' : '';
 
   // Ohne eigenen Tile-Server läuft alles über den Proxy: Er liefert Mapbox,
-  // wenn ein Token hinterlegt ist, und verweist sonst direkt auf CARTO.
+  // wenn ein Token hinterlegt ist, und verweist sonst auf freie Kartenquellen.
   return {
-    url: PROXY_TILES[resolved],
-    attribution: process.env.NEXT_PUBLIC_MAP_ATTRIBUTION ?? CARTO_ATTRIBUTION,
+    url: `/api/map/tiles/${resolved}/{z}/{x}/{y}{r}${labelsQuery}`,
+    attribution:
+      resolved === 'satellite'
+        ? SATELLITE_ATTRIBUTION
+        : resolved === 'streets' || resolved === 'outdoors'
+          ? MAPBOX_ATTRIBUTION
+          : (process.env.NEXT_PUBLIC_MAP_ATTRIBUTION ?? CARTO_ATTRIBUTION),
     maxZoom: 20,
   };
 }

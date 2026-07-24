@@ -7,7 +7,7 @@ import * as React from 'react';
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
 
 import { useTheme } from '@/components/layout/theme-provider';
-import { normalizeCustomStyleRef, useMapStyle } from '@/features/map/map-style';
+import { routeWeightPx, useMapSettings } from '@/features/map/map-style';
 import { tileConfiguration, type MapTheme } from '@/lib/map-tiles';
 
 export interface MapMarker {
@@ -114,12 +114,11 @@ export function LeafletMap({
     markers.length > 0 ? [markers[0]!.latitude, markers[0]!.longitude] : [51.9607, 7.6261];
   const hasRoad = Boolean(roadPath && roadPath.length > 1);
   const mapTheme = useResolvedTheme();
-  // Persönliche Kartendarstellung (Einstellungen → Darstellung).
-  const { style, customRef } = useMapStyle();
-  const tiles = tileConfiguration(mapTheme, {
-    style,
-    customRef: normalizeCustomStyleRef(customRef),
-  });
+  // Persönliche Kartendarstellung (Einstellungen → Darstellung) – wirkt sofort.
+  const { settings } = useMapSettings();
+  const tiles = tileConfiguration(mapTheme, { style: settings.style, labels: settings.labels });
+  const routeColor = settings.routeColor;
+  const routeWeight = routeWeightPx(settings.routeWeight);
 
   return (
     <MapContainer
@@ -140,22 +139,33 @@ export function LeafletMap({
       />
 
       {/* Echte Fahrstrecke: breite helle Kontur unter der farbigen Linie,
-          damit sie auf jedem Kartenhintergrund lesbar bleibt. */}
+          damit sie auf jedem Kartenhintergrund lesbar bleibt. Farbe und
+          Stärke kommen aus der persönlichen Kartendarstellung. */}
       {hasRoad ? (
         <>
           <Polyline
             positions={roadPath!}
-            pathOptions={{ color: '#ffffff', weight: 9, opacity: 0.9, lineJoin: 'round' }}
+            pathOptions={{
+              color: '#ffffff',
+              weight: routeWeight + 4,
+              opacity: 0.9,
+              lineJoin: 'round',
+            }}
           />
           <Polyline
             positions={roadPath!}
-            pathOptions={{ color: '#6c5ce7', weight: 5, opacity: 0.95, lineJoin: 'round' }}
+            pathOptions={{ color: routeColor, weight: routeWeight, opacity: 0.95, lineJoin: 'round' }}
           />
         </>
       ) : polyline && polyline.length > 1 ? (
         <Polyline
           positions={polyline}
-          pathOptions={{ color: '#6c5ce7', weight: 3, opacity: 0.7, dashArray: '6 8' }}
+          pathOptions={{
+            color: routeColor,
+            weight: Math.max(2, routeWeight - 2),
+            opacity: 0.7,
+            dashArray: '6 8',
+          }}
         />
       ) : null}
       {markers.map((marker) => (
