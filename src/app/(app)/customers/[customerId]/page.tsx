@@ -1,4 +1,4 @@
-import { Clock, Pencil } from 'lucide-react';
+import { Pencil } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
@@ -6,7 +6,7 @@ import { notFound } from 'next/navigation';
 import { PageHeader } from '@/components/layout/page-header';
 import { Button } from '@/components/ui/button';
 import { EntityAvatar } from '@/components/ui/misc';
-import { EmptyState, Panel, PanelBody, PanelHeader, PanelTitle, StatTile } from '@/components/ui/panel';
+import { Panel, PanelBody, PanelHeader, PanelTitle, StatTile } from '@/components/ui/panel';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Table, TableWrapper, TBody, Td, Th, THead, Tr } from '@/components/ui/table';
 import { formatDate, formatDateTime, toDateInputValue } from '@/lib/dates';
