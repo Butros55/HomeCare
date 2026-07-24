@@ -645,18 +645,24 @@ export async function materializeSeries(seriesId: string, until?: Date): Promise
   ]);
 
   const locationAddressId = series.customer.addresses[0]?.id ?? null;
-  let created = 0;
-  for (const occurrenceDate of occurrenceDates) {
-    const key = occurrenceDate.toISOString().slice(0, 10);
-    if (skip.has(key)) continue;
-    const { startAt, endAt } = occurrenceTimes(
-      occurrenceDate,
-      series.defaultStartTime,
-      series.defaultDurationMinutes,
-      series.recurrenceTimezone,
-    );
-    await db.appointment.create({
-      data: {
+  const assignmentStatus = series.defaultEmployeeId
+    ? series.organization.soloMode
+      ? ('ACCEPTED' as const)
+      : ('ASSIGNED' as const)
+    : ('UNASSIGNED' as const);
+
+  // Gebündelt anlegen (ein createMany statt N Einzel-Inserts) – deutlich
+  // schneller und schonender bei weit vormaterialisierten Serien.
+  const rows = occurrenceDates
+    .filter((occurrenceDate) => !skip.has(occurrenceDate.toISOString().slice(0, 10)))
+    .map((occurrenceDate) => {
+      const { startAt, endAt } = occurrenceTimes(
+        occurrenceDate,
+        series.defaultStartTime,
+        series.defaultDurationMinutes,
+        series.recurrenceTimezone,
+      );
+      return {
         organizationId: series.organizationId,
         customerId: series.customerId,
         seriesId: series.id,
@@ -667,24 +673,21 @@ export async function materializeSeries(seriesId: string, until?: Date): Promise
         startAt,
         endAt,
         durationMinutes: series.defaultDurationMinutes,
-        status: 'PLANNED',
-        assignmentStatus: series.defaultEmployeeId
-          ? series.organization.soloMode
-            ? 'ACCEPTED'
-            : 'ASSIGNED'
-          : 'UNASSIGNED',
+        status: 'PLANNED' as const,
+        assignmentStatus,
         locationAddressId,
         routeRelevant: true,
-      },
+      };
     });
-    created += 1;
+  if (rows.length > 0) {
+    await db.appointment.createMany({ data: rows });
   }
 
   await db.appointmentSeries.update({
     where: { id: series.id },
     data: { materializedUntil: rangeEnd },
   });
-  return created;
+  return rows.length;
 }
 
 /** Horizont für alle aktiven Serien der Organisation sicherstellen (Kalender-Feed). */
@@ -944,7 +947,12 @@ export async function updateAppointment(
         },
         tx,
       );
-    });
+    },
+    // Serien können weit (bis ~400 Tage) vormaterialisiert sein; das Löschen der
+    // künftigen Vorkommen samt Routen-Stopp-Cascades kann den Prisma-Default von
+    // 5 s sprengen (→ P2028 „Transaction timed out" = „Unerwarteter Fehler").
+    { timeout: 30_000, maxWait: 8_000 },
+    );
     await materializeSeries(series.id);
   }
 

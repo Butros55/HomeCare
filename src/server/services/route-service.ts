@@ -4,8 +4,8 @@ import type { Employee, Prisma } from '@prisma/client';
 
 import { dayPeriodInZone, fromDateInputValue } from '@/lib/dates';
 import type { StructuredLocation } from '@/lib/geo';
-import type { RouteStopInput } from '@/lib/route-optimizer';
-import { planRouteWithAutoDeparture } from '@/lib/route-suggestions';
+import { computeSchedule, type Matrix, type RouteStopInput } from '@/lib/route-optimizer';
+import { planRouteWithAutoDeparture, sliceMatrix } from '@/lib/route-suggestions';
 import { writeAuditLog } from '@/server/audit';
 import { db } from '@/server/db';
 import { AppError } from '@/server/errors';
@@ -130,6 +130,23 @@ export interface RouteCandidate {
   routeNotes: string | null;
 }
 
+/**
+ * Termin für die Routenplanung bereits vergangen? An vergangene Zeiten führt
+ * keine Route: Ein FESTER Termin, dessen Startzeit vorbei ist, und ein FLEXIBLER,
+ * dessen Zeitfenster ganz abgelaufen ist, werden nicht mehr eingeplant (sie
+ * würden die Route sonst nur unzulässig machen). Für künftige Tage trifft das
+ * nie zu, weil dort alle Startzeiten in der Zukunft liegen.
+ */
+export function isPastForRoutePlanning(
+  appointment: { isFlexible: boolean; startAt: Date; endAt: Date; latestEndAt: Date | null },
+  now: Date,
+): boolean {
+  if (appointment.isFlexible) {
+    return (appointment.latestEndAt ?? appointment.endAt).getTime() <= now.getTime();
+  }
+  return appointment.startAt.getTime() <= now.getTime();
+}
+
 export async function getRoutePlanningData(employeeId: string, dateInput: string) {
   const ctx = await requireOrganizationMembership();
   const isOwn = ctx.employee?.id === employeeId;
@@ -152,7 +169,9 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
         deletedAt: null,
         assignedEmployeeId: employeeId,
         routeRelevant: true,
-        status: { in: ['PLANNED', 'CONFIRMED', 'IN_PROGRESS'] },
+        // Abgeschlossene bewusst mitladen: sie bleiben in einer gespeicherten
+        // Route sichtbar (erledigt), werden aber nicht neu eingeplant.
+        status: { in: ['PLANNED', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED'] },
         startAt: { gte: day.start, lt: day.end },
       },
       include: {
@@ -222,16 +241,25 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
   const home = locationFromJson(employee.startLocation);
   const office = locationFromJson(ctx.organization.defaultStartLocation);
 
-  const assigned = assignedAppointments.map((a) => toCandidate(a, true));
+  // Nur noch planbare (nicht abgeschlossene, nicht vergangene) Termine sind
+  // Kandidaten und Standardauswahl – an vergangene Zeiten führt keine Route.
+  const now = new Date();
+  const routableAppointments = assignedAppointments.filter(
+    (a) => a.status !== 'COMPLETED' && !isPastForRoutePlanning(a, now),
+  );
+  const assigned = routableAppointments.map((a) => toCandidate(a, true));
   const suggestions = unassignedAppointments.map((a) => toCandidate(a, false));
 
   /**
    * Gespeicherte Stopps können auf inzwischen gelöschte oder abgesagte Termine
    * zeigen. Sie werden hier konsequent ausgeblendet – sonst zählt der Planer
    * Geisterstopps mit („3/2 gewählt") und man bekommt sie nicht mehr abgewählt.
+   * Abgeschlossene/vergangene Termine gelten dagegen als „lebend": eine
+   * gespeicherte Route mit inzwischen erledigten Stopps bleibt dadurch sichtbar,
+   * statt komplett zu verschwinden.
    */
   const livingAppointmentIds = new Set([
-    ...assigned.map((candidate) => candidate.appointmentId),
+    ...assignedAppointments.map((a) => a.id),
     ...suggestions.map((candidate) => candidate.appointmentId),
   ]);
   const livingStops = (existingPlan?.stops ?? []).filter((stop) =>
@@ -406,7 +434,16 @@ export async function computeRoutePlan(input: ComputeRouteInput) {
     throw new AppError('ROUTE_NOT_FEASIBLE', { message: 'Keine Termine für die Route ausgewählt.' });
   }
 
-  const missingCoords = appointments.filter(
+  // Vergangene (fixe) und abgeschlossene Termine nie einplanen – an vergangene
+  // Zeiten führt keine Route; sie würden sie sonst nur unzulässig machen. Sie
+  // werden still übersprungen (Hinweis unten), statt alles zu blockieren.
+  const now = new Date();
+  const planable = appointments.filter(
+    (a) => a.status !== 'COMPLETED' && !isPastForRoutePlanning(a, now),
+  );
+  const skippedPastCount = appointments.length - planable.length;
+
+  const missingCoords = planable.filter(
     (a) => a.locationAddress?.latitude == null || a.locationAddress?.longitude == null,
   );
   if (missingCoords.length > 0) {
@@ -417,10 +454,15 @@ export async function computeRoutePlan(input: ComputeRouteInput) {
 
   // Reihenfolge der Eingabe beibehalten (relevant für manuelle Sortierung).
   const ordered = input.appointmentIds
-    .map((id) => appointments.find((a) => a.id === id))
-    .filter((a): a is (typeof appointments)[number] => Boolean(a));
+    .map((id) => planable.find((a) => a.id === id))
+    .filter((a): a is (typeof planable)[number] => Boolean(a));
+  if (ordered.length === 0) {
+    throw new AppError('ROUTE_NOT_FEASIBLE', {
+      message: 'Alle gewählten Termine liegen in der Vergangenheit oder sind bereits abgeschlossen.',
+    });
+  }
 
-  const stops: RouteStopInput[] = ordered.map((appointment) => ({
+  const stopInputFor = (appointment: (typeof ordered)[number]): RouteStopInput => ({
     id: appointment.id,
     latitude: appointment.locationAddress!.latitude!,
     longitude: appointment.locationAddress!.longitude!,
@@ -430,15 +472,18 @@ export async function computeRoutePlan(input: ComputeRouteInput) {
       ? (appointment.earliestStartAt ?? appointment.startAt)
       : null,
     latestEndAt: appointment.isFlexible ? appointment.latestEndAt : null,
-  }));
+  });
+  const fullStops = ordered.map(stopInputFor);
 
+  // Volle Fahrzeitmatrix über [Start, ...alle Stopps, Ziel] – EINE Anfrage; eine
+  // ggf. reduzierte Rest-Route wird nur neu zugeschnitten (kein zweiter Aufruf).
   const points = [
     { latitude: origin.latitude, longitude: origin.longitude },
-    ...stops.map((s) => ({ latitude: s.latitude, longitude: s.longitude })),
+    ...fullStops.map((s) => ({ latitude: s.latitude, longitude: s.longitude })),
     { latitude: end.latitude, longitude: end.longitude },
   ];
   const legs = await computeRouteMatrixCached(points);
-  const matrix = {
+  const fullMatrix: Matrix = {
     travelSeconds: legs.map((row) => row.map((leg) => leg.travelSeconds)),
     distanceMeters: legs.map((row) => row.map((leg) => leg.distanceMeters)),
   };
@@ -446,52 +491,88 @@ export async function computeRoutePlan(input: ComputeRouteInput) {
   // Simulationsbeginn: 00:00 des Planungstags (Org-Wandzeit) – die Engine
   // verschiebt die Abfahrt anschließend so spät wie möglich.
   const day = dayPeriodInZone(date, ctx.organization.timezone);
-
   const timeFormatter = new Intl.DateTimeFormat('de-DE', {
     timeZone: ctx.organization.timezone,
     hour: '2-digit',
     minute: '2-digit',
   });
+  const formatTime = (value: Date) => timeFormatter.format(value);
 
-  const planInput = {
-    stops,
-    matrix,
-    bufferMinutes: input.bufferMinutes,
-    returnToEnd: input.returnToStart,
-    earliestDepartureAt: day.start,
-    formatTime: (value: Date) => timeFormatter.format(value),
+  // Eine Teilmenge der Stopps (Indizes in `ordered`) planen – nutzt die
+  // zugeschnittene Matrix statt einer neuen Routendienst-Anfrage.
+  const planForIndices = (keepIdx: number[]) => {
+    const subStops = keepIdx.map((i) => fullStops[i]!);
+    const matrix = sliceMatrix(fullMatrix, [0, ...keepIdx.map((i) => i + 1), points.length - 1]);
+    const planInput = {
+      stops: subStops,
+      matrix,
+      bufferMinutes: input.bufferMinutes,
+      returnToEnd: input.returnToStart,
+      earliestDepartureAt: day.start,
+      formatTime,
+    };
+    if (input.manualOrder) {
+      const order = subStops.map((_, i) => i);
+      const probe = computeSchedule(order, { ...planInput, departureAt: day.start });
+      const first = probe.stops[0];
+      const shiftSeconds = first ? Math.max(0, first.waitSeconds - input.bufferMinutes * 60) : 0;
+      const latestDepartureAt = new Date(day.start.getTime() + shiftSeconds * 1000);
+      const schedule =
+        shiftSeconds > 0
+          ? computeSchedule(order, { ...planInput, departureAt: latestDepartureAt })
+          : probe;
+      const lastEnd =
+        schedule.returnArrivalAt ??
+        schedule.stops[schedule.stops.length - 1]?.serviceEndAt ??
+        latestDepartureAt;
+      return {
+        ...schedule,
+        order,
+        latestDepartureAt,
+        workdaySeconds: Math.max(
+          0,
+          Math.round((lastEnd.getTime() - latestDepartureAt.getTime()) / 1000),
+        ),
+      };
+    }
+    return planRouteWithAutoDeparture(planInput);
   };
 
-  let result;
-  if (input.manualOrder) {
-    const { computeSchedule } = await import('@/lib/route-optimizer');
-    const order = stops.map((_, i) => i);
-    const probe = computeSchedule(order, { ...planInput, departureAt: day.start });
-    const first = probe.stops[0];
-    const shiftSeconds = first ? Math.max(0, first.waitSeconds - input.bufferMinutes * 60) : 0;
-    const latestDepartureAt = new Date(day.start.getTime() + shiftSeconds * 1000);
-    const schedule =
-      shiftSeconds > 0
-        ? computeSchedule(order, { ...planInput, departureAt: latestDepartureAt })
-        : probe;
-    const lastEnd =
-      schedule.returnArrivalAt ??
-      schedule.stops[schedule.stops.length - 1]?.serviceEndAt ??
-      latestDepartureAt;
-    result = {
-      ...schedule,
-      order,
-      latestDepartureAt,
-      workdaySeconds: Math.max(
-        0,
-        Math.round((lastEnd.getTime() - latestDepartureAt.getTime()) / 1000),
-      ),
-    };
-  } else {
-    result = planRouteWithAutoDeparture(planInput);
+  const byId = new Map(ordered.map((a) => [a.id, a] as const));
+
+  // Best-effort: nicht mehr passende Termine (verletzte feste Zeiten / Fenster)
+  // fallen der Reihe nach raus, bis die Route zulässig ist – statt die ganze
+  // Planung zu blockieren. Flexible Termine ohne Fensterverletzung passen immer.
+  let keepIdx = ordered.map((_, i) => i);
+  let result = planForIndices(keepIdx);
+  const droppedNames: string[] = [];
+  let guard = 0;
+  while (!result.feasible && guard < ordered.length) {
+    guard += 1;
+    const violatedIds = new Set(result.stops.filter((s) => s.warning).map((s) => s.id));
+    if (violatedIds.size === 0) break;
+    const before = keepIdx.length;
+    keepIdx = keepIdx.filter((i) => !violatedIds.has(fullStops[i]!.id));
+    for (const id of violatedIds) {
+      const appointment = byId.get(id);
+      if (appointment) droppedNames.push(`${appointment.customer.firstName} ${appointment.customer.lastName}`);
+    }
+    if (keepIdx.length === before) break;
+    result = planForIndices(keepIdx);
   }
 
-  const byId = new Map(ordered.map((a) => [a.id, a] as const));
+  const extraWarnings: string[] = [];
+  if (skippedPastCount > 0) {
+    extraWarnings.push(
+      `${skippedPastCount} vergangene oder abgeschlossene Termin(e) wurden nicht eingeplant.`,
+    );
+  }
+  if (droppedNames.length > 0) {
+    extraWarnings.push(
+      `Nicht mehr passende Termine wurden aus der Route entfernt: ${[...new Set(droppedNames)].join(', ')}.`,
+    );
+  }
+
   return {
     provider: getRoutingProvider().name,
     originType: input.originType,
@@ -505,7 +586,7 @@ export async function computeRoutePlan(input: ComputeRouteInput) {
     totalServiceMinutes: result.totalServiceMinutes,
     totalWaitSeconds: result.totalWaitSeconds,
     workdaySeconds: result.workdaySeconds,
-    warnings: result.warnings,
+    warnings: [...extraWarnings, ...result.warnings],
     feasible: result.feasible,
     stops: result.stops.map((stop) => {
       const appointment = byId.get(stop.id)!;

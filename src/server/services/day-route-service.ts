@@ -48,6 +48,7 @@ import {
   type DemandCandidate,
 } from '@/server/services/route-suggestion-service';
 import {
+  isPastForRoutePlanning,
   resolveRouteOrigin,
   type GpsCoordinate,
   type RouteOriginType,
@@ -290,8 +291,14 @@ export async function generateDayRoutes(
     },
     orderBy: { startAt: 'asc' },
   });
+  // Vergangene fixe Termine gehören nicht mehr in die (heutige) Route – sie
+  // würden sie nur unzulässig machen. Für künftige Tage trifft das nie zu.
+  const now = new Date();
   const routable = dayAppointments.filter(
-    (a) => a.locationAddress?.latitude != null && a.locationAddress?.longitude != null,
+    (a) =>
+      a.locationAddress?.latitude != null &&
+      a.locationAddress?.longitude != null &&
+      !isPastForRoutePlanning(a, now),
   );
   const baseStops: RouteStopInput[] = routable.map((appointment) => ({
     id: appointment.id,
@@ -304,7 +311,7 @@ export async function generateDayRoutes(
       : null,
     latestEndAt: appointment.isFlexible ? appointment.latestEndAt : null,
   }));
-  const baseServiceMinutes = dayAppointments.reduce((sum, a) => sum + a.durationMinutes, 0);
+  const baseServiceMinutes = routable.reduce((sum, a) => sum + a.durationMinutes, 0);
   const baseInfo = new Map(
     routable.map((a) => [
       a.id,
@@ -712,8 +719,14 @@ export async function acceptDayRoute(input: {
     include: { locationAddress: true },
     orderBy: { startAt: 'asc' },
   });
+  // Wie beim Generieren: vergangene fixe Termine bleiben draußen, damit die
+  // Re-Planung nicht an einer längst verstrichenen Startzeit scheitert.
+  const now = new Date();
   const routable = baseAppointments.filter(
-    (a) => a.locationAddress?.latitude != null && a.locationAddress?.longitude != null,
+    (a) =>
+      a.locationAddress?.latitude != null &&
+      a.locationAddress?.longitude != null &&
+      !isPastForRoutePlanning(a, now),
   );
   const baseStops: RouteStopInput[] = routable.map((appointment) => ({
     id: appointment.id,

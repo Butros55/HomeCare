@@ -105,9 +105,13 @@ export function AllocateHoursDialog({
   const parsed = parseDurationInput(durationText);
   const minutes = parsed.ok ? parsed.minutes : null;
 
+  // Ohne Stundenbudgets (Org-Modus) gibt es kein Guthaben-Limit → keine Deckelung,
+  // keine „Verfügbar/Kontostand"-Zahlen (die wären Sentinel/0).
+  const noLimit = context !== null && !context.hourBudgetsEnabled && context.mode === 'org';
   const available = context?.availableMinutes ?? 0;
-  const overBudget = context !== null && minutes !== null && minutes > available;
-  const remainingAfter = context !== null && minutes !== null ? available - minutes : null;
+  const overBudget = !noLimit && context !== null && minutes !== null && minutes > available;
+  const remainingAfter =
+    noLimit ? null : context !== null && minutes !== null ? available - minutes : null;
 
   const submit = () => {
     if (!minutes || !recipient) return;
@@ -151,24 +155,30 @@ export function AllocateHoursDialog({
               </p>
             ) : null}
 
-            <div className="grid grid-cols-2 gap-2 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5 text-center">
-              <div>
-                <div className="text-[10px] text-[var(--color-ink-subtle)] uppercase">
-                  {context.mode === 'pool' ? 'Dein Pool' : 'Verfügbar'}
+            {noLimit ? (
+              <p className="rounded-[var(--radius-md)] bg-[var(--color-info-soft)] px-3 py-2 text-[length:var(--text-xs)] text-[var(--color-info)]">
+                Stundenbudgets sind deaktiviert – die Zuweisung ist ohne Guthaben-Limit möglich.
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5 text-center">
+                <div>
+                  <div className="text-[10px] text-[var(--color-ink-subtle)] uppercase">
+                    {context.mode === 'pool' ? 'Dein Pool' : 'Verfügbar'}
+                  </div>
+                  <div className="tabular text-[length:var(--text-sm)] font-semibold">
+                    {formatMinutesAsHours(available)}
+                  </div>
                 </div>
-                <div className="tabular text-[length:var(--text-sm)] font-semibold">
-                  {formatMinutesAsHours(available)}
+                <div>
+                  <div className="text-[10px] text-[var(--color-ink-subtle)] uppercase">
+                    Kontostand
+                  </div>
+                  <div className="tabular text-[length:var(--text-sm)] font-semibold">
+                    {formatMinutesAsHours(context.balanceMinutes)}
+                  </div>
                 </div>
               </div>
-              <div>
-                <div className="text-[10px] text-[var(--color-ink-subtle)] uppercase">
-                  Kontostand
-                </div>
-                <div className="tabular text-[length:var(--text-sm)] font-semibold">
-                  {formatMinutesAsHours(context.balanceMinutes)}
-                </div>
-              </div>
-            </div>
+            )}
 
             <div>
               <Label htmlFor="alloc-employee" required>
@@ -327,6 +337,8 @@ function ConfirmSummary({
   const missingAfter = recipient
     ? Math.max(0, recipient.missingMonthMinutes - minutes)
     : null;
+  // Ohne Budget-Limit ist „Danach verfügbar" bedeutungslos.
+  const noLimit = !context.hourBudgetsEnabled && context.mode === 'org';
 
   return (
     <div className="space-y-3 text-[length:var(--text-sm)]">
@@ -361,11 +373,13 @@ function ConfirmSummary({
           <span className="tabular">{formatMinutesAsHours(minutes)}</span>
         </div>
       </div>
-      <dl className="grid grid-cols-2 gap-2">
-        <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5 text-center">
-          <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">Danach verfügbar</dt>
-          <dd className="tabular font-semibold">{formatMinutesAsHours(remainingAfter)}</dd>
-        </div>
+      <dl className={noLimit ? 'grid grid-cols-1 gap-2' : 'grid grid-cols-2 gap-2'}>
+        {!noLimit ? (
+          <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5 text-center">
+            <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">Danach verfügbar</dt>
+            <dd className="tabular font-semibold">{formatMinutesAsHours(remainingAfter)}</dd>
+          </div>
+        ) : null}
         <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5 text-center">
           <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">
             Fehlende Zielstunden danach
