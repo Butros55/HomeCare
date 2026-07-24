@@ -153,6 +153,23 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
     [refetch],
   );
 
+  // Externe Änderungen (z. B. „Schnell anlegen" aus der Topbar) sofort einspielen –
+  // gezielt die betroffenen Termine nachladen, bei serienweiten Änderungen refetchen.
+  React.useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail as
+        | { seriesWide?: boolean; appointmentIds?: string[] }
+        | undefined;
+      if (detail?.appointmentIds && detail.appointmentIds.length > 0 && !detail.seriesWide) {
+        upsertEvents(detail.appointmentIds);
+      } else {
+        refetch();
+      }
+    };
+    window.addEventListener('hcp:appointments-changed', handler);
+    return () => window.removeEventListener('hcp:appointments-changed', handler);
+  }, [upsertEvents, refetch]);
+
   const proEvents = React.useMemo(
     () => events.map((event) => toProEvent(event, props.soloMode)),
     [events, props.soloMode],

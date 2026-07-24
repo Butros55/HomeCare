@@ -119,8 +119,11 @@ export function QuickCreateMenu({
           employees={context.employees}
           fixedEmployeeId={soloMode ? context.ownEmployeeId : null}
           soloMode={soloMode}
-          onChanged={() => {
+          onChanged={(opts) => {
             closeDialog();
+            // Offenen Kalender (client-seitiger Feed) sofort aktualisieren –
+            // ohne harten Reload. router.refresh() deckt Server-Views (Dashboard) ab.
+            window.dispatchEvent(new CustomEvent('hcp:appointments-changed', { detail: opts }));
             router.refresh();
           }}
         />

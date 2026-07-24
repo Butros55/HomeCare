@@ -1,5 +1,6 @@
 import 'server-only';
 
+import type { Prisma } from '@prisma/client';
 import { addDays } from 'date-fns';
 
 import { SERIES_MATERIALIZATION_DAYS } from '@/lib/app-config';
@@ -23,6 +24,7 @@ import {
   expandOccurrenceDates,
   isValidRecurrenceRule,
   occurrenceTimes,
+  parseRuleToForm,
   type RecurrenceOptions,
 } from '@/lib/recurrence';
 import { isAppointmentCompletableStatus } from '@/lib/status-maps';
@@ -82,6 +84,18 @@ function parseDateInput(value: string): { y: number; m: number; d: number } {
   const [y, m, d] = value.split('-').map(Number);
   if (!y || !m || !d) throw new AppError('VALIDATION_FAILED', { message: 'Ungültiges Datum.' });
   return { y, m, d };
+}
+
+/** Bestehende RRULE in Recurrence-Optionen zurückübersetzen (für Serien-Umbau). */
+function recurrenceOptionsFromRule(rule: string): RecurrenceOptions {
+  const form = parseRuleToForm(rule);
+  if (!form) return { frequency: 'WEEKLY' };
+  return {
+    frequency: form.frequency,
+    weekdays: form.weekdays.length > 0 ? form.weekdays : undefined,
+    endDate: form.endMode === 'date' && form.endDate ? new Date(`${form.endDate}T00:00:00Z`) : null,
+    count: form.endMode === 'count' ? form.count : null,
+  };
 }
 
 function requiredSoloEmployeeId(ctx: OrgContext): string {
@@ -620,6 +634,14 @@ export async function materializeSeries(seriesId: string, until?: Date): Promise
     },
   });
   if (!series || series.status !== 'ACTIVE') return 0;
+  // Kaputte Wiederholungsregel (z. B. aus einem Alt-Zustand) NIE weiterreichen –
+  // sonst wirft das RRule-Parsen und reißt den ganzen Kalender-Feed mit.
+  if (!isValidRecurrenceRule(series.recurrenceRule)) {
+    console.error(
+      `[materializeSeries] Ungültige Wiederholungsregel – Serie ${seriesId} übersprungen: "${series.recurrenceRule}"`,
+    );
+    return 0;
+  }
 
   const horizon = until ?? addDays(new Date(), SERIES_MATERIALIZATION_DAYS);
   const rangeEnd = series.endDate && series.endDate < horizon ? series.endDate : horizon;
@@ -703,7 +725,13 @@ export async function ensureMaterializedUntil(organizationId: string, until: Dat
     select: { id: true },
   });
   for (const entry of series) {
-    await materializeSeries(entry.id, capped);
+    try {
+      await materializeSeries(entry.id, capped);
+    } catch (error) {
+      // Robust: eine einzelne fehlerhafte Serie darf niemals den gesamten
+      // Kalender-Feed (oder Routen-/Vorschlagsflüsse) zum Absturz bringen.
+      console.error(`[ensureMaterializedUntil] Serie ${entry.id} übersprungen:`, error);
+    }
   }
 }
 
@@ -888,72 +916,176 @@ export async function updateAppointment(
   if (options.scope === 'single' || !appointment.seriesId || !appointment.series) {
     await applySingle();
   } else {
-    // 'following' | 'all': Serie anpassen und zukünftige, unveränderte Vorkommen neu erzeugen.
+    // 'following' | 'all': Serie anpassen. Regeln:
+    //  - Ohne Datumsänderung: nur Zeit/Rhythmus; künftige (nicht einzeln
+    //    geänderte, nicht abgeschlossene) Vorkommen ab dem Bezugstag neu erzeugen.
+    //  - „Ganze Serie" mit neuem Datum: verschiebt den Serienstart – der ganze
+    //    künftige Rhythmus wandert auf das neue Datum (Wochentag folgt).
+    //  - „Dieser und folgende" mit neuem Datum: splittet am gewählten Tag – davor
+    //    bleibt alles unverändert, ab dem Tag entsteht eine neue Serie.
+    //  Abgeschlossene Vorkommen bleiben immer als Historie erhalten.
+    //  Transaktions-Timeout großzügig: weit vormaterialisierte Serien + Routen-
+    //  Stopp-Cascades sprengen sonst den Prisma-Default (5 s → P2028).
     const series = appointment.series;
-    const fromDate =
-      options.scope === 'all'
-        ? toUtcDateOnly(new Date())
-        : (appointment.occurrenceDate ?? toUtcDateOnly(appointment.startAt));
-
-    // Rhythmus bei „Ganze Serie“ und „Dieser und folgende“ änderbar (beide
-    // planen künftige Termine); rebuild der RRULE ab dem Serienstart.
-    const recurrenceRule = input.recurrence
-      ? buildRecurrenceRule(input.recurrence, series.startDate)
-      : series.recurrenceRule;
-    const recurrenceEndDate = input.recurrence
-      ? (input.recurrence.endDate ?? null)
-      : series.endDate;
-
-    await db.$transaction(async (tx) => {
-      await tx.appointmentSeries.update({
-        where: { id: series.id },
-        data: {
-          title: input.title ?? series.title,
-          description: input.description !== undefined ? input.description : series.description,
-          defaultEmployeeId: assignedEmployeeId,
-          defaultStartTime: startTime,
-          defaultDurationMinutes: durationMinutes,
-          recurrenceRule,
-          endDate: recurrenceEndDate,
-          materializedUntil: null,
-        },
+    const today = toUtcDateOnly(new Date());
+    const oldOccurrenceDate = appointment.occurrenceDate ?? toUtcDateOnly(appointment.startAt);
+    const seriesStart = toUtcDateOnly(series.startDate);
+    // Bezugsdatum: „Ganze Serie" bezieht sich auf den Serienstart, „Folgende" auf
+    // das gewählte Vorkommen. Das Formular belegt das Datumsfeld entsprechend vor.
+    const oldReference = options.scope === 'all' ? seriesStart : oldOccurrenceDate;
+    // Ohne mitgeschicktes Datum wird NICHT verschoben (nur Zeit/Rhythmus).
+    const newDate = input.date ? utcDate(dateParts.y, dateParts.m, dateParts.d) : oldReference;
+    const dateChanged = newDate.getTime() !== oldReference.getTime();
+    if (dateChanged && newDate.getTime() < today.getTime()) {
+      throw new AppError('VALIDATION_FAILED', {
+        message: 'Der neue Serienstart darf nicht in der Vergangenheit liegen.',
       });
-      // Zukünftige, NICHT einzeln geänderte Vorkommen entfernen (werden regeneriert).
+    }
+
+    const baseOptions: RecurrenceOptions = input.recurrence
+      ? input.recurrence
+      : recurrenceOptionsFromRule(series.recurrenceRule);
+    const commonData = {
+      title: input.title ?? series.title,
+      description: input.description !== undefined ? input.description : series.description,
+      defaultEmployeeId: assignedEmployeeId,
+      defaultStartTime: startTime,
+      defaultDurationMinutes: durationMinutes,
+    };
+    // Bei Datumsverschiebung wird der Rhythmus am NEUEN Datum verankert (Wochentag
+    // aus dem neuen Startdatum) – so landet das erste Vorkommen genau dort.
+    const shiftedRule = buildRecurrenceRule({ ...baseOptions, weekdays: undefined }, newDate);
+
+    const removeRegenerable = async (tx: Prisma.TransactionClient, from: Date | null) => {
       const modified = await tx.appointmentSeriesException.findMany({
         where: { seriesId: series.id },
         select: { occurrenceDate: true },
       });
       const modifiedKeys = new Set(modified.map((e) => e.occurrenceDate.toISOString()));
-      const toDelete = await tx.appointment.findMany({
+      const rows = await tx.appointment.findMany({
         where: {
           seriesId: series.id,
-          occurrenceDate: { gte: fromDate },
+          ...(from ? { occurrenceDate: { gte: from } } : {}),
           status: { in: ['PLANNED', 'CONFIRMED', 'DRAFT'] },
         },
         select: { id: true, occurrenceDate: true },
       });
-      const deleteIds = toDelete
+      const ids = rows
         .filter((a) => a.occurrenceDate && !modifiedKeys.has(a.occurrenceDate.toISOString()))
         .map((a) => a.id);
-      await tx.appointment.deleteMany({ where: { id: { in: deleteIds } } });
-      await writeAuditLog(
-        {
-          organizationId: ctx.organization.id,
-          actorUserId: ctx.user.id,
-          action: 'series.updated',
-          entityType: 'AppointmentSeries',
-          entityId: series.id,
-          metadata: { scope: options.scope, fromDate: fromDate.toISOString().slice(0, 10) },
+      if (ids.length > 0) await tx.appointment.deleteMany({ where: { id: { in: ids } } });
+    };
+
+    const isSplit =
+      options.scope === 'following' &&
+      dateChanged &&
+      oldOccurrenceDate.getTime() > seriesStart.getTime();
+
+    if (isSplit) {
+      // Alte Serie vor dem bearbeiteten Tag beenden, neue Serie ab dem neuen Datum.
+      if (!isValidRecurrenceRule(shiftedRule)) {
+        throw new AppError('VALIDATION_FAILED', {
+          message: 'Die Wiederholungsregel ist ungültig – bitte den Rhythmus prüfen.',
+        });
+      }
+      let newSeriesId = '';
+      await db.$transaction(
+        async (tx) => {
+          await tx.appointmentSeries.update({
+            where: { id: series.id },
+            data: { endDate: addDays(oldOccurrenceDate, -1), materializedUntil: null },
+          });
+          await removeRegenerable(tx, oldOccurrenceDate);
+          const created = await tx.appointmentSeries.create({
+            data: {
+              organizationId: series.organizationId,
+              customerId: series.customerId,
+              ...commonData,
+              recurrenceRule: shiftedRule,
+              recurrenceTimezone: series.recurrenceTimezone,
+              startDate: newDate,
+              endDate: baseOptions.endDate ?? series.endDate ?? null,
+              materializedUntil: null,
+            },
+          });
+          newSeriesId = created.id;
+          await writeAuditLog(
+            {
+              organizationId: ctx.organization.id,
+              actorUserId: ctx.user.id,
+              action: 'series.updated',
+              entityType: 'AppointmentSeries',
+              entityId: series.id,
+              metadata: {
+                scope: 'following',
+                split: true,
+                newSeriesId,
+                newStart: newDate.toISOString().slice(0, 10),
+              },
+            },
+            tx,
+          );
         },
-        tx,
+        { timeout: 30_000, maxWait: 8_000 },
       );
-    },
-    // Serien können weit (bis ~400 Tage) vormaterialisiert sein; das Löschen der
-    // künftigen Vorkommen samt Routen-Stopp-Cascades kann den Prisma-Default von
-    // 5 s sprengen (→ P2028 „Transaction timed out" = „Unerwarteter Fehler").
-    { timeout: 30_000, maxWait: 8_000 },
-    );
-    await materializeSeries(series.id);
+      await materializeSeries(series.id);
+      await materializeSeries(newSeriesId);
+    } else {
+      // Eine Serie: ganze Serie verschieben ODER nur Zeit/Rhythmus ab dem Bezugstag.
+      const newStartDate = dateChanged ? newDate : series.startDate;
+      const rule = dateChanged
+        ? shiftedRule
+        : input.recurrence
+          ? buildRecurrenceRule(input.recurrence, series.startDate)
+          : series.recurrenceRule;
+      // Nur selbst gebaute Regeln streng prüfen – eine bereits gespeicherte
+      // (evtl. kaputte) Regel darf man weiterhin bearbeiten/reparieren.
+      if ((dateChanged || input.recurrence) && !isValidRecurrenceRule(rule)) {
+        throw new AppError('VALIDATION_FAILED', {
+          message: 'Die Wiederholungsregel ist ungültig – bitte den Rhythmus prüfen.',
+        });
+      }
+      // Verschiebung: Vergangenes bleibt auf dem alten Rhythmus stehen (Historie);
+      // ab heute neu. Ohne Verschiebung wie bisher (ganze Serie ab heute,
+      // „folgende" ab dem gewählten Vorkommen).
+      const fromDate = dateChanged
+        ? today
+        : options.scope === 'all'
+          ? today
+          : oldOccurrenceDate;
+      await db.$transaction(
+        async (tx) => {
+          await tx.appointmentSeries.update({
+            where: { id: series.id },
+            data: {
+              ...commonData,
+              startDate: newStartDate,
+              recurrenceRule: rule,
+              endDate: input.recurrence ? (input.recurrence.endDate ?? null) : series.endDate,
+              materializedUntil: null,
+            },
+          });
+          await removeRegenerable(tx, fromDate);
+          await writeAuditLog(
+            {
+              organizationId: ctx.organization.id,
+              actorUserId: ctx.user.id,
+              action: 'series.updated',
+              entityType: 'AppointmentSeries',
+              entityId: series.id,
+              metadata: {
+                scope: options.scope,
+                shifted: dateChanged,
+                fromDate: fromDate.toISOString().slice(0, 10),
+              },
+            },
+            tx,
+          );
+        },
+        { timeout: 30_000, maxWait: 8_000 },
+      );
+      await materializeSeries(series.id);
+    }
   }
 
   // Benachrichtigungen.

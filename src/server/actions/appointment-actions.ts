@@ -322,7 +322,7 @@ export async function getAppointmentDetailAction(appointmentId: string) {
         },
         assignedEmployee: { select: { id: true, firstName: true, lastName: true } },
         locationAddress: true,
-        series: { select: { id: true, recurrenceRule: true, defaultStartTime: true } },
+        series: { select: { id: true, recurrenceRule: true, defaultStartTime: true, startDate: true } },
       },
     });
     if (!appointment || appointment.organizationId !== ctx.organization.id) {
@@ -358,7 +358,12 @@ export async function getAppointmentDetailAction(appointmentId: string) {
           }
         : null,
       series: appointment.series
-        ? { id: appointment.series.id, rule: appointment.series.recurrenceRule }
+        ? {
+            id: appointment.series.id,
+            rule: appointment.series.recurrenceRule,
+            // Kalenderdatum des Serienstarts (für die „Ganze Serie"-Vorbelegung).
+            startDate: appointment.series.startDate.toISOString().slice(0, 10),
+          }
         : null,
       isOwn: Boolean(ctx.employee && appointment.assignedEmployeeId === ctx.employee.id),
     };

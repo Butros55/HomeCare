@@ -47,6 +47,8 @@ export interface AppointmentEditTarget {
   isSeriesMember: boolean;
   /** Aktuelle Wiederholung der Serie (zum Bearbeiten des Rhythmus). */
   recurrence?: AppointmentEditRecurrence | null;
+  /** Serienstart (YYYY-MM-DD) – bei „Ganze Serie" wird das Datumsfeld hierauf vorbelegt. */
+  seriesStartDate?: string | null;
   values: {
     title: string;
     description: string;
@@ -148,6 +150,20 @@ export function AppointmentFormDialog({
 
   // Serien-Bearbeitungsumfang.
   const [scope, setScope] = React.useState<'single' | 'following' | 'all'>('single');
+
+  // Bei Serien-Bearbeitung folgt das Datumsfeld dem gewählten Umfang:
+  //  - „Ganze Serie": Serienstart – das Datum verschiebt die ganze Serie.
+  //  - „Dieser und folgende"/„Nur dieser": das gewählte Vorkommen.
+  React.useEffect(() => {
+    if (!isEdit || !editTarget?.isSeriesMember) return;
+    setDate(
+      scope === 'all' && editTarget.seriesStartDate
+        ? editTarget.seriesStartDate
+        : editTarget.values.date,
+    );
+    // Nur beim Umschalten des Umfangs neu setzen (nicht bei jeder Eingabe).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope]);
 
   // Rhythmus lässt sich bei „Ganze Serie“ und „Dieser und folgende“ ändern –
   // beide planen künftige Termine. „Nur dieser Termin“ ändert die Serie nicht.
@@ -372,6 +388,13 @@ export function AppointmentFormDialog({
                     </button>
                   ))}
                 </div>
+                {scope !== 'single' ? (
+                  <FieldHint>
+                    {scope === 'all'
+                      ? 'Datum & Uhrzeit gelten für die ganze Serie – ein neues Datum verschiebt den Serienstart (Wochentag folgt).'
+                      : 'Gilt ab dem gewählten Termin – ein neues Datum verschiebt die Serie ab diesem Tag; frühere Termine bleiben.'}
+                  </FieldHint>
+                ) : null}
               </div>
             ) : null}
 

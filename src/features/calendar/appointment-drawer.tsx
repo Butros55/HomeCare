@@ -307,6 +307,7 @@ export function AppointmentDrawer({
     ? {
         appointmentId: detail.id,
         isSeriesMember: Boolean(detail.series),
+        seriesStartDate: detail.series?.startDate ?? null,
         recurrence: parsedRecurrence
           ? {
               frequency: parsedRecurrence.frequency,
