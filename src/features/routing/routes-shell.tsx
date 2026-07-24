@@ -7,6 +7,7 @@ import {
   Building2,
   Car,
   Check,
+  ChevronUp,
   Clock,
   Home,
   LocateFixed,
@@ -29,6 +30,7 @@ import { toast } from 'sonner';
 import { PageHeader } from '@/components/layout/page-header';
 import { RoutePlanningDataSkeleton } from '@/components/layout/page-loading-skeleton';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Checkbox, Skeleton } from '@/components/ui/misc';
 import {
@@ -49,6 +51,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { formatTime } from '@/lib/dates';
 import { formatMinutesVerbose } from '@/lib/duration';
+import { cn } from '@/lib/utils';
 import { formatDistance, formatTravelSeconds, googleMapsDirectionsUrl } from '@/lib/geo';
 import {
   acceptRouteSuggestionAction,
@@ -694,15 +697,16 @@ function SingleRoutePlanner({
 
   return (
     <div className="space-y-4">
-      {/* Kompakte Steuerleiste: Tag & Rahmen auf einer Zeile statt großer Box. */}
+      {/* Kompakte Steuerleiste: mobil ein 2-Spalten-Raster mit vollbreiten
+          Feldern, ab sm eine schlanke Zeile. */}
       <div
-        className="flex flex-wrap items-end gap-x-3 gap-y-2 rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] bg-[var(--color-panel)] px-3 py-2.5 shadow-[var(--shadow-panel)]"
+        className="grid grid-cols-2 gap-2 rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] bg-[var(--color-panel)] p-3 sm:flex sm:flex-wrap sm:items-end sm:gap-x-3 sm:gap-y-2 sm:p-2.5"
         data-tour="routes-params"
       >
         {showEmployeeSelect ? (
-          <ControlField label="Mitarbeiter">
+          <ControlField label="Mitarbeiter" className="col-span-2 sm:w-[11rem]">
             <Select value={employeeId} onValueChange={setEmployeeId}>
-              <SelectTrigger id="route-employee" className="h-8 w-[11rem]">
+              <SelectTrigger id="route-employee" className="h-8 w-full">
                 <SelectValue placeholder="Mitarbeiter wählen" />
               </SelectTrigger>
               <SelectContent>
@@ -716,19 +720,19 @@ function SingleRoutePlanner({
           </ControlField>
         ) : null}
 
-        <ControlField label="Datum">
+        <ControlField label="Datum" className="sm:w-[9.5rem]">
           <Input
             id="route-date"
             type="date"
             value={date}
             onChange={(event) => setDate(event.target.value)}
-            className="h-8 w-[9.5rem]"
+            className="h-8 w-full"
           />
         </ControlField>
 
-        <ControlField label="Startpunkt">
+        <ControlField label="Startpunkt" className="sm:w-[11rem]">
           <Select value={originType} onValueChange={(v) => setOriginType(v as OriginType)}>
-            <SelectTrigger id="route-origin" data-tour="routes-origin" className="h-8 w-[11rem]">
+            <SelectTrigger id="route-origin" data-tour="routes-origin" className="h-8 w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -744,7 +748,7 @@ function SingleRoutePlanner({
           </Select>
         </ControlField>
 
-        <ControlField label="Puffer">
+        <ControlField label="Puffer" className="sm:w-[5.75rem]">
           <div className="relative">
             <Input
               id="route-buffer"
@@ -753,7 +757,7 @@ function SingleRoutePlanner({
               max={120}
               value={bufferMinutes}
               onChange={(event) => setBufferMinutes(Number(event.target.value))}
-              className="h-8 w-[5.75rem] pr-9"
+              className="h-8 w-full pr-9"
             />
             <span
               className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]"
@@ -764,18 +768,18 @@ function SingleRoutePlanner({
           </div>
         </ControlField>
 
-        <label className="flex h-8 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-line)] bg-[var(--color-panel-sunken)] px-2.5 text-[length:var(--text-xs)] text-[var(--color-ink-muted)]">
+        <label className="flex h-8 cursor-pointer items-center gap-2 self-end rounded-[var(--radius-md)] border border-[var(--color-line)] bg-[var(--color-panel-sunken)] px-2.5 text-[length:var(--text-xs)] text-[var(--color-ink-muted)]">
           <Checkbox
             checked={returnToStart}
             onCheckedChange={(checked) => setReturnToStart(checked === true)}
           />
-          Rückkehr zum Start
+          <span className="truncate">Rückkehr</span>
         </label>
 
         <Button
           size="sm"
           variant="primary"
-          className="ml-auto"
+          className="col-span-2 self-end sm:col-auto sm:ml-auto"
           onClick={() => compute()}
           loading={pending}
           disabled={!data || selectedIds.length === 0}
@@ -802,8 +806,9 @@ function SingleRoutePlanner({
       ) : (
         <div className="grid grid-cols-1 gap-3 xl:grid-cols-5">
           {/* Ein Editor: geplante Stopps oben, Termine zum Hinzufügen darunter,
-              darunter die Vorschläge – die Karte rechts folgt jeder Änderung. */}
-          <div className="space-y-3 xl:col-span-2">
+              darunter die Vorschläge. Mobil steht die Karte oben (order-1),
+              der Editor darunter (order-2); am Desktop links neben der Karte. */}
+          <div className="order-2 space-y-3 xl:order-none xl:col-span-2">
             {route && route.warnings.length > 0 ? (
               <div className="space-y-1.5">
                 {route.warnings.map((warning, index) => (
@@ -968,8 +973,8 @@ function SingleRoutePlanner({
           </div>
 
           {/* Karte + Kennzahlen – bleiben beim Scrollen zusammen sichtbar und
-              folgen jeder Bearbeitung sofort. Mobil stapeln sie unter den Editor. */}
-          <div className="xl:col-span-3">
+              folgen jeder Bearbeitung sofort. Mobil stehen sie oben (order-1). */}
+          <div className="order-1 xl:order-none xl:col-span-3">
             <div className="@container space-y-3 xl:sticky xl:top-4">
               <Panel>
                 <PanelHeader>
@@ -1330,9 +1335,17 @@ function TeamEmployeePanel({
 // ---------------------------------------------------------------------------
 
 /** Kompaktes Steuerelement mit Mini-Beschriftung für die Routenleiste. */
-function ControlField({ label, children }: { label: string; children: React.ReactNode }) {
+function ControlField({
+  label,
+  className,
+  children,
+}: {
+  label: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="flex min-w-0 flex-col gap-0.5">
+    <div className={cn('flex min-w-0 flex-col gap-0.5', className)}>
       <span className="text-[length:var(--text-2xs)] font-medium text-[var(--color-ink-subtle)]">
         {label}
       </span>
@@ -1505,23 +1518,7 @@ function AddRow({
  * Route. Angenommene Vorschläge werden zu echten Terminen und landen sofort
  * als Stopp in der Route (die Karte oben folgt).
  */
-function OpenHoursSuggestions({
-  date,
-  hasData,
-  generating,
-  loading,
-  suggestions,
-  suggestionInfo,
-  visibleSuggestions,
-  declinedList,
-  canAccept,
-  acceptingToken,
-  timezone,
-  onGenerate,
-  onAccept,
-  onDecline,
-  onUndoDecline,
-}: {
+interface SuggestionListProps {
   date: string;
   hasData: boolean;
   generating: boolean;
@@ -1537,99 +1534,204 @@ function OpenHoursSuggestions({
   onAccept: (suggestion: RouteSuggestionDto) => void;
   onDecline: (suggestion: RouteSuggestionDto) => void;
   onUndoDecline: (suggestion: RouteSuggestionDto) => void;
-}) {
+}
+
+/** „Generieren"-Knopf – gleich in Panel (Desktop) und Sheet (Mobil). */
+function SuggestionsGenerateButton({
+  generating,
+  loading,
+  hasData,
+  onGenerate,
+}: Pick<SuggestionListProps, 'generating' | 'loading' | 'hasData' | 'onGenerate'>) {
   return (
-    <Panel data-tour="routes-suggestions">
-      <PanelHeader>
-        <PanelTitle>
-          <span className="inline-flex items-center gap-1.5">
-            <Sparkles className="size-4 text-[var(--color-brand)]" aria-hidden />
-            Vorschläge aus offenen Stunden
-          </span>
-        </PanelTitle>
-        <div className="flex items-center gap-2">
-          {suggestionInfo ? (
-            <span className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
-              {suggestionInfo.aiUsed ? 'Reihenfolge: KI' : 'Reihenfolge: regelbasiert'}
-            </span>
-          ) : null}
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={onGenerate}
-            loading={generating}
-            disabled={loading || !hasData}
+    <Button
+      variant="secondary"
+      size="sm"
+      onClick={onGenerate}
+      loading={generating}
+      disabled={loading || !hasData}
+    >
+      <Sparkles aria-hidden /> Generieren
+    </Button>
+  );
+}
+
+/** Reiner Inhalt der Vorschläge (Skelett / Hinweis / Karten) ohne Rahmen. */
+function SuggestionsBody({
+  date,
+  generating,
+  suggestions,
+  visibleSuggestions,
+  declinedList,
+  canAccept,
+  acceptingToken,
+  timezone,
+  onAccept,
+  onDecline,
+  onUndoDecline,
+}: SuggestionListProps) {
+  if (generating) {
+    return (
+      <div className="space-y-2.5" aria-label="Vorschläge werden berechnet">
+        {[0, 1].map((i) => (
+          <div
+            key={i}
+            className="space-y-2 rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] p-4"
           >
-            <Sparkles aria-hidden /> Generieren
-          </Button>
-        </div>
-      </PanelHeader>
-      <PanelBody className="space-y-2.5">
-        {generating ? (
-          <div className="space-y-2.5" aria-label="Vorschläge werden berechnet">
-            {[0, 1].map((i) => (
-              <div
-                key={i}
-                className="space-y-2 rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] p-4"
-              >
-                <Skeleton className="h-4 w-2/5 rounded-full" />
-                <Skeleton className="h-3 w-3/5 rounded-full" />
-                <div className="grid grid-cols-3 gap-2">
-                  {[...Array(3)].map((_, j) => (
-                    <Skeleton key={j} className="h-11 rounded-[var(--radius-md)]" />
-                  ))}
-                </div>
-              </div>
-            ))}
+            <Skeleton className="h-4 w-2/5 rounded-full" />
+            <Skeleton className="h-3 w-3/5 rounded-full" />
+            <div className="grid grid-cols-3 gap-2">
+              {[...Array(3)].map((_, j) => (
+                <Skeleton key={j} className="h-11 rounded-[var(--radius-md)]" />
+              ))}
+            </div>
           </div>
-        ) : suggestions === null ? (
-          <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
-            Prüft Kunden mit offenen Stunden und Verfügbarkeit am {date} und schlägt Einsätze vor,
-            die zur aktuellen Route passen – inklusive Auswirkung auf Fahrzeit und Arbeitstag.
-          </p>
-        ) : visibleSuggestions && visibleSuggestions.length === 0 && declinedList.length === 0 ? (
-          <EmptyState
-            className="border-0"
-            icon={<Check />}
-            title="Keine passenden Vorschläge"
-            description="Alle Kunden sind versorgt, nicht verfügbar oder würden die Route unzulässig machen."
-          />
-        ) : (
-          <>
-            {visibleSuggestions?.map((suggestion) => (
-              <SuggestionCard
-                key={suggestion.token}
-                suggestion={suggestion}
-                timezone={timezone}
-                canAccept={canAccept}
-                declined={false}
-                pending={acceptingToken === suggestion.token}
-                onAccept={onAccept}
-                onDecline={onDecline}
-                onUndoDecline={onUndoDecline}
-              />
-            ))}
-            {declinedList.map((suggestion) => (
-              <SuggestionCard
-                key={suggestion.token}
-                suggestion={suggestion}
-                timezone={timezone}
-                canAccept={canAccept}
-                declined
-                pending={false}
-                onAccept={onAccept}
-                onDecline={onDecline}
-                onUndoDecline={onUndoDecline}
-              />
-            ))}
-            {!canAccept ? (
-              <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-                Vorschläge können nur von der Leitung übernommen werden.
-              </p>
-            ) : null}
-          </>
-        )}
-      </PanelBody>
-    </Panel>
+        ))}
+      </div>
+    );
+  }
+  if (suggestions === null) {
+    return (
+      <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+        Prüft Kunden mit offenen Stunden und Verfügbarkeit am {date} und schlägt Einsätze vor, die
+        zur aktuellen Route passen – inklusive Auswirkung auf Fahrzeit und Arbeitstag.
+      </p>
+    );
+  }
+  if (visibleSuggestions && visibleSuggestions.length === 0 && declinedList.length === 0) {
+    return (
+      <EmptyState
+        className="border-0"
+        icon={<Check />}
+        title="Keine passenden Vorschläge"
+        description="Alle Kunden sind versorgt, nicht verfügbar oder würden die Route unzulässig machen."
+      />
+    );
+  }
+  return (
+    <div className="space-y-2.5">
+      {visibleSuggestions?.map((suggestion) => (
+        <SuggestionCard
+          key={suggestion.token}
+          suggestion={suggestion}
+          timezone={timezone}
+          canAccept={canAccept}
+          declined={false}
+          pending={acceptingToken === suggestion.token}
+          onAccept={onAccept}
+          onDecline={onDecline}
+          onUndoDecline={onUndoDecline}
+        />
+      ))}
+      {declinedList.map((suggestion) => (
+        <SuggestionCard
+          key={suggestion.token}
+          suggestion={suggestion}
+          timezone={timezone}
+          canAccept={canAccept}
+          declined
+          pending={false}
+          onAccept={onAccept}
+          onDecline={onDecline}
+          onUndoDecline={onUndoDecline}
+        />
+      ))}
+      {!canAccept ? (
+        <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+          Vorschläge können nur von der Leitung übernommen werden.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Vorschläge aus offenen Stunden. Am Desktop inline als Panel; auf dem Handy
+ * hinter einem Auslöser, der ein Bottom-Sheet öffnet – so bleibt die
+ * Mobilansicht schlank und die Karte oben sichtbar.
+ */
+function OpenHoursSuggestions(props: SuggestionListProps) {
+  return (
+    <>
+      {/* Desktop: inline. */}
+      <div className="hidden xl:block">
+        <Panel data-tour="routes-suggestions">
+          <PanelHeader>
+            <PanelTitle>
+              <span className="inline-flex items-center gap-1.5">
+                <Sparkles className="size-4 text-[var(--color-brand)]" aria-hidden />
+                Vorschläge aus offenen Stunden
+              </span>
+            </PanelTitle>
+            <div className="flex items-center gap-2">
+              {props.suggestionInfo ? (
+                <span className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+                  {props.suggestionInfo.aiUsed ? 'Reihenfolge: KI' : 'Reihenfolge: regelbasiert'}
+                </span>
+              ) : null}
+              <SuggestionsGenerateButton {...props} />
+            </div>
+          </PanelHeader>
+          <PanelBody>
+            <SuggestionsBody {...props} />
+          </PanelBody>
+        </Panel>
+      </div>
+
+      {/* Mobil: Bottom-Sheet. */}
+      <div className="xl:hidden">
+        <SuggestionsSheet {...props} />
+      </div>
+    </>
+  );
+}
+
+/** Mobiler Auslöser + Bottom-Sheet für die Vorschläge. */
+function SuggestionsSheet(props: SuggestionListProps) {
+  const [open, setOpen] = React.useState(false);
+  const count = props.visibleSuggestions?.length ?? 0;
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        data-tour="routes-suggestions"
+        className="flex w-full items-center justify-between gap-2 rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] bg-[var(--color-panel)] px-4 py-3 text-left shadow-[var(--shadow-panel)]"
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <Sparkles className="size-4 shrink-0 text-[var(--color-brand)]" aria-hidden />
+          <span className="min-w-0">
+            <span className="block text-[length:var(--text-sm)] font-medium">
+              Vorschläge aus offenen Stunden
+            </span>
+            <span className="block text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+              {count > 0
+                ? `${count} ${count === 1 ? 'Vorschlag' : 'Vorschläge'} – tippen zum Ansehen`
+                : 'Einsätze aus offenen Kundenstunden finden'}
+            </span>
+          </span>
+        </span>
+        <span className="flex shrink-0 items-center gap-1 text-[length:var(--text-xs)] font-medium text-[var(--color-brand)]">
+          {count > 0 ? count : null}
+          <ChevronUp className="size-4" aria-hidden />
+        </span>
+      </button>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent title="Vorschläge aus offenen Stunden" wide>
+          <div className="mb-3 flex items-center justify-between gap-2">
+            {props.suggestionInfo ? (
+              <span className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+                {props.suggestionInfo.aiUsed ? 'Reihenfolge: KI' : 'Reihenfolge: regelbasiert'}
+              </span>
+            ) : (
+              <span />
+            )}
+            <SuggestionsGenerateButton {...props} />
+          </div>
+          <SuggestionsBody {...props} />
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
