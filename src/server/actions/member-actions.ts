@@ -139,12 +139,12 @@ export async function updateMemberPermissionsAction(
 /** Leitungs-Konto per E-Mail einladen (Einstellungen → Leitung). */
 export async function inviteLeadershipAction(input: {
   email: string;
-}): Promise<ActionResult<{ done: true }>> {
+}): Promise<ActionResult<{ link: string }>> {
   return runAction(async () => {
     const email = z.string().trim().toLowerCase().pipe(z.email()).parse(input.email);
-    await inviteLeadershipAccount({ email });
+    const result = await inviteLeadershipAccount({ email });
     revalidatePath('/settings');
-    return { done: true as const };
+    return result;
   });
 }
 

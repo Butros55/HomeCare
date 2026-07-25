@@ -12,7 +12,7 @@ import {
   minutesOfDayInZone,
   zonedWallTimeToUtc,
 } from '@/lib/dates';
-import { haversineMeters } from '@/lib/geo';
+import { haversineMeters, isWithinCoverage, resolveCoverageArea } from '@/lib/geo';
 import { plannableMinutesAt } from '@/lib/hour-account';
 import type { Matrix, RouteStopInput } from '@/lib/route-optimizer';
 import {
@@ -23,6 +23,7 @@ import {
   isReservingStatus,
   MIN_SUGGESTION_MINUTES,
   planRouteWithAutoDeparture,
+  resolveTeamCustomerAssignment,
   sliceMatrix,
   slotsToWindows,
   suggestionDurationMinutes,
@@ -398,6 +399,9 @@ interface EmployeeContext {
   userId: string | null;
   maximumMinutesPerDay: number | null;
   startLocation: unknown;
+  coverageRadiusKm: number | null;
+  coverageUseHome: boolean;
+  coverageCenter: unknown;
 }
 
 export async function generateRouteSuggestions(
@@ -429,6 +433,9 @@ export async function generateRouteSuggestions(
         userId: true,
         maximumMinutesPerDay: true,
         startLocation: true,
+        coverageRadiusKm: true,
+        coverageUseHome: true,
+        coverageCenter: true,
       },
       orderBy: [{ lastName: 'asc' }],
     });
@@ -438,6 +445,9 @@ export async function generateRouteSuggestions(
       userId: e.userId,
       maximumMinutesPerDay: e.maximumMinutesPerDay,
       startLocation: e.startLocation,
+      coverageRadiusKm: e.coverageRadiusKm,
+      coverageUseHome: e.coverageUseHome,
+      coverageCenter: e.coverageCenter,
     }));
   } else {
     if (!ctx.employee) {
@@ -452,6 +462,9 @@ export async function generateRouteSuggestions(
         userId: ctx.employee.userId,
         maximumMinutesPerDay: ctx.employee.maximumMinutesPerDay,
         startLocation: ctx.employee.startLocation,
+        coverageRadiusKm: ctx.employee.coverageRadiusKm,
+        coverageUseHome: ctx.employee.coverageUseHome,
+        coverageCenter: ctx.employee.coverageCenter,
       },
     ];
   }
@@ -496,25 +509,28 @@ export async function generateRouteSuggestions(
     ),
   );
 
-  // Teamlauf: derselbe Kundenbedarf darf nur bei einem Mitarbeiter erscheinen –
-  // der Kunde geht an den Mitarbeiter mit dem besten Vergleichswert.
+  // Teamlauf: derselbe Kundenbedarf darf nur bei einem Mitarbeiter erscheinen.
+  // Der Wunschmitarbeiter bekommt den Kunden immer, sofern er einen machbaren
+  // Vorschlag hat; nur wenn er nicht kann (Abwesenheit/Überschneidung/kein
+  // machbares Fenster), geht der Kunde als letzter Ausweg an den besten anderen
+  // Mitarbeiter (nach Vergleichswert).
   if (input.scope === 'team') {
-    const bestByCustomer = new Map<string, { employeeId: string; score: number }>();
-    for (const entry of panels) {
-      for (const evaluation of entry.evaluations) {
-        const current = bestByCustomer.get(evaluation.customerId);
-        if (!current || evaluation.rankScore < current.score) {
-          bestByCustomer.set(evaluation.customerId, {
-            employeeId: entry.panel.employeeId,
-            score: evaluation.rankScore,
-          });
-        }
-      }
-    }
+    const preferredByCustomer = new Map(
+      demand.map((candidate) => [candidate.customerId, candidate.preferredEmployeeId]),
+    );
+    const assignment = resolveTeamCustomerAssignment(
+      panels.flatMap((entry) =>
+        entry.evaluations.map((evaluation) => ({
+          employeeId: entry.panel.employeeId,
+          customerId: evaluation.customerId,
+          rankScore: evaluation.rankScore,
+        })),
+      ),
+      preferredByCustomer,
+    );
     for (const entry of panels) {
       entry.evaluations = entry.evaluations.filter(
-        (evaluation) =>
-          bestByCustomer.get(evaluation.customerId)?.employeeId === entry.panel.employeeId,
+        (evaluation) => assignment.get(evaluation.customerId) === entry.panel.employeeId,
       );
     }
   }
@@ -729,12 +745,36 @@ async function buildEmployeePanel(args: {
   // ---- Kandidaten vorfiltern ---------------------------------------------
   const baseServiceMinutes = dayAppointments.reduce((sum, a) => sum + a.durationMinutes, 0);
 
+  // Zuständigkeitsgebiet (harte Regel): Kunden außerhalb des Umkreises entfallen.
+  const coverageArea = resolveCoverageArea({
+    coverageUseHome: employee.coverageUseHome,
+    startLocation: employee.startLocation,
+    coverageCenter: employee.coverageCenter,
+    coverageRadiusKm: employee.coverageRadiusKm,
+  });
+
   const candidates = fullDayAbsent
     ? []
     : demand
         .filter((candidate) => {
-          // Wunschmitarbeiter ist verbindlich.
-          if (candidate.preferredEmployeeId && candidate.preferredEmployeeId !== employee.id) {
+          // Außerhalb des Zuständigkeitsgebiets → nicht vorschlagen.
+          if (
+            !isWithinCoverage(coverageArea, {
+              latitude: candidate.latitude,
+              longitude: candidate.longitude,
+            })
+          ) {
+            return false;
+          }
+          // Wunschmitarbeiter zuerst: In der Einzelansicht ist er verbindlich –
+          // ein anderer Mitarbeiter bekommt den Kunden gar nicht vorgeschlagen.
+          // Im Teamlauf dürfen andere ihn bewerten, damit er als letzter Ausweg
+          // fällt, falls der Wunschmitarbeiter nicht kann (Zuordnung s. unten).
+          if (
+            input.scope === 'self' &&
+            candidate.preferredEmployeeId &&
+            candidate.preferredEmployeeId !== employee.id
+          ) {
             return false;
           }
           // Kunde hat Verfügbarkeiten gepflegt, aber keine am Wochentag → raus.
@@ -1019,12 +1059,9 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
   const payload = verifySuggestionToken(token);
 
   if (payload.org !== ctx.organization.id) throw new AppError('SUGGESTION_STALE');
-  // Normale Mitarbeiter dürfen Vorschläge ansehen, aber nicht übernehmen.
-  if (ctx.membership.role === 'EMPLOYEE') {
-    throw new AppError('ACCESS_DENIED', {
-      message: 'Terminvorschläge kann nur die Leitung übernehmen.',
-    });
-  }
+  // Mitarbeiter dürfen Vorschläge für sich selbst übernehmen (Selbstplanung);
+  // die Scope-Prüfung begrenzt EMPLOYEE auf die eigene employeeId. Leitung
+  // übernimmt im Rahmen ihres Verwaltungsbereichs.
   const scope = await getManagedEmployeeIds(ctx);
   if (!scopeContains(scope, payload.emp)) {
     throw new AppError('ACCESS_DENIED', {

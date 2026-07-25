@@ -1,6 +1,6 @@
 'use client';
 
-import { User, UserPlus, UsersRound } from 'lucide-react';
+import { Check, Copy, User, UserPlus, UsersRound } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -160,15 +160,16 @@ export function AddLeadershipButton() {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [email, setEmail] = React.useState('');
+  const [inviteLink, setInviteLink] = React.useState<string | null>(null);
+  const [copied, setCopied] = React.useState(false);
   const [pending, startTransition] = React.useTransition();
 
   const submit = () => {
     startTransition(async () => {
       const result = await inviteLeadershipAction({ email });
       if (result.ok) {
-        toast.success(`Einladung an ${email} verschickt.`);
-        setEmail('');
-        setOpen(false);
+        setInviteLink(result.data.link);
+        toast.success(`Einladung für ${email} erstellt.`);
         router.refresh();
       } else {
         toast.error(result.message);
@@ -176,40 +177,86 @@ export function AddLeadershipButton() {
     });
   };
 
+  const copyLink = async () => {
+    if (!inviteLink) return;
+    try {
+      await navigator.clipboard.writeText(inviteLink);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error('Kopieren nicht möglich – Link bitte manuell markieren.');
+    }
+  };
+
+  const close = () => {
+    setOpen(false);
+    setInviteLink(null);
+    setCopied(false);
+    setEmail('');
+  };
+
   return (
     <>
       <Button variant="primary" size="sm" onClick={() => setOpen(true)} data-tour="leadership-add-button">
         <UserPlus aria-hidden /> Leitungs-Konto hinzufügen
       </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(next) => (next ? setOpen(true) : close())}>
         <DialogContent
           title="Leitungs-Konto hinzufügen"
           description="Die Person erhält einen Einladungslink, legt ihr Konto an und kann danach alle leitenden Aufgaben übernehmen – mit den unten eingestellten Standard-Berechtigungen."
         >
-          <div>
-            <Label htmlFor="leader-email" required>
-              E-Mail-Adresse
-            </Label>
-            <Input
-              id="leader-email"
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="name@beispiel.de"
-              autoComplete="off"
-            />
-            <FieldHint>
-              Die Person wird automatisch auch als zuweisbarer Mitarbeiter angelegt.
-            </FieldHint>
-          </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setOpen(false)} disabled={pending}>
-              Abbrechen
-            </Button>
-            <Button variant="primary" loading={pending} onClick={submit} disabled={!email}>
-              Einladung senden
-            </Button>
-          </DialogFooter>
+          {inviteLink ? (
+            <div className="space-y-4">
+              <div className="rounded-[var(--radius-md)] border border-[var(--color-line-subtle)] bg-[var(--color-panel-sunken)] p-3">
+                <p className="text-[length:var(--text-sm)] font-medium">Einladungslink erstellt</p>
+                <p className="mt-0.5 text-[length:var(--text-xs)] text-[var(--color-ink-muted)]">
+                  Der Versand per E-Mail ist noch nicht aktiv – gib diesen Link (7 Tage gültig) an{' '}
+                  <strong>{email}</strong> weiter.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input readOnly value={inviteLink} onFocus={(e) => e.target.select()} className="flex-1" />
+                <Button variant="secondary" onClick={copyLink} aria-label="Link kopieren">
+                  {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+                  {copied ? 'Kopiert' : 'Kopieren'}
+                </Button>
+              </div>
+              <DialogFooter>
+                <Button variant="primary" onClick={close}>
+                  Fertig
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : (
+            <>
+              <div>
+                <Label htmlFor="leader-email" required>
+                  E-Mail-Adresse
+                </Label>
+                <Input
+                  id="leader-email"
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="name@beispiel.de"
+                  autoComplete="off"
+                />
+                <FieldHint>
+                  Die Person wird automatisch auch als zuweisbarer Mitarbeiter angelegt. Der
+                  Versand per E-Mail ist noch nicht aktiv – du erhältst danach den Link zum
+                  Weitergeben.
+                </FieldHint>
+              </div>
+              <DialogFooter>
+                <Button variant="ghost" onClick={close} disabled={pending}>
+                  Abbrechen
+                </Button>
+                <Button variant="primary" loading={pending} onClick={submit} disabled={!email}>
+                  Einladungslink erstellen
+                </Button>
+              </DialogFooter>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </>

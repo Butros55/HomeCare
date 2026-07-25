@@ -7,7 +7,10 @@ import {
   formatTravelSeconds,
   googleMapsDirectionsUrl,
   haversineMeters,
+  isWithinCoverage,
   parseAddressQuery,
+  pointFromLocationJson,
+  resolveCoverageArea,
 } from './geo';
 
 const prinzipalmarkt = { latitude: 51.9625, longitude: 7.6281 };
@@ -96,5 +99,71 @@ describe('Formatierung', () => {
     expect(googleMapsDirectionsUrl('Prinzipalmarkt 22, Münster')).toContain(
       'destination=Prinzipalmarkt%2022%2C%20M%C3%BCnster',
     );
+  });
+});
+
+describe('Zuständigkeitsgebiet (Umkreis)', () => {
+  const home = { label: 'Zuhause', street: 'A', latitude: 51.9607, longitude: 7.6261 };
+  const manual = { street: 'B', latitude: 52.0, longitude: 7.0 };
+
+  it('pointFromLocationJson liest nur gültige Koordinaten', () => {
+    expect(pointFromLocationJson(home)).toEqual({ latitude: 51.9607, longitude: 7.6261 });
+    expect(pointFromLocationJson({ street: 'X' })).toBeNull();
+    expect(pointFromLocationJson(null)).toBeNull();
+  });
+
+  it('ohne Umkreis ist das Gebiet unbeschränkt', () => {
+    const area = resolveCoverageArea({
+      coverageUseHome: true,
+      startLocation: home,
+      coverageCenter: null,
+      coverageRadiusKm: null,
+    });
+    expect(area).toEqual({ center: null, radiusMeters: null });
+    // Jeder Punkt liegt „innerhalb".
+    expect(isWithinCoverage(area, { latitude: 0, longitude: 0 })).toBe(true);
+  });
+
+  it('nutzt je nach useHome die Zuhause- oder die manuelle Adresse als Zentrum', () => {
+    const withHome = resolveCoverageArea({
+      coverageUseHome: true,
+      startLocation: home,
+      coverageCenter: manual,
+      coverageRadiusKm: 10,
+    });
+    expect(withHome.center).toEqual({ latitude: 51.9607, longitude: 7.6261 });
+    expect(withHome.radiusMeters).toBe(10_000);
+
+    const withManual = resolveCoverageArea({
+      coverageUseHome: false,
+      startLocation: home,
+      coverageCenter: manual,
+      coverageRadiusKm: 10,
+    });
+    expect(withManual.center).toEqual({ latitude: 52.0, longitude: 7.0 });
+  });
+
+  it('lässt Punkte im Umkreis zu und schließt weiter entfernte aus', () => {
+    const area = resolveCoverageArea({
+      coverageUseHome: true,
+      startLocation: home,
+      coverageCenter: null,
+      coverageRadiusKm: 5,
+    });
+    // ~1 km entfernt (innerhalb 5 km).
+    expect(isWithinCoverage(area, { latitude: 51.9697, longitude: 7.6261 })).toBe(true);
+    // Weit entfernt (Köln, > 100 km).
+    expect(isWithinCoverage(area, { latitude: 50.9375, longitude: 6.9603 })).toBe(false);
+  });
+
+  it('ohne Koordinaten am Zentrum bleibt das Gebiet wirkungslos (kein Ausschluss)', () => {
+    const area = resolveCoverageArea({
+      coverageUseHome: false,
+      startLocation: home,
+      coverageCenter: { street: 'ohne Koordinaten' },
+      coverageRadiusKm: 5,
+    });
+    expect(area.radiusMeters).toBeNull();
+    expect(isWithinCoverage(area, { latitude: 0, longitude: 0 })).toBe(true);
   });
 });

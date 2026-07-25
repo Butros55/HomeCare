@@ -7,20 +7,25 @@ import {
   createAbsence,
   createEmployee,
   deleteAbsence,
+  deleteEmployeeAccount,
   inviteEmployee,
   replaceAvailability,
+  setEmployeeAccountSuspended,
   setEmployeeStatus,
   updateEmployee,
+  updateEmployeeCoverage,
   updateOwnHomeLocation,
 } from '@/server/services/employee-service';
 import {
   absenceFormSchema,
   availabilityFormSchema,
+  coverageFormSchema,
   employeeFormSchema,
   homeLocationSchema,
   inviteEmployeeSchema,
   type AbsenceFormInput,
   type AvailabilityFormInput,
+  type CoverageFormInput,
   type EmployeeFormInput,
   type HomeLocationInput,
   type InviteEmployeeInput,
@@ -73,6 +78,23 @@ export async function replaceAvailabilityAction(
   });
 }
 
+export async function updateEmployeeCoverageAction(
+  input: CoverageFormInput,
+): Promise<ActionResult<{ geocoded: boolean }>> {
+  return runAction(async () => {
+    const data = coverageFormSchema.parse(input);
+    const result = await updateEmployeeCoverage({
+      employeeId: data.employeeId,
+      radiusKm: data.radiusKm,
+      useHome: data.useHome,
+      center: data.center ?? null,
+    });
+    revalidatePath(`/employees/${data.employeeId}`);
+    revalidatePath('/routes');
+    return result;
+  });
+}
+
 export async function updateOwnHomeLocationAction(
   input: HomeLocationInput,
 ): Promise<ActionResult<{ geocoded: boolean }>> {
@@ -115,11 +137,35 @@ export async function deleteAbsenceAction(
 
 export async function inviteEmployeeAction(
   input: InviteEmployeeInput,
-): Promise<ActionResult<{ done: true }>> {
+): Promise<ActionResult<{ link: string }>> {
   return runAction(async () => {
     const data = inviteEmployeeSchema.parse(input);
-    await inviteEmployee(data);
+    const result = await inviteEmployee(data);
     revalidatePath(`/employees/${data.employeeId}`);
+    return result;
+  });
+}
+
+/** Mitarbeiter-Zugang sperren oder entsperren (Login-Sperre mit Hinweis). */
+export async function setEmployeeAccountSuspendedAction(
+  employeeId: string,
+  suspended: boolean,
+): Promise<ActionResult<{ done: true }>> {
+  return runAction(async () => {
+    await setEmployeeAccountSuspended(employeeId, suspended);
+    revalidatePath('/employees');
+    revalidatePath(`/employees/${employeeId}`);
+    return { done: true as const };
+  });
+}
+
+/** Mitarbeiter samt Login entfernen (Profil wird archiviert). */
+export async function deleteEmployeeAccountAction(
+  employeeId: string,
+): Promise<ActionResult<{ done: true }>> {
+  return runAction(async () => {
+    await deleteEmployeeAccount(employeeId);
+    revalidatePath('/employees');
     return { done: true as const };
   });
 }

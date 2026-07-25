@@ -24,12 +24,10 @@ import { buildContext, createEmployee, createOrg, createUserWithMembership, rese
 describe('Serientermin mit Datumswechsel bearbeiten (Team-Modus)', () => {
   let customerId: string;
   let ownEmployeeId: string;
-  let organizationId: string;
 
   beforeAll(async () => {
     await resetDatabase();
     const organization = await createOrg('SeriesEdit'); // Team-Modus (soloMode default false)
-    organizationId = organization.id;
     const owner = await createUserWithMembership(organization.id, 'ORGANIZATION_OWNER', 'EditOwner');
     const ownEmployee = await createEmployee(organization.id, 'EditOwner', { userId: owner.user.id });
     ownEmployeeId = ownEmployee.id;

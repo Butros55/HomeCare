@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css';
 
 import L from 'leaflet';
 import * as React from 'react';
-import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
+import { Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
 
 import { useTheme } from '@/components/layout/theme-provider';
 import { routeWeightPx, useMapSettings } from '@/features/map/map-style';
@@ -60,9 +60,34 @@ function markerIcon(color: string, sequence?: number): L.DivIcon {
   });
 }
 
-function FitBounds({ markers, path }: { markers: MapMarker[]; path?: [number, number][] }) {
+export interface MapCircle {
+  latitude: number;
+  longitude: number;
+  radiusMeters: number;
+  color?: string;
+}
+
+function FitBounds({
+  markers,
+  path,
+  circle,
+}: {
+  markers: MapMarker[];
+  path?: [number, number][];
+  circle?: MapCircle;
+}) {
   const map = useMap();
   React.useEffect(() => {
+    // Ein Umkreis bestimmt den Ausschnitt (auch ohne weitere Marker).
+    if (circle) {
+      const bounds = L.latLng(circle.latitude, circle.longitude).toBounds(circle.radiusMeters * 2);
+      const withMarkers = markers.reduce(
+        (acc, m) => acc.extend([m.latitude, m.longitude]),
+        L.latLngBounds(bounds.getSouthWest(), bounds.getNorthEast()),
+      );
+      map.fitBounds(withMarkers, { padding: [28, 28] });
+      return;
+    }
     if (markers.length === 0) return;
     if (markers.length === 1 && !path?.length) {
       map.setView([markers[0]!.latitude, markers[0]!.longitude], 15);
@@ -74,7 +99,7 @@ function FitBounds({ markers, path }: { markers: MapMarker[]; path?: [number, nu
       ...(path ?? []),
     ];
     map.fitBounds(L.latLngBounds(points), { padding: [28, 28] });
-  }, [map, markers, path]);
+  }, [map, markers, path, circle]);
   return null;
 }
 
@@ -103,12 +128,15 @@ export function LeafletMap({
   markers,
   polyline,
   roadPath,
+  circle,
 }: {
   markers: MapMarker[];
   /** Luftlinie zwischen den Stopps – Ersatz, solange keine Strecke vorliegt. */
   polyline?: [number, number][];
   /** Tatsächlich zu fahrende Strecke (Straßenverlauf) – hat Vorrang. */
   roadPath?: [number, number][];
+  /** Umkreis (z. B. Zuständigkeitsgebiet). */
+  circle?: MapCircle;
 }) {
   const center: [number, number] =
     markers.length > 0 ? [markers[0]!.latitude, markers[0]!.longitude] : [51.9607, 7.6261];
@@ -168,6 +196,19 @@ export function LeafletMap({
           }}
         />
       ) : null}
+      {circle ? (
+        <Circle
+          center={[circle.latitude, circle.longitude]}
+          radius={circle.radiusMeters}
+          pathOptions={{
+            color: circle.color ?? '#6c5ce7',
+            weight: 2,
+            opacity: 0.9,
+            fillColor: circle.color ?? '#6c5ce7',
+            fillOpacity: 0.12,
+          }}
+        />
+      ) : null}
       {markers.map((marker) => (
         <Marker
           key={marker.id}
@@ -185,7 +226,7 @@ export function LeafletMap({
           </Popup>
         </Marker>
       ))}
-      <FitBounds markers={markers} path={hasRoad ? roadPath : polyline} />
+      <FitBounds markers={markers} path={hasRoad ? roadPath : polyline} circle={circle} />
       <InvalidateOnResize />
     </MapContainer>
   );

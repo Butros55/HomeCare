@@ -74,10 +74,30 @@ export async function loginFormAction(
         ),
         false);
 
-    if (!user || !valid || user.status !== 'ACTIVE') {
+    if (!user || !valid) {
       return {
         error:
           'Anmeldung fehlgeschlagen – E-Mail-Adresse oder Passwort ist nicht korrekt. Noch kein Konto? Unten registrieren.',
+        values: keepValues,
+      };
+    }
+
+    // Zugangsdaten korrekt: Konto-/Mitgliedschaftsstatus prüfen. Ein gesperrtes
+    // (oder entferntes) Konto erhält einen klaren Hinweis statt der Generik.
+    const memberships = await db.organizationMembership.findMany({
+      where: { userId: user.id },
+      select: { status: true },
+    });
+    const hasActiveAccess =
+      user.status === 'ACTIVE' && memberships.some((m) => m.status === 'ACTIVE');
+    if (!hasActiveAccess) {
+      const suspended =
+        user.status !== 'ACTIVE' ||
+        (memberships.length > 0 && memberships.every((m) => m.status !== 'ACTIVE'));
+      return {
+        error: suspended
+          ? 'Dein Zugang wurde gesperrt. Bitte wende dich an die Leitung deiner Organisation.'
+          : 'Für dieses Konto ist keine aktive Organisation hinterlegt. Bitte wende dich an die Leitung.',
         values: keepValues,
       };
     }

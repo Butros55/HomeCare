@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { getInvitationInfo } from '@/server/services/employee-service';
 import { AcceptInvitationForm } from '@/features/auth/accept-invitation-form';
+import { EmployeeRegistrationForm } from '@/features/auth/employee-registration-form';
 
 export const metadata: Metadata = { title: 'Einladung' };
 
@@ -23,6 +24,18 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
           <Link href="/login">Zur Anmeldung</Link>
         </Button>
       </div>
+    );
+  }
+
+  if (info.isEmployee) {
+    return (
+      <EmployeeRegistrationForm
+        token={token}
+        organizationName={info.organizationName}
+        email={info.email}
+        initialFirstName={info.firstName}
+        initialLastName={info.lastName}
+      />
     );
   }
 

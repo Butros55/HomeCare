@@ -273,6 +273,57 @@ export async function updateOwnHomeLocation(
 }
 
 // ---------------------------------------------------------------------------
+// Zuständigkeitsgebiet (Umkreis)
+// ---------------------------------------------------------------------------
+
+/**
+ * Zuständigkeitsgebiet eines Mitarbeiters pflegen (Leitung). Umkreis in km um
+ * ein Zentrum, das entweder die eigene Zuhause-Adresse oder eine manuell
+ * hinterlegte Adresse ist. Das manuelle Zentrum wird geokodiert. Der Umkreis
+ * wirkt als harte Regel in Routenplanung und Terminvorschlägen.
+ */
+export async function updateEmployeeCoverage(input: {
+  employeeId: string;
+  radiusKm: number | null;
+  useHome: boolean;
+  center: NonNullable<HomeLocationInput> | null | undefined;
+}): Promise<{ geocoded: boolean }> {
+  const ctx = await requirePermission('employees.manage');
+  const employee = await db.employee.findUnique({ where: { id: input.employeeId } });
+  assertSameOrg(ctx, employee);
+  await assertManageScope(ctx, input.employeeId);
+
+  // Manuelles Zentrum nur geokodieren, wenn es auch verwendet wird.
+  const center = !input.useHome ? await resolveHomeLocationJson(input.center) : null;
+
+  await db.$transaction(async (tx) => {
+    await tx.employee.update({
+      where: { id: input.employeeId },
+      data: {
+        coverageRadiusKm: input.radiusKm,
+        coverageUseHome: input.useHome,
+        ...(input.useHome
+          ? {} // Zuhause-Zentrum: manuelles Zentrum unangetastet lassen
+          : { coverageCenter: center?.value ?? Prisma.DbNull }),
+      },
+    });
+    await writeAuditLog(
+      {
+        organizationId: ctx.organization.id,
+        actorUserId: ctx.user.id,
+        action: 'employee.coverageChanged',
+        entityType: 'Employee',
+        entityId: input.employeeId,
+        metadata: { radiusKm: input.radiusKm, useHome: input.useHome },
+      },
+      tx,
+    );
+  });
+
+  return { geocoded: center?.geocoded ?? false };
+}
+
+// ---------------------------------------------------------------------------
 // Verfügbarkeit & Abwesenheiten
 // ---------------------------------------------------------------------------
 
@@ -446,7 +497,9 @@ export async function ensureLeadershipEmployeeProfiles(ctx: OrgContext): Promise
 
 const INVITATION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 
-export async function inviteEmployee(input: InviteEmployeeInput & { email: string }): Promise<void> {
+export async function inviteEmployee(
+  input: InviteEmployeeInput & { email: string },
+): Promise<{ link: string }> {
   const ctx = await requireOrganizationMembership();
   const employee = await db.employee.findUnique({ where: { id: input.employeeId } });
   assertSameOrg(ctx, employee);
@@ -523,6 +576,9 @@ export async function inviteEmployee(input: InviteEmployeeInput & { email: strin
       link,
     ].join('\n'),
   });
+  // Solange kein echter Mailversand verdrahtet ist, gibt die Leitung den Link
+  // selbst weiter (Anzeige im Einladungsdialog).
+  return { link };
 }
 
 /**
@@ -530,7 +586,7 @@ export async function inviteEmployee(input: InviteEmployeeInput & { email: strin
  * ohne vorab angelegtes Mitarbeiterprofil – das Profil entsteht bei der
  * Annahme automatisch, damit die Person sofort selbst zuweisbar ist.
  */
-export async function inviteLeadershipAccount(input: { email: string }): Promise<void> {
+export async function inviteLeadershipAccount(input: { email: string }): Promise<{ link: string }> {
   const ctx = await requirePermission('members.manage');
 
   const existingUser = await db.user.findUnique({ where: { email: input.email } });
@@ -586,6 +642,7 @@ export async function inviteLeadershipAccount(input: { email: string }): Promise
       link,
     ].join('\n'),
   });
+  return { link };
 }
 
 /** Einladung einlösen: Benutzer anlegen, Mitgliedschaft aktivieren, Profil verknüpfen. */
@@ -594,6 +651,10 @@ export async function acceptInvitation(input: {
   firstName: string;
   lastName: string;
   passwordHash: string;
+  /** Optionale Selbstangaben aus der Mitarbeiter-Registrierung. */
+  phone?: string;
+  homeLocation?: NonNullable<HomeLocationInput> | null;
+  availabilitySlots?: { weekday: number; startTime: string; endTime: string }[];
 }): Promise<{ userId: string }> {
   const invitation = await db.invitation.findUnique({
     where: { tokenHash: hashToken(input.token) },
@@ -602,6 +663,45 @@ export async function acceptInvitation(input: {
   if (!invitation || invitation.acceptedAt || invitation.expiresAt.getTime() < Date.now()) {
     throw new AppError('INVITATION_INVALID');
   }
+
+  // Zuhause-Adresse vorab geokodieren (außerhalb der Transaktion – Netzwerkaufruf).
+  const home =
+    input.homeLocation !== undefined
+      ? await resolveHomeLocationJson(input.homeLocation)
+      : null;
+  const availabilityValidFrom = utcDate(
+    new Date().getUTCFullYear(),
+    new Date().getUTCMonth() + 1,
+    new Date().getUTCDate(),
+  );
+
+  /**
+   * Selbstangaben (Telefon, Zuhause-Adresse, Verfügbarkeiten) auf das verknüpfte
+   * Mitarbeiterprofil schreiben. Nur relevant, wenn die Einladung ein Profil trägt.
+   */
+  const applyEmployeeSelfData = async (tx: Prisma.TransactionClient, employeeId: string) => {
+    if (input.phone || home?.set) {
+      await tx.employee.update({
+        where: { id: employeeId },
+        data: {
+          ...(input.phone ? { phone: input.phone } : {}),
+          ...(home?.set ? { startLocation: home.value ?? Prisma.DbNull } : {}),
+        },
+      });
+    }
+    if (input.availabilitySlots && input.availabilitySlots.length > 0) {
+      await tx.employeeAvailability.deleteMany({ where: { employeeId } });
+      await tx.employeeAvailability.createMany({
+        data: input.availabilitySlots.map((slot) => ({
+          employeeId,
+          weekday: slot.weekday,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          validFrom: availabilityValidFrom,
+        })),
+      });
+    }
+  };
 
   // Standard-Berechtigungen der Organisation für die jeweilige Konto-Art.
   const defaultPermissions =
@@ -653,6 +753,7 @@ export async function acceptInvitation(input: {
           where: { id: invitation.employeeId },
           data: { userId: existingUser.id },
         });
+        await applyEmployeeSelfData(tx, invitation.employeeId);
       }
       await ensureLeaderProfile(tx, existingUser);
       await tx.invitation.update({
@@ -681,6 +782,7 @@ export async function acceptInvitation(input: {
         passwordHash: input.passwordHash,
         firstName: input.firstName,
         lastName: input.lastName,
+        ...(input.phone ? { phone: input.phone } : {}),
       },
     });
     await tx.organizationMembership.create({
@@ -698,6 +800,7 @@ export async function acceptInvitation(input: {
         where: { id: invitation.employeeId },
         data: { userId: created.id, firstName: input.firstName, lastName: input.lastName },
       });
+      await applyEmployeeSelfData(tx, invitation.employeeId);
     }
     await ensureLeaderProfile(tx, created);
     await tx.invitation.update({ where: { id: invitation.id }, data: { acceptedAt: new Date() } });
@@ -733,5 +836,122 @@ export async function getInvitationInfo(token: string) {
     email: invitation.email,
     firstName: invitation.employee?.firstName ?? '',
     lastName: invitation.employee?.lastName ?? '',
+    /** Mitarbeiter-Registrierung (eigene, erweiterte Selbstregistrierungs-Seite). */
+    isEmployee: invitation.role === 'EMPLOYEE' && Boolean(invitation.employeeId),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Konto sperren / löschen (Leitung)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mitarbeiter-Zugang sperren oder entsperren. Beim Sperren wird die
+ * Mitgliedschaft auf SUSPENDED gesetzt und alle Sessions beendet – der
+ * Mitarbeiter sieht beim nächsten Anmeldeversuch einen Sperrhinweis.
+ * Das Mitarbeiterprofil und alle Daten bleiben erhalten.
+ */
+export async function setEmployeeAccountSuspended(
+  employeeId: string,
+  suspended: boolean,
+): Promise<void> {
+  const ctx = await requirePermission('employees.manage');
+  const employee = await db.employee.findUnique({ where: { id: employeeId } });
+  assertSameOrg(ctx, employee);
+  await assertManageScope(ctx, employeeId);
+  if (!employee.userId) {
+    throw new AppError('CONFLICT', { message: 'Dieser Mitarbeiter hat kein Benutzerkonto.' });
+  }
+  if (employee.userId === ctx.user.id) {
+    throw new AppError('CONFLICT', { message: 'Das eigene Konto kann hier nicht gesperrt werden.' });
+  }
+
+  const membership = await db.organizationMembership.findFirst({
+    where: { organizationId: ctx.organization.id, userId: employee.userId },
+  });
+  if (!membership) throw new AppError('NOT_FOUND');
+  if (membership.role === 'ORGANIZATION_OWNER') {
+    throw new AppError('ACCESS_DENIED', { message: 'Der Inhaber kann nicht gesperrt werden.' });
+  }
+
+  await db.$transaction(async (tx) => {
+    await tx.organizationMembership.update({
+      where: { id: membership.id },
+      data: { status: suspended ? 'SUSPENDED' : 'ACTIVE' },
+    });
+    if (suspended) {
+      await tx.session.deleteMany({ where: { userId: employee.userId! } });
+    }
+    await writeAuditLog(
+      {
+        organizationId: ctx.organization.id,
+        actorUserId: ctx.user.id,
+        action: suspended ? 'member.suspended' : 'member.reactivated',
+        entityType: 'Employee',
+        entityId: employeeId,
+      },
+      tx,
+    );
+  });
+}
+
+/**
+ * Mitarbeiter endgültig entfernen: Das Profil wird (weich) gelöscht und der
+ * zugehörige Login entzogen – die Mitgliedschaft in dieser Organisation wird
+ * aufgehoben und alle Sessions beendet. Gehört das Konto zu keiner weiteren
+ * Organisation, wird es deaktiviert (Anmeldung nicht mehr möglich). Bereits
+ * geleistete Termine/Stunden bleiben aus Nachvollziehbarkeitsgründen erhalten.
+ */
+export async function deleteEmployeeAccount(employeeId: string): Promise<void> {
+  const ctx = await requirePermission('employees.manage');
+  const employee = await db.employee.findUnique({ where: { id: employeeId } });
+  assertSameOrg(ctx, employee);
+  await assertManageScope(ctx, employeeId);
+  if (employee.deletedAt) return;
+  if (employee.userId === ctx.user.id) {
+    throw new AppError('CONFLICT', { message: 'Das eigene Konto kann hier nicht gelöscht werden.' });
+  }
+
+  const userId = employee.userId;
+  if (userId) {
+    const membership = await db.organizationMembership.findFirst({
+      where: { organizationId: ctx.organization.id, userId },
+    });
+    if (membership?.role === 'ORGANIZATION_OWNER') {
+      throw new AppError('ACCESS_DENIED', { message: 'Der Inhaber kann nicht gelöscht werden.' });
+    }
+  }
+
+  await db.$transaction(async (tx) => {
+    await tx.employee.update({
+      where: { id: employeeId },
+      data: { deletedAt: new Date(), userId: null },
+    });
+    // Offene Einladungen für dieses Profil verfallen lassen.
+    await tx.invitation.deleteMany({ where: { employeeId, acceptedAt: null } });
+
+    if (userId) {
+      await tx.organizationMembership.deleteMany({
+        where: { organizationId: ctx.organization.id, userId },
+      });
+      await tx.session.deleteMany({ where: { userId } });
+      // Kein weiteres aktives Konto in anderen Organisationen? → Login sperren.
+      const remaining = await tx.organizationMembership.count({ where: { userId } });
+      if (remaining === 0) {
+        await tx.user.update({ where: { id: userId }, data: { status: 'INACTIVE' } });
+      }
+    }
+
+    await writeAuditLog(
+      {
+        organizationId: ctx.organization.id,
+        actorUserId: ctx.user.id,
+        action: 'employee.deleted',
+        entityType: 'Employee',
+        entityId: employeeId,
+        metadata: { name: `${employee.firstName} ${employee.lastName}`, hadAccount: Boolean(userId) },
+      },
+      tx,
+    );
+  });
 }
