@@ -2,7 +2,12 @@ import 'server-only';
 
 import type { Employee, Prisma, RoutePlanStatus } from '@prisma/client';
 
-import { calendarDayInZone, dayPeriodInZone, fromDateInputValue } from '@/lib/dates';
+import {
+  calendarDayInZone,
+  dayPeriodInZone,
+  fromDateInputValue,
+  minutesOfDayInZone,
+} from '@/lib/dates';
 import type { StructuredLocation } from '@/lib/geo';
 import { computeSchedule, type Matrix, type RouteStopInput } from '@/lib/route-optimizer';
 import { planRouteWithAutoDeparture, sliceMatrix } from '@/lib/route-suggestions';
@@ -158,6 +163,48 @@ export function isPastPlanningDay(date: Date, timezone: string, now: Date = new 
   const asNumber = (d: { year: number; month: number; day: number }) =>
     d.year * 10000 + d.month * 100 + d.day;
   return asNumber(target) < asNumber(today);
+}
+
+export interface PlanningHorizon {
+  /** Ist der Planungstag der heutige Tag (Organisations-Zeitzone)? */
+  isToday: boolean;
+  /**
+   * Frühestmögliche Abfahrt / Simulationsbeginn. HEUTE: „jetzt" (keine Abfahrt in
+   * der Vergangenheit); künftige Tage: 00:00 Org-Wandzeit. So plant der Optimierer
+   * nie eine Abfahrt oder einen Einsatzbeginn in der Vergangenheit – die
+   * Erreichbarkeit (Fahrzeit + Puffer ab jetzt) ergibt sich direkt aus der
+   * Ankunftsberechnung des Planers.
+   */
+  earliestDepartureAt: Date;
+  /**
+   * Untergrenze für den Einsatzbeginn in Wandzeit-Minuten seit Mitternacht.
+   * HEUTE: die aktuelle Uhrzeit (Vorschlagsraster nicht vor „jetzt"); sonst 0.
+   */
+  earliestServiceMinute: number;
+}
+
+/**
+ * Planungshorizont eines Tages. Zentral, damit Einzelvorschläge, Tagesrouten und
+ * die manuelle Routenberechnung „heute ab jetzt" identisch behandeln. `now` wird
+ * vom Aufrufer EINMAL pro Operation bestimmt und übergeben (deterministisch,
+ * testbar). Vergangene Tage sind Sache der aufrufenden Vergangenheitsprüfung.
+ */
+export function resolvePlanningHorizon(input: {
+  date: Date;
+  timezone: string;
+  now: Date;
+}): PlanningHorizon {
+  const day = dayPeriodInZone(input.date, input.timezone);
+  const isToday = input.now >= day.start && input.now < day.end;
+  if (!isToday) {
+    return { isToday: false, earliestDepartureAt: day.start, earliestServiceMinute: 0 };
+  }
+  return {
+    isToday: true,
+    // Innerhalb des heutigen Tages ist `now` stets ≥ Tagesbeginn.
+    earliestDepartureAt: input.now,
+    earliestServiceMinute: Math.max(0, minutesOfDayInZone(input.now, input.timezone)),
+  };
 }
 
 /** Wirft, wenn für einen vergangenen Tag geplant/geändert werden soll. */

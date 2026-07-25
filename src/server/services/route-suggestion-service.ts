@@ -56,6 +56,7 @@ import {
 import { ensureMaterializedUntil } from '@/server/services/appointment-service';
 import { createNotification } from '@/server/services/notification-service';
 import {
+  isPastForRoutePlanning,
   isPastPlanningDay,
   ORIGIN_LABELS,
   resolveRouteOrigin,
@@ -1146,7 +1147,10 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
   const date = fromDateInputValue(payload.date);
   if (!date) throw new AppError('SUGGESTION_STALE');
   const timezone = ctx.organization.timezone;
-  if (isPastPlanningDay(date, timezone)) {
+  // `now` einmal pro Operation bestimmen und überall weiterreichen – so bleibt
+  // die Vergangenheits-/„heute ab jetzt"-Prüfung innerhalb der Annahme konsistent.
+  const now = new Date();
+  if (isPastPlanningDay(date, timezone, now)) {
     throw new AppError('VALIDATION_FAILED', {
       message: 'Vergangene Tage können nicht mehr geplant werden.',
     });
@@ -1158,8 +1162,27 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
     zonedWallTimeToUtc(dayParts.year, dayParts.month, dayParts.day, minutesToTime(minute), timezone);
   const startAt = new Date(payload.start);
   const endAt = new Date(startAt.getTime() + payload.dur * 60_000);
+
+  /**
+   * Einheitlich als „veraltet" melden UND serverseitig mit Grund protokollieren –
+   * so lässt sich im Betrieb unterscheiden, WARUM ein Vorschlag abgelehnt wurde
+   * (echte Kollision, Guthaben, Zuständigkeit …), statt nur die generische
+   * Meldung zu sehen. Der Grund ist bewusst nicht Teil der Nutzermeldung.
+   */
+  const staleError = (reason: string, message?: string): AppError => {
+    console.warn('[route-accept] SUGGESTION_STALE', {
+      reason,
+      org: ctx.organization.id,
+      emp: payload.emp,
+      cust: payload.cust,
+      date: payload.date,
+      start: payload.start,
+    });
+    return new AppError('SUGGESTION_STALE', message ? { message } : undefined);
+  };
+
   if (Number.isNaN(startAt.getTime()) || startAt < day.start || endAt > day.end) {
-    throw new AppError('SUGGESTION_STALE');
+    throw staleError('start-out-of-day');
   }
 
   // ---- Stammdaten (Scope-Prüfung vor der Transaktion) ---------------------
@@ -1214,9 +1237,15 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
     include: { locationAddress: true },
     orderBy: { startAt: 'asc' },
   });
+  // Wie beim Generieren: nur geokodierte, noch nicht vergangene Termine sind
+  // beweglich einplanbar. Vergangene/laufende Termine bleiben unangetastet.
   const routable = baseAppointments.filter(
-    (a) => a.locationAddress?.latitude != null && a.locationAddress?.longitude != null,
+    (a) =>
+      a.locationAddress?.latitude != null &&
+      a.locationAddress?.longitude != null &&
+      !isPastForRoutePlanning(a, now),
   );
+  const routableIds = new Set(routable.map((a) => a.id));
   const baseStops: RouteStopInput[] = routable.map((appointment) => ({
     id: appointment.id,
     latitude: appointment.locationAddress!.latitude!,
@@ -1264,15 +1293,22 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
     formatTime: (value) => timeFormatter.format(value),
   });
   if (!planned.feasible) {
-    throw new AppError('SUGGESTION_STALE', {
-      message: 'Die Route ist mit dem Vorschlag nicht mehr zulässig – bitte neu generieren.',
-    });
+    throw staleError(
+      'plan-infeasible',
+      'Die Route ist mit dem Vorschlag nicht mehr zulässig – bitte neu generieren.',
+    );
   }
 
   // ---- Serialisierbare Transaktion: prüfen + schreiben --------------------
   const result = await db.$transaction(
     async (tx) => {
-      // 1) Terminkollision (alle reservierenden Termine des Mitarbeiters).
+      // 1) Terminkollision des NEUEN Einsatzes mit reservierenden Terminen, die
+      //    NICHT Teil der neu geplanten Route sind. Die beweglichen Bestands-
+      //    termine (`routableIds`) werden gerade mitgeplant und im Fenster
+      //    verschoben – sie dürfen den Vorschlag nicht als „belegt" blockieren
+      //    (genau das erzeugte früher den ständigen falschen SUGGESTION_STALE).
+      //    Feste/laufende oder ungeplante (ohne Koordinaten, nicht routen-
+      //    relevante) Termine blockieren dagegen weiterhin echt.
       const overlapping = await tx.appointment.findFirst({
         where: {
           organizationId: ctx.organization.id,
@@ -1281,10 +1317,11 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
           status: { in: ['DRAFT', 'PLANNED', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED'] },
           startAt: { lt: endAt },
           endAt: { gt: startAt },
+          ...(routableIds.size > 0 ? { id: { notIn: [...routableIds] } } : {}),
         },
         select: { id: true },
       });
-      if (overlapping) throw new AppError('SUGGESTION_STALE');
+      if (overlapping) throw staleError('appointment-overlap');
 
       // 2) Kunde hat inzwischen einen Termin am Planungstag.
       const customerDayAppointment = await tx.appointment.findFirst({
@@ -1296,7 +1333,7 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
         },
         select: { id: true },
       });
-      if (customerDayAppointment) throw new AppError('SUGGESTION_STALE');
+      if (customerDayAppointment) throw staleError('customer-has-appointment');
 
       // 3) Abwesenheit.
       const absence = await tx.employeeAbsence.findFirst({
@@ -1429,6 +1466,31 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
         },
       });
 
+      // 7b) Verschobene FLEXIBLE Bestandstermine mitziehen: Die neue Einsatzzeit
+      //     stammt aus DERSELBEN Re-Planung, die den Vorschlag zulässig macht.
+      //     Sie wird persistiert, damit Kalender und Konfliktprüfung konsistent
+      //     bleiben (sonst stünden zwei Termine auf derselben nominalen Zeit –
+      //     eine Phantom-Doppelbelegung). Die Verschiebung bleibt immer im
+      //     Verfügbarkeitsfenster (der Planer garantiert das). FESTE Termine
+      //     werden nie verschoben – ihr Beginn ist verankert.
+      const baseById = new Map(routable.map((a) => [a.id, a]));
+      const movedAppointmentIds: string[] = [];
+      for (const stop of planned.stops) {
+        if (stop.id === NEW_STOP_ID) continue;
+        const base = baseById.get(stop.id);
+        if (!base || !base.isFlexible) continue;
+        if (
+          stop.serviceStartAt.getTime() !== base.startAt.getTime() ||
+          stop.serviceEndAt.getTime() !== base.endAt.getTime()
+        ) {
+          await tx.appointment.update({
+            where: { id: base.id },
+            data: { startAt: stop.serviceStartAt, endAt: stop.serviceEndAt },
+          });
+          movedAppointmentIds.push(base.id);
+        }
+      }
+
       // 8) Routenentwurf gemeinsam speichern (veröffentlichte Pläne werden
       //    wieder zum Entwurf und müssen bewusst erneut freigegeben werden).
       await tx.routePlan.deleteMany({ where: { employeeId: payload.emp, routeDate: date } });
@@ -1481,6 +1543,9 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
             customerId: customer.id,
             date: payload.date,
             durationMinutes: payload.dur,
+            // Nachvollziehbar machen, welche flexiblen Bestandstermine dabei im
+            // Fenster verschoben wurden (leer = keine Verschiebung nötig).
+            movedAppointmentIds,
           },
         },
         tx,

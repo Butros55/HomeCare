@@ -688,13 +688,26 @@ export async function acceptDayRoute(input: {
   const date = fromDateInputValue(payload.date);
   if (!date) throw new AppError('SUGGESTION_STALE');
   const timezone = ctx.organization.timezone;
-  if (isPastPlanningDay(date, timezone)) {
+  // `now` einmal pro Operation bestimmen und überall weiterreichen.
+  const now = new Date();
+  if (isPastPlanningDay(date, timezone, now)) {
     throw new AppError('VALIDATION_FAILED', {
       message: 'Vergangene Tage können nicht mehr geplant werden.',
     });
   }
   const day = dayPeriodInZone(date, timezone);
   const weekday = isoWeekdayInZone(day.start, timezone);
+
+  /** Als „veraltet" melden UND serverseitig mit Grund protokollieren (s. acceptRouteSuggestion). */
+  const staleError = (reason: string, message?: string): AppError => {
+    console.warn('[day-route-accept] SUGGESTION_STALE', {
+      reason,
+      org: ctx.organization.id,
+      emp: payload.emp,
+      date: payload.date,
+    });
+    return new AppError('SUGGESTION_STALE', message ? { message } : undefined);
+  };
 
   const employee = await db.employee.findUnique({ where: { id: payload.emp } });
   assertSameOrg(ctx, employee);
@@ -763,13 +776,13 @@ export async function acceptDayRoute(input: {
   });
   // Wie beim Generieren: vergangene fixe Termine bleiben draußen, damit die
   // Re-Planung nicht an einer längst verstrichenen Startzeit scheitert.
-  const now = new Date();
   const routable = baseAppointments.filter(
     (a) =>
       a.locationAddress?.latitude != null &&
       a.locationAddress?.longitude != null &&
       !isPastForRoutePlanning(a, now),
   );
+  const routableIds = new Set(routable.map((a) => a.id));
   const baseStops: RouteStopInput[] = routable.map((appointment) => ({
     id: appointment.id,
     latitude: appointment.locationAddress!.latitude!,
@@ -829,9 +842,7 @@ export async function acceptDayRoute(input: {
     formatTime: (value) => timeFormatter.format(value),
   });
   if (!planned.feasible) {
-    throw new AppError('SUGGESTION_STALE', {
-      message: 'Die Route ist nicht mehr zulässig – bitte neu generieren.',
-    });
+    throw staleError('plan-infeasible', 'Die Route ist nicht mehr zulässig – bitte neu generieren.');
   }
 
   // ---- Serialisierbare Transaktion: prüfen, anlegen, speichern ------------
@@ -852,7 +863,7 @@ export async function acceptDayRoute(input: {
         const total =
           (dayLoad._sum.durationMinutes ?? 0) + visits.reduce((sum, v) => sum + v.dur, 0);
         if (total > employee.maximumMinutesPerDay) {
-          throw new AppError('SUGGESTION_STALE', { message: 'Tageshöchstarbeitszeit überschritten.' });
+          throw staleError('max-day-exceeded', 'Tageshöchstarbeitszeit überschritten.');
         }
       }
 
@@ -863,7 +874,12 @@ export async function acceptDayRoute(input: {
         const startMinute = minutesOfDayInZone(visit.startAt, timezone);
         const endMinute = startMinute + visit.dur;
 
-        // Terminkollision (auch gegen bereits in dieser Schleife angelegte Einsätze).
+        // Terminkollision des NEUEN Einsatzes mit reservierenden Terminen, die
+        // NICHT Teil der neu geplanten Route sind. Die beweglichen Bestands-
+        // termine (`routableIds`) werden gerade mitgeplant/verschoben und dürfen
+        // nicht als „belegt" blockieren (sonst ständiger falscher SUGGESTION_STALE).
+        // Bereits in dieser Schleife angelegte neue Einsätze sind NICHT in
+        // `routableIds` und werden weiterhin geprüft.
         const overlapping = await tx.appointment.findFirst({
           where: {
             organizationId: ctx.organization.id,
@@ -872,10 +888,11 @@ export async function acceptDayRoute(input: {
             status: { in: ['DRAFT', 'PLANNED', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED'] },
             startAt: { lt: visit.endAt },
             endAt: { gt: visit.startAt },
+            ...(routableIds.size > 0 ? { id: { notIn: [...routableIds] } } : {}),
           },
           select: { id: true },
         });
-        if (overlapping) throw new AppError('SUGGESTION_STALE');
+        if (overlapping) throw staleError('appointment-overlap');
 
         // Kunde hat inzwischen einen Termin am Planungstag.
         const customerDayAppointment = await tx.appointment.findFirst({
@@ -887,7 +904,7 @@ export async function acceptDayRoute(input: {
           },
           select: { id: true },
         });
-        if (customerDayAppointment) throw new AppError('SUGGESTION_STALE');
+        if (customerDayAppointment) throw staleError('customer-has-appointment');
 
         // Abwesenheit.
         const absence = await tx.employeeAbsence.findFirst({
@@ -899,7 +916,7 @@ export async function acceptDayRoute(input: {
           },
           select: { id: true },
         });
-        if (absence) throw new AppError('SUGGESTION_STALE');
+        if (absence) throw staleError('absence');
 
         // Verfügbarkeiten (Mitarbeiter + Kunde).
         const availability = await tx.employeeAvailability.findMany({
@@ -917,10 +934,10 @@ export async function acceptDayRoute(input: {
             (w) => startMinute >= w.startMinute && endMinute <= w.endMinute,
           );
         };
-        if (!withinWindows(availability)) throw new AppError('SUGGESTION_STALE');
+        if (!withinWindows(availability)) throw staleError('employee-availability');
         const customerSlots = customer.availabilities.filter((slot) => slot.weekday === weekday);
         if (customer.availabilities.length > 0 && !withinWindows(customerSlots)) {
-          throw new AppError('SUGGESTION_STALE');
+          throw staleError('customer-availability');
         }
 
         // Stundenguthaben (Konto-Modell) – nur prüfen, wenn Stundenbudgets aktiv.
@@ -959,9 +976,10 @@ export async function acceptDayRoute(input: {
             reservedBefore: day.end,
           });
           if (plannable < visit.dur) {
-            throw new AppError('SUGGESTION_STALE', {
-              message: `Das Stundenguthaben von ${customer.firstName} ${customer.lastName} reicht nicht mehr.`,
-            });
+            throw staleError(
+              'hour-budget',
+              `Das Stundenguthaben von ${customer.firstName} ${customer.lastName} reicht nicht mehr.`,
+            );
           }
         }
 
@@ -996,6 +1014,27 @@ export async function acceptDayRoute(input: {
           },
         });
         createdByCustomer.set(visit.cust, appointment.id);
+      }
+
+      // Verschobene FLEXIBLE Bestandstermine mitziehen (wie acceptRouteSuggestion):
+      // ihre neue Einsatzzeit aus derselben Re-Planung persistieren, damit Kalender
+      // und Konfliktprüfung konsistent bleiben. Feste Termine bleiben verankert.
+      const baseById = new Map(routable.map((a) => [a.id, a]));
+      const movedAppointmentIds: string[] = [];
+      for (const stop of planned.stops) {
+        if (stop.id.startsWith('cust:')) continue;
+        const base = baseById.get(stop.id);
+        if (!base || !base.isFlexible) continue;
+        if (
+          stop.serviceStartAt.getTime() !== base.startAt.getTime() ||
+          stop.serviceEndAt.getTime() !== base.endAt.getTime()
+        ) {
+          await tx.appointment.update({
+            where: { id: base.id },
+            data: { startAt: stop.serviceStartAt, endAt: stop.serviceEndAt },
+          });
+          movedAppointmentIds.push(base.id);
+        }
       }
 
       await tx.routePlan.deleteMany({ where: { employeeId: payload.emp, routeDate: date } });
@@ -1051,6 +1090,7 @@ export async function acceptDayRoute(input: {
             date: payload.date,
             newVisits: visits.length,
             stops: planned.stops.length,
+            movedAppointmentIds,
           },
         },
         tx,
