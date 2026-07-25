@@ -2,7 +2,7 @@ import 'server-only';
 
 import type { Employee, Prisma, RoutePlanStatus } from '@prisma/client';
 
-import { dayPeriodInZone, fromDateInputValue } from '@/lib/dates';
+import { calendarDayInZone, dayPeriodInZone, fromDateInputValue } from '@/lib/dates';
 import type { StructuredLocation } from '@/lib/geo';
 import { computeSchedule, type Matrix, type RouteStopInput } from '@/lib/route-optimizer';
 import { planRouteWithAutoDeparture, sliceMatrix } from '@/lib/route-suggestions';
@@ -145,6 +145,29 @@ export function isPastForRoutePlanning(
     return (appointment.latestEndAt ?? appointment.endAt).getTime() <= now.getTime();
   }
   return appointment.startAt.getTime() <= now.getTime();
+}
+
+/**
+ * Liegt der (Kalender-)Tag vor dem heutigen Tag (in der Organisations-Zeitzone)?
+ * Vergangene Tage sind in der Routenplanung eingefroren: nur ansehen, nicht mehr
+ * planen/ändern. Der heutige Tag bleibt planbar (für den restlichen Tag).
+ */
+export function isPastPlanningDay(date: Date, timezone: string, now: Date = new Date()): boolean {
+  const target = calendarDayInZone(date, timezone);
+  const today = calendarDayInZone(now, timezone);
+  const asNumber = (d: { year: number; month: number; day: number }) =>
+    d.year * 10000 + d.month * 100 + d.day;
+  return asNumber(target) < asNumber(today);
+}
+
+/** Wirft, wenn für einen vergangenen Tag geplant/geändert werden soll. */
+function assertNotPastPlanningDay(date: Date, timezone: string): void {
+  if (isPastPlanningDay(date, timezone)) {
+    throw new AppError('VALIDATION_FAILED', {
+      message:
+        'Vergangene Tage können nicht mehr geplant oder geändert werden – die Route lässt sich nur ansehen.',
+    });
+  }
 }
 
 /**
@@ -297,6 +320,19 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
   );
   const droppedStopCount = (existingPlan?.stops.length ?? 0) - livingStops.length;
 
+  // Wer hat die gespeicherte Route zuletzt geplant? (aus dem Audit-Log, best effort –
+  // relevant vor allem für die reine Ansicht vergangener Tage).
+  const planAudit = existingPlan
+    ? await db.auditLog.findFirst({
+        where: { entityType: 'RoutePlan', entityId: existingPlan.id, actorUserId: { not: null } },
+        orderBy: { createdAt: 'desc' },
+        include: { actor: { select: { firstName: true, lastName: true } } },
+      })
+    : null;
+  const plannedByName = planAudit?.actor
+    ? `${planAudit.actor.firstName} ${planAudit.actor.lastName}`
+    : null;
+
   // Verdienst-Kennzahl: nur für die eigene Route und nur, wenn ein Stundenlohn
   // hinterlegt ist (Kilometergeld zählt ausschließlich für eigene Fahrten).
   const earningsRates =
@@ -329,6 +365,7 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
           id: existingPlan.id,
           status: existingPlan.status,
           generatedAt: existingPlan.generatedAt,
+          plannedByName,
           totalTravelSeconds: existingPlan.totalTravelSeconds,
           totalDistanceMeters: existingPlan.totalDistanceMeters,
           originType: existingPlan.originType as RouteOriginType,
@@ -654,6 +691,9 @@ export async function saveRoutePlan(
   // Routen ist routes.manage erforderlich.
   const isOwn = ctx.employee?.id === input.employeeId;
   if (!hasPermission(ctx, 'routes.manage') && !isOwn) throw new AppError('ACCESS_DENIED');
+  const saveDate = fromDateInputValue(input.date);
+  if (!saveDate) throw new AppError('VALIDATION_FAILED', { message: 'Ungültiges Datum.' });
+  assertNotPastPlanningDay(saveDate, ctx.organization.timezone);
   const employee = await db.employee.findUnique({ where: { id: input.employeeId } });
   assertSameOrg(ctx, employee);
 
@@ -808,6 +848,7 @@ export async function discardRoutePlan(employeeId: string, dateInput: string): P
   if (!hasPermission(ctx, 'routes.manage') && !isOwn) throw new AppError('ACCESS_DENIED');
   const date = fromDateInputValue(dateInput);
   if (!date) throw new AppError('VALIDATION_FAILED');
+  assertNotPastPlanningDay(date, ctx.organization.timezone);
   const plan = await db.routePlan.findUnique({
     where: { employeeId_routeDate: { employeeId, routeDate: date } },
   });

@@ -52,7 +52,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { formatTime } from '@/lib/dates';
+import { formatTime, toDateInputValue } from '@/lib/dates';
 import { formatMinutesVerbose } from '@/lib/duration';
 import { cn } from '@/lib/utils';
 import { formatDistance, formatTravelSeconds, googleMapsDirectionsUrl } from '@/lib/geo';
@@ -152,6 +152,13 @@ export function RoutesShell({
   const [bufferMinutes, setBufferMinutes] = React.useState(10);
   const [returnToStart, setReturnToStart] = React.useState(true);
 
+  // Vergangene Tage sind eingefroren: nur ansehen, nicht mehr planen/ändern.
+  // (String-Vergleich der ISO-Tagesdaten in der Org-Zeitzone.)
+  const todayIso = toDateInputValue(new Date(), timezone);
+  const isPastDay = date < todayIso;
+  const effManage = canManage && !isPastDay;
+  const effAccept = canAccept && !isPastDay;
+
   return (
     <>
       {/* Werkzeugseite: Karte + Editor brauchen die volle Breite (fluid). */}
@@ -161,6 +168,15 @@ export function RoutesShell({
         fluid
       />
       <div className="space-y-4 p-4 sm:p-5">
+        {isPastDay ? (
+          <div className="flex items-start gap-2 rounded-[var(--radius-lg)] border border-[var(--color-line-strong)] bg-[var(--color-panel-sunken)] px-4 py-2.5 text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+            <Lock className="mt-0.5 size-4 shrink-0" aria-hidden />
+            <span>
+              Vergangener Tag – nur Ansicht. Die Route wird so angezeigt, wie sie geplant wurde, und
+              kann nicht mehr geändert werden.
+            </span>
+          </div>
+        ) : null}
         {teamMode ? (
           <Tabs defaultValue="single">
             <TabsList data-tour="routes-mode-tabs">
@@ -182,8 +198,8 @@ export function RoutesShell({
                 setBufferMinutes={setBufferMinutes}
                 returnToStart={returnToStart}
                 setReturnToStart={setReturnToStart}
-                canManage={canManage}
-                canAccept={canAccept}
+                canManage={effManage}
+                canAccept={effAccept}
                 soloMode={soloMode}
                 timezone={timezone}
                 autoPlan={autoPlan}
@@ -199,7 +215,7 @@ export function RoutesShell({
                 returnToStart={returnToStart}
                 setReturnToStart={setReturnToStart}
                 timezone={timezone}
-                canAccept={canAccept}
+                canAccept={effAccept}
               />
             </TabsContent>
           </Tabs>
@@ -214,8 +230,8 @@ export function RoutesShell({
             setBufferMinutes={setBufferMinutes}
             returnToStart={returnToStart}
             setReturnToStart={setReturnToStart}
-            canManage={canManage}
-            canAccept={canAccept}
+            canManage={effManage}
+            canAccept={effAccept}
             soloMode={soloMode}
             timezone={timezone}
             autoPlan={autoPlan}
@@ -1060,6 +1076,11 @@ function SingleRoutePlanner({
                         · {route.stops.length} {route.stops.length === 1 ? 'Stopp' : 'Stopps'}
                       </span>
                     ) : null}
+                    {!canManage && data.existingPlan?.plannedByName ? (
+                      <span className="text-[length:var(--text-xs)] font-normal text-[var(--color-ink-subtle)]">
+                        · geplant von {data.existingPlan.plannedByName}
+                      </span>
+                    ) : null}
                   </span>
                 </PanelTitle>
                 {canManage ? (
@@ -1134,17 +1155,23 @@ function SingleRoutePlanner({
                 ) : (
                   <div className="flex flex-col items-center gap-3 px-4 py-6 text-center">
                     <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
-                      {allCandidates.length === 0
-                        ? 'Keine routenrelevanten Termine an diesem Tag.'
-                        : 'Noch keine Stopps – unten Termine hinzufügen.'}
+                      {!canManage
+                        ? 'Für diesen Tag wurde keine Route geplant.'
+                        : allCandidates.length === 0
+                          ? 'Keine routenrelevanten Termine an diesem Tag.'
+                          : 'Noch keine Stopps – unten Termine hinzufügen.'}
                     </p>
-                    <Button variant="primary" size="sm" onClick={() => setDayDialogOpen(true)}>
-                      <Wand2 aria-hidden /> Tag automatisch planen
-                    </Button>
-                    <p className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
-                      Erstellt komplette Routenvorschläge aus offenen Kundenstunden
-                      {allCandidates.length > 0 ? ' und den Terminen des Tages' : ''}.
-                    </p>
+                    {canManage ? (
+                      <>
+                        <Button variant="primary" size="sm" onClick={() => setDayDialogOpen(true)}>
+                          <Wand2 aria-hidden /> Tag automatisch planen
+                        </Button>
+                        <p className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+                          Erstellt komplette Routenvorschläge aus offenen Kundenstunden
+                          {allCandidates.length > 0 ? ' und den Terminen des Tages' : ''}.
+                        </p>
+                      </>
+                    ) : null}
                   </div>
                 )}
               </PanelBody>

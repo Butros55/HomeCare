@@ -49,6 +49,7 @@ import {
 } from '@/server/services/route-suggestion-service';
 import {
   isPastForRoutePlanning,
+  isPastPlanningDay,
   resolveRouteOrigin,
   type GpsCoordinate,
   type RouteOriginType,
@@ -252,6 +253,11 @@ export async function generateDayRoutes(
 
   const date = fromDateInputValue(input.date);
   if (!date) throw new AppError('VALIDATION_FAILED', { message: 'Ungültiges Datum.' });
+  if (isPastPlanningDay(date, ctx.organization.timezone)) {
+    throw new AppError('VALIDATION_FAILED', {
+      message: 'Für vergangene Tage können keine Routen geplant werden.',
+    });
+  }
 
   const employee = await db.employee.findUnique({ where: { id: input.employeeId } });
   assertSameOrg(ctx, employee);
@@ -682,6 +688,11 @@ export async function acceptDayRoute(input: {
   const date = fromDateInputValue(payload.date);
   if (!date) throw new AppError('SUGGESTION_STALE');
   const timezone = ctx.organization.timezone;
+  if (isPastPlanningDay(date, timezone)) {
+    throw new AppError('VALIDATION_FAILED', {
+      message: 'Vergangene Tage können nicht mehr geplant werden.',
+    });
+  }
   const day = dayPeriodInZone(date, timezone);
   const weekday = isoWeekdayInZone(day.start, timezone);
 
@@ -894,44 +905,46 @@ export async function acceptDayRoute(input: {
           throw new AppError('SUGGESTION_STALE');
         }
 
-        // Stundenguthaben (Konto-Modell).
-        const [topupRows, grantRows, accountAppointments] = await Promise.all([
-          tx.customerHourTopup.findMany({
-            where: { customerId: visit.cust },
-            select: { minutes: true, effectiveOn: true },
-          }),
-          tx.customerRecurringHourGrant.findMany({
-            where: { customerId: visit.cust, active: true },
-          }),
-          tx.appointment.findMany({
-            where: { customerId: visit.cust, deletedAt: null },
-            select: {
-              startAt: true,
-              durationMinutes: true,
-              status: true,
-              timeEntries: { where: { status: 'APPROVED' }, select: { workedMinutes: true } },
-            },
-          }),
-        ]);
-        const plannable = plannableMinutesAt({
-          topups: topupRows,
-          grants: grantRows,
-          appointments: accountAppointments.map((a) => ({
-            durationMinutes: a.durationMinutes,
-            status: a.status,
-            startAt: a.startAt,
-            workedMinutes:
-              a.timeEntries.length > 0
-                ? a.timeEntries.reduce((sum, t) => sum + t.workedMinutes, 0)
-                : null,
-          })),
-          date,
-          reservedBefore: day.end,
-        });
-        if (plannable < visit.dur) {
-          throw new AppError('SUGGESTION_STALE', {
-            message: `Das Stundenguthaben von ${customer.firstName} ${customer.lastName} reicht nicht mehr.`,
+        // Stundenguthaben (Konto-Modell) – nur prüfen, wenn Stundenbudgets aktiv.
+        if (ctx.organization.hourBudgetsEnabled) {
+          const [topupRows, grantRows, accountAppointments] = await Promise.all([
+            tx.customerHourTopup.findMany({
+              where: { customerId: visit.cust },
+              select: { minutes: true, effectiveOn: true },
+            }),
+            tx.customerRecurringHourGrant.findMany({
+              where: { customerId: visit.cust, active: true },
+            }),
+            tx.appointment.findMany({
+              where: { customerId: visit.cust, deletedAt: null },
+              select: {
+                startAt: true,
+                durationMinutes: true,
+                status: true,
+                timeEntries: { where: { status: 'APPROVED' }, select: { workedMinutes: true } },
+              },
+            }),
+          ]);
+          const plannable = plannableMinutesAt({
+            topups: topupRows,
+            grants: grantRows,
+            appointments: accountAppointments.map((a) => ({
+              durationMinutes: a.durationMinutes,
+              status: a.status,
+              startAt: a.startAt,
+              workedMinutes:
+                a.timeEntries.length > 0
+                  ? a.timeEntries.reduce((sum, t) => sum + t.workedMinutes, 0)
+                  : null,
+            })),
+            date,
+            reservedBefore: day.end,
           });
+          if (plannable < visit.dur) {
+            throw new AppError('SUGGESTION_STALE', {
+              message: `Das Stundenguthaben von ${customer.firstName} ${customer.lastName} reicht nicht mehr.`,
+            });
+          }
         }
 
         // Bewusst FLEXIBEL im umschließenden Verfügbarkeitsfenster: Die neuen

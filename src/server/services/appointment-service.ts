@@ -420,24 +420,27 @@ export async function collectConflicts(
 
   // Kopplung Termin ↔ Stundenkonto: warnt, wenn der Termin ohne Konto bzw.
   // über dem verplanbaren Guthaben zum Termindatum liegt (Konto-Modell).
-  const dayParts = calendarDayInZone(candidate.startAt, timezone);
-  const candidateDay = utcDate(dayParts.year, dayParts.month, dayParts.day);
-  const plannableByCustomer = await getPlannableMinutesForDate(
-    ctx.organization.id,
-    timezone,
-    candidateDay,
-    {
-      customerIds: [candidate.customerId],
-      ...(candidate.id ? { excludeAppointmentId: candidate.id } : {}),
-    },
-  );
-  const account = plannableByCustomer.get(candidate.customerId);
-  conflicts.push(
-    ...checkAccountConflicts({
-      plannableMinutes: account?.hasAccount ? account.plannableMinutes : null,
-      candidateMinutes: candidate.durationMinutes,
-    }),
-  );
+  // Nur relevant, solange Stundenkonten organisationsweit aktiv sind.
+  if (ctx.organization.hourBudgetsEnabled) {
+    const dayParts = calendarDayInZone(candidate.startAt, timezone);
+    const candidateDay = utcDate(dayParts.year, dayParts.month, dayParts.day);
+    const plannableByCustomer = await getPlannableMinutesForDate(
+      ctx.organization.id,
+      timezone,
+      candidateDay,
+      {
+        customerIds: [candidate.customerId],
+        ...(candidate.id ? { excludeAppointmentId: candidate.id } : {}),
+      },
+    );
+    const account = plannableByCustomer.get(candidate.customerId);
+    conflicts.push(
+      ...checkAccountConflicts({
+        plannableMinutes: account?.hasAccount ? account.plannableMinutes : null,
+        candidateMinutes: candidate.durationMinutes,
+      }),
+    );
+  }
 
   return conflicts;
 }

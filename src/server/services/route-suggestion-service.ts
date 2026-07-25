@@ -56,6 +56,7 @@ import {
 import { ensureMaterializedUntil } from '@/server/services/appointment-service';
 import { createNotification } from '@/server/services/notification-service';
 import {
+  isPastPlanningDay,
   ORIGIN_LABELS,
   resolveRouteOrigin,
   type GpsCoordinate,
@@ -410,6 +411,12 @@ export async function generateRouteSuggestions(
   const ctx = await requireOrganizationMembership();
   const date = fromDateInputValue(input.date);
   if (!date) throw new AppError('VALIDATION_FAILED', { message: 'Ungültiges Datum.' });
+  // Für vergangene Tage werden keine Vorschläge mehr erzeugt (nur Ansicht).
+  if (isPastPlanningDay(date, ctx.organization.timezone)) {
+    throw new AppError('VALIDATION_FAILED', {
+      message: 'Für vergangene Tage können keine Vorschläge erzeugt werden.',
+    });
+  }
 
   const isLeadership = ctx.membership.role !== 'EMPLOYEE';
 
@@ -1072,6 +1079,11 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
   const date = fromDateInputValue(payload.date);
   if (!date) throw new AppError('SUGGESTION_STALE');
   const timezone = ctx.organization.timezone;
+  if (isPastPlanningDay(date, timezone)) {
+    throw new AppError('VALIDATION_FAILED', {
+      message: 'Vergangene Tage können nicht mehr geplant werden.',
+    });
+  }
   const day = dayPeriodInZone(date, timezone);
   const weekday = isoWeekdayInZone(day.start, timezone);
   const dayParts = calendarDayInZone(day.start, timezone);
