@@ -24,7 +24,8 @@ export function RouteDateStrip({
   /** Ausgewählter Planungstag (YYYY-MM-DD). */
   date: string;
   onSelect: (date: string) => void;
-  employeeId: string;
+  /** Mitarbeiter für die „geplant"-Marker; ohne (Teamplanung) nur die Tagesauswahl. */
+  employeeId?: string;
 }) {
   const [weekStart, setWeekStart] = React.useState<Date>(() =>
     startOfWeek(parseISO(date), { weekStartsOn: 1 }),
@@ -46,6 +47,8 @@ export function RouteDateStrip({
 
   const [planned, setPlanned] = React.useState<Record<string, string>>({});
   React.useEffect(() => {
+    // Ohne Mitarbeiter (Teamplanung) keine „geplant"-Marker laden.
+    if (!employeeId) return;
     let cancelled = false;
     // Marker der sichtbaren Woche laden. Der Zustand wird ausschließlich im
     // asynchronen Zweig gesetzt (kein synchrones setState im Effekt-Rumpf).

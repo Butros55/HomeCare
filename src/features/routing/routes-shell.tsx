@@ -7,6 +7,7 @@ import {
   Building2,
   Car,
   Check,
+  ChevronDown,
   ChevronUp,
   Clock,
   Home,
@@ -78,6 +79,7 @@ import type {
 import { SuggestionCard } from '@/features/routing/suggestion-card';
 import { RouteDateStrip } from '@/features/routing/route-date-strip';
 import { DayRouteDialog, type DayRouteFormValues } from '@/features/routing/day-route-dialog';
+import { useRoadPath } from '@/features/map/use-road-path';
 import { computeRouteEarnings, formatEuroCents } from '@/lib/earnings';
 
 const LeafletMap = dynamic(() => import('@/features/map/leaflet-map').then((m) => m.LeafletMap), {
@@ -904,6 +906,9 @@ function SingleRoutePlanner({
   /** Nur verwenden, wenn die Antwort zur aktuell gezeigten Route gehört. */
   const activeRoadPath =
     roadPath && roadPath.key === pathKey && roadPath.road ? roadPath.coordinates : undefined;
+  // Strecke noch nicht geladen? Dann subtiler Ladehinweis statt Fluglinie.
+  const roadResolved = Boolean(roadPath && roadPath.key === pathKey);
+  const loadingRoad = Boolean(polyline && polyline.length > 1) && !roadResolved;
 
   const originOptions: { value: OriginType; label: string; icon: React.ReactNode; disabled: boolean; hint?: string }[] = [
     {
@@ -1283,15 +1288,20 @@ function SingleRoutePlanner({
                       {activeRoadPath
                         ? 'Tatsächliche Fahrstrecke'
                         : roadPath && roadPath.key === pathKey
-                          ? 'Luftlinie – kein Routendienst erreichbar'
-                          : 'Fahrstrecke wird geladen …'}
+                          ? 'Strecke nicht verfügbar'
+                          : 'Fahrstrecke wird berechnet …'}
                     </span>
                   ) : null}
                 </PanelHeader>
                 <PanelBody className="p-3">
                   <div className="h-[360px] overflow-hidden rounded-[var(--radius-lg)] xl:h-[clamp(20rem,42vh,30rem)]">
                     {markers.length > 0 ? (
-                      <LeafletMap markers={markers} polyline={polyline} roadPath={activeRoadPath} />
+                      <LeafletMap
+                        markers={markers}
+                        polyline={polyline}
+                        roadPath={activeRoadPath}
+                        loadingRoad={loadingRoad}
+                      />
                     ) : (
                       <div className="flex h-full items-center justify-center rounded-[var(--radius-lg)] bg-[var(--color-panel-sunken)] text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
                         Termine hinzufügen, um die Route zu sehen.
@@ -1475,17 +1485,10 @@ function TeamPlanner({
 
   return (
     <div className="space-y-4">
+      {/* Datumsleiste identisch zur Einzelroute (Woche mit Tag-Buttons). */}
+      <RouteDateStrip date={date} onSelect={setDate} />
       <Panel data-tour="routes-team-params">
-        <PanelBody className="grid grid-cols-2 gap-3 lg:grid-cols-8">
-          <div className="lg:col-span-2">
-            <Label htmlFor="team-date">Datum</Label>
-            <Input
-              id="team-date"
-              type="date"
-              value={date}
-              onChange={(event) => setDate(event.target.value)}
-            />
-          </div>
+        <PanelBody className="grid grid-cols-2 gap-3 lg:grid-cols-6">
           <div className="lg:col-span-2">
             <Label htmlFor="team-buffer">Puffer (Min.)</Label>
             <Input
@@ -1568,6 +1571,75 @@ function TeamPlanner({
   );
 }
 
+/** Detail der bestehenden Route eines Mitarbeiters: Stoppliste + Karte der
+ *  tatsächlichen Strecke (im Teamlauf aufklappbar, um das UI nicht zu überladen). */
+function BaseRouteDetail({
+  baseRoute,
+  timezone,
+}: {
+  baseRoute: NonNullable<EmployeeSuggestionPanel['baseRoute']>;
+  timezone: string;
+}) {
+  const markers = [
+    {
+      id: 'start',
+      latitude: baseRoute.origin.latitude,
+      longitude: baseRoute.origin.longitude,
+      label: baseRoute.origin.label,
+      color: '#1b1f36',
+    },
+    ...baseRoute.stops.map((stop) => ({
+      id: `base-${stop.sequence}`,
+      latitude: stop.latitude,
+      longitude: stop.longitude,
+      label: stop.name,
+      color: stop.color,
+      sequence: stop.sequence,
+    })),
+  ];
+  const polyline = React.useMemo<[number, number][]>(
+    () => [
+      [baseRoute.origin.latitude, baseRoute.origin.longitude],
+      ...baseRoute.stops.map((s) => [s.latitude, s.longitude] as [number, number]),
+      ...(baseRoute.returnAt
+        ? [[baseRoute.origin.latitude, baseRoute.origin.longitude] as [number, number]]
+        : []),
+    ],
+    [baseRoute],
+  );
+  const { roadPath, loadingRoad } = useRoadPath(polyline);
+
+  return (
+    <div className="space-y-2.5">
+      <ol className="space-y-1 text-[length:var(--text-xs)]">
+        {baseRoute.stops.map((stop) => (
+          <li key={stop.sequence} className="flex items-center gap-2">
+            <span
+              className="flex size-5 shrink-0 items-center justify-center rounded-full text-[length:var(--text-2xs)] font-semibold text-white"
+              style={{ background: stop.color }}
+            >
+              {stop.sequence}
+            </span>
+            <span className="tabular shrink-0 text-[var(--color-ink-muted)]">
+              {formatTime(new Date(stop.serviceStartAt), timezone)}–
+              {formatTime(new Date(stop.serviceEndAt), timezone)}
+            </span>
+            <span className="min-w-0 truncate font-medium">{stop.name}</span>
+          </li>
+        ))}
+      </ol>
+      <div className="h-44 overflow-hidden rounded-[var(--radius-md)]">
+        <LeafletMap
+          markers={markers}
+          polyline={polyline}
+          roadPath={roadPath}
+          loadingRoad={loadingRoad}
+        />
+      </div>
+    </div>
+  );
+}
+
 function TeamEmployeePanel({
   panel,
   timezone,
@@ -1591,6 +1663,7 @@ function TeamEmployeePanel({
 }) {
   const visible = panel.suggestions.filter((s) => !declinedTokens.has(s.token));
   const declined = panel.suggestions.filter((s) => declinedTokens.has(s.token));
+  const [showBaseRoute, setShowBaseRoute] = React.useState(false);
 
   return (
     <Panel>
@@ -1625,18 +1698,36 @@ function TeamEmployeePanel({
         ) : null}
 
         {panel.baseRoute ? (
-          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-3 py-2 text-[length:var(--text-xs)] text-[var(--color-ink-muted)]">
-            <span className="font-medium text-[var(--color-ink)]">
-              Bestehende Route: {panel.baseRoute.stopCount}{' '}
-              {panel.baseRoute.stopCount === 1 ? 'Stopp' : 'Stopps'}
-            </span>
-            <span>Empfohlene Abfahrt {formatTime(new Date(panel.baseRoute.departureAt), timezone)}</span>
-            {panel.baseRoute.returnAt ? (
-              <span>Rückkehr {formatTime(new Date(panel.baseRoute.returnAt), timezone)}</span>
+          <div className="overflow-hidden rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)]">
+            {/* Zusammenfassung als Auslöser – klappt Detail + Karte der
+                bestehenden Route auf, ohne die Ansicht dauerhaft zu überladen. */}
+            <button
+              type="button"
+              onClick={() => setShowBaseRoute((value) => !value)}
+              aria-expanded={showBaseRoute}
+              className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-left text-[length:var(--text-xs)] text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-panel-raised)]"
+            >
+              <span className="font-medium text-[var(--color-ink)]">
+                Bestehende Route: {panel.baseRoute.stopCount}{' '}
+                {panel.baseRoute.stopCount === 1 ? 'Stopp' : 'Stopps'}
+              </span>
+              <span>Abfahrt {formatTime(new Date(panel.baseRoute.departureAt), timezone)}</span>
+              <span>Fahrtzeit {formatTravelSeconds(panel.baseRoute.totalTravelSeconds)}</span>
+              <span className="ml-auto inline-flex shrink-0 items-center gap-1 font-medium text-[var(--color-brand)]">
+                {showBaseRoute ? 'Weniger' : 'Karte & Stopps'}
+                {showBaseRoute ? (
+                  <ChevronUp className="size-3.5" aria-hidden />
+                ) : (
+                  <ChevronDown className="size-3.5" aria-hidden />
+                )}
+              </span>
+            </button>
+            {showBaseRoute ? (
+              <div className="border-t border-[var(--color-line-subtle)] p-3">
+                <BaseRouteDetail baseRoute={panel.baseRoute} timezone={timezone} />
+              </div>
             ) : null}
-            <span>Fahrtzeit {formatTravelSeconds(panel.baseRoute.totalTravelSeconds)}</span>
-            <span>Kundenzeit {formatMinutesVerbose(panel.baseRoute.totalServiceMinutes)}</span>
-          </p>
+          </div>
         ) : panel.status === 'ok' ? (
           <p className="text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
             Keine bestehende Route an diesem Tag – Vorschläge starten eine neue Route.

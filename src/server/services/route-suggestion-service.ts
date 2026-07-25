@@ -198,6 +198,18 @@ export interface EmployeeSuggestionPanel {
     totalWaitSeconds: number;
     totalServiceMinutes: number;
     stopCount: number;
+    /** Startpunkt der bestehenden Route (für die Karte). */
+    origin: { latitude: number; longitude: number; label: string };
+    /** Stopps der bestehenden Route (für Detail-Panel + Karte). */
+    stops: {
+      name: string;
+      latitude: number;
+      longitude: number;
+      color: string;
+      sequence: number;
+      serviceStartAt: string;
+      serviceEndAt: string;
+    }[];
   } | null;
   suggestions: RouteSuggestionDto[];
 }
@@ -705,7 +717,7 @@ async function buildEmployeePanel(args: {
       },
       include: {
         locationAddress: true,
-        customer: { select: { firstName: true, lastName: true } },
+        customer: { select: { firstName: true, lastName: true, color: true } },
       },
       orderBy: { startAt: 'asc' },
     }),
@@ -1084,6 +1096,21 @@ async function buildEmployeePanel(args: {
               totalWaitSeconds: baseRoute.totalWaitSeconds,
               totalServiceMinutes: baseRoute.totalServiceMinutes,
               stopCount: baseRoute.stops.length,
+              origin: { latitude: origin.latitude, longitude: origin.longitude, label: origin.label },
+              stops: baseRoute.stops.map((stop) => {
+                const appointment = baseAppointments.find((a) => a.id === stop.id);
+                return {
+                  name: appointment
+                    ? `${appointment.customer.firstName} ${appointment.customer.lastName}`
+                    : 'Stopp',
+                  latitude: appointment?.locationAddress?.latitude ?? origin.latitude,
+                  longitude: appointment?.locationAddress?.longitude ?? origin.longitude,
+                  color: appointment?.customer.color ?? '#64748b',
+                  sequence: stop.sequence,
+                  serviceStartAt: stop.serviceStartAt.toISOString(),
+                  serviceEndAt: stop.serviceEndAt.toISOString(),
+                };
+              }),
             }
           : null,
       suggestions: [],

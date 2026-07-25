@@ -24,6 +24,7 @@ import { formatTime } from '@/lib/dates';
 import { formatMinutesVerbose } from '@/lib/duration';
 import { formatEuroCents } from '@/lib/earnings';
 import { formatDistance, formatTravelSeconds } from '@/lib/geo';
+import { useRoadPath } from '@/features/map/use-road-path';
 import { cn } from '@/lib/utils';
 import type { DayRouteVariantDto, GenerateDayRoutesResult } from '@/server/services/day-route-service';
 
@@ -279,11 +280,18 @@ function VariantCard({
       sequence: stop.sequence,
     })),
   ];
-  const polyline: [number, number][] = [
-    [origin.latitude, origin.longitude],
-    ...variant.stops.map((stop) => [stop.latitude, stop.longitude] as [number, number]),
-    ...(variant.returnArrivalAt ? [[origin.latitude, origin.longitude] as [number, number]] : []),
-  ];
+  const polyline = React.useMemo<[number, number][]>(
+    () => [
+      [origin.latitude, origin.longitude],
+      ...variant.stops.map((stop) => [stop.latitude, stop.longitude] as [number, number]),
+      ...(variant.returnArrivalAt ? [[origin.latitude, origin.longitude] as [number, number]] : []),
+    ],
+    [origin, variant],
+  );
+
+  // Tatsächliche Fahrstrecke laden (statt der irreführenden Fluglinie) – wie in
+  // der Einzelroute. Bis sie da ist, zeigt die Karte nur einen Ladehinweis.
+  const { roadPath: activeRoad, loadingRoad } = useRoadPath(polyline);
 
   return (
     <div
@@ -315,7 +323,7 @@ function VariantCard({
       {/* Desktop: kleine Karte links, Kennzahlen rechts. Mobil gestapelt. */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="h-40 overflow-hidden rounded-[var(--radius-md)] sm:h-44">
-          <LeafletMap markers={markers} polyline={polyline} />
+          <LeafletMap markers={markers} polyline={polyline} roadPath={activeRoad} loadingRoad={loadingRoad} />
         </div>
         <div className="grid grid-cols-2 gap-2 self-start">
           <MiniStat icon={<Navigation aria-hidden />} label="Abfahrt" value={formatTime(new Date(variant.departureAt), timezone)} />

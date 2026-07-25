@@ -3,6 +3,7 @@
 import 'leaflet/dist/leaflet.css';
 
 import L from 'leaflet';
+import { Loader2 } from 'lucide-react';
 import * as React from 'react';
 import { Circle, MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
 
@@ -128,13 +129,20 @@ export function LeafletMap({
   markers,
   polyline,
   roadPath,
+  loadingRoad = false,
   circle,
 }: {
   markers: MapMarker[];
-  /** Luftlinie zwischen den Stopps – Ersatz, solange keine Strecke vorliegt. */
+  /**
+   * Stopp-Reihenfolge (Luftlinie) – wird NICHT mehr als Linie gezeichnet
+   * (keine irreführende Fluglinie), dient nur noch dem Kartenausschnitt, solange
+   * die echte Strecke lädt.
+   */
   polyline?: [number, number][];
-  /** Tatsächlich zu fahrende Strecke (Straßenverlauf) – hat Vorrang. */
+  /** Tatsächlich zu fahrende Strecke (Straßenverlauf) – das einzige gezeichnete Wegband. */
   roadPath?: [number, number][];
+  /** Strecke wird gerade geladen → subtiler Ladehinweis statt Fluglinie. */
+  loadingRoad?: boolean;
   /** Umkreis (z. B. Zuständigkeitsgebiet). */
   circle?: MapCircle;
 }) {
@@ -149,6 +157,7 @@ export function LeafletMap({
   const routeWeight = routeWeightPx(settings.routeWeight);
 
   return (
+    <div className="relative h-full w-full">
     <MapContainer
       center={center}
       zoom={13}
@@ -185,16 +194,6 @@ export function LeafletMap({
             pathOptions={{ color: routeColor, weight: routeWeight, opacity: 0.95, lineJoin: 'round' }}
           />
         </>
-      ) : polyline && polyline.length > 1 ? (
-        <Polyline
-          positions={polyline}
-          pathOptions={{
-            color: routeColor,
-            weight: Math.max(2, routeWeight - 2),
-            opacity: 0.7,
-            dashArray: '6 8',
-          }}
-        />
       ) : null}
       {circle ? (
         <Circle
@@ -229,5 +228,15 @@ export function LeafletMap({
       <FitBounds markers={markers} path={hasRoad ? roadPath : polyline} circle={circle} />
       <InvalidateOnResize />
     </MapContainer>
+      {/* Subtiler Ladehinweis, solange die echte Strecke berechnet wird –
+          statt kurz die (irreführende) Fluglinie aufflackern zu lassen. */}
+      {loadingRoad && !hasRoad ? (
+        <div className="pointer-events-none absolute inset-x-0 top-2 z-[500] flex justify-center">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-line-subtle)] bg-[color-mix(in_srgb,var(--color-panel)_90%,transparent)] px-2.5 py-1 text-[length:var(--text-2xs)] text-[var(--color-ink-muted)] shadow-[var(--shadow-panel)] backdrop-blur">
+            <Loader2 className="size-3 animate-spin" aria-hidden /> Strecke wird berechnet…
+          </span>
+        </div>
+      ) : null}
+    </div>
   );
 }
