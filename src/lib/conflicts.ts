@@ -54,6 +54,10 @@ export interface ExistingAppointment {
   endAt: Date;
   durationMinutes: number;
   title?: string;
+  /** Kundenname des Bestandstermins – macht Überschneidungen konkret nachvollziehbar. */
+  customerName?: string;
+  /** Fest terminiert (false = flexibel) – für eine klare Konfliktbeschreibung. */
+  isFlexible?: boolean;
   /** Koordinate für Fahrzeitprüfung (optional). */
   latitude?: number | null;
   longitude?: number | null;
@@ -119,10 +123,15 @@ export function checkAppointmentConflicts(input: ConflictCheckInput): Conflict[]
     for (const existing of input.existingAppointments) {
       if (existing.id === candidate.id) continue;
       if (overlaps(candidate.startAt, candidate.endAt, existing.startAt, existing.endAt)) {
+        const otherTitle = existing.title ?? 'einem Termin';
+        const forCustomer = existing.customerName ? ` für ${existing.customerName}` : '';
+        const timeRange = `${fmtTime(existing.startAt, timezone)}–${fmtTime(existing.endAt, timezone)}`;
         conflicts.push({
           type: 'OVERLAP',
           severity: 'WARNING',
-          message: `Überschneidung mit ${existing.title ?? 'einem Termin'} (${fmtTime(existing.startAt, timezone)}–${fmtTime(existing.endAt, timezone)}).`,
+          // Konkret benennen, WELCHER andere Termin (Kunde + Zeit) betroffen ist –
+          // beide Termine gehören demselben Mitarbeiter (Doppelbelegung).
+          message: `Zeitgleich mit „${otherTitle}"${forCustomer} (${timeRange}) – derselbe Mitarbeiter ist doppelt verplant.`,
           relatedAppointmentId: existing.id,
         });
       }

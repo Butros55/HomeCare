@@ -59,7 +59,10 @@ export function PageHeader({
           </ol>
         </nav>
       ) : null}
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      {/* Mobil stapeln Titel und Aktionen (Aktionen bekommen so die volle Breite
+          und brechen sauber um, statt am Rand abgeschnitten zu werden); ab sm
+          nebeneinander mit Ausrichtung nach außen. */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="truncate text-[length:var(--text-2xl)] font-semibold tracking-tight">
             {title}
@@ -70,7 +73,9 @@ export function PageHeader({
             </p>
           ) : null}
         </div>
-        {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
+        {actions ? (
+          <div className="flex flex-wrap items-center gap-2 sm:shrink-0">{actions}</div>
+        ) : null}
       </div>
       {children}
     </div>

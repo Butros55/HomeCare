@@ -394,15 +394,34 @@ async function computeResolution(
     };
   });
 
+  const customerOf = (a: (typeof appointments)[number]) =>
+    `${a.customer.firstName} ${a.customer.lastName}`;
+  const timeOverlaps = (
+    a: { startAt: Date; endAt: Date },
+    b: { startAt: Date; endAt: Date },
+  ): boolean => a.startAt < b.endAt && b.startAt < a.endAt;
+
   const unresolved: ResolutionUnresolvedDto[] = result.unresolved.map((id) => {
     const appointment = byId.get(id)!;
-    return {
-      appointmentId: id,
-      title: appointment.title,
-      reason: appointment.isFlexible
-        ? 'Kein freies Zeitfenster – bitte manuell anpassen.'
-        : 'Fixer Termin überschneidet sich mit einem anderen fixen Termin.',
-    };
+    // Konkret benennen, WOMIT sich der Termin überschneidet (Kunde + Zeit), damit
+    // die Meldung erklärt „weshalb und wer betroffen ist" statt nur „geht nicht".
+    const clashing = appointments.filter(
+      (other) => other.id !== id && timeOverlaps(appointment, other),
+    );
+    const clashLabel = clashing
+      .map((o) => `„${o.title}" (${customerOf(o)}, ${label(o.startAt, o.endAt)})`)
+      .join(' und ');
+    let reason: string;
+    if (appointment.isFlexible) {
+      reason = clashLabel
+        ? `Kein freies Zeitfenster – überschneidet sich mit ${clashLabel}. Bitte das Zeitfenster des Kunden erweitern oder manuell umplanen.`
+        : 'Kein freies Zeitfenster – bitte das Zeitfenster erweitern oder manuell umplanen.';
+    } else {
+      reason = clashLabel
+        ? `Fest terminiert (${label(appointment.startAt, appointment.endAt)}) und überschneidet sich mit ${clashLabel} – beide Termine sind fest. Bitte einen davon verschieben oder über „Freie Mitarbeiter in der Nähe" neu zuweisen.`
+        : 'Fest terminiert und nicht automatisch verschiebbar – bitte manuell anpassen.';
+    }
+    return { appointmentId: id, title: appointment.title, reason };
   });
 
   return {

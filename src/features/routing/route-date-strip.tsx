@@ -66,6 +66,13 @@ export function RouteDateStrip({
 
   const todayIso = iso(new Date());
 
+  // Den ausgewählten Tag stets vollständig sichtbar in die Leiste scrollen –
+  // sonst klebt er (z. B. „Sa") am Rand und wirkt abgeschnitten.
+  const selectedDayRef = React.useRef<HTMLButtonElement | null>(null);
+  React.useEffect(() => {
+    selectedDayRef.current?.scrollIntoView({ inline: 'center', block: 'nearest' });
+  }, [date, weekStart]);
+
   return (
     <div className="flex items-center gap-1.5 rounded-[var(--radius-lg)] border border-[var(--color-line-subtle)] bg-[var(--color-panel)] p-1.5 shadow-[var(--shadow-panel)]">
       <button
@@ -86,6 +93,7 @@ export function RouteDateStrip({
           return (
             <button
               key={dayIso}
+              ref={isSelected ? selectedDayRef : null}
               type="button"
               aria-pressed={isSelected}
               onClick={() => onSelect(dayIso)}

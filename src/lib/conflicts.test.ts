@@ -70,6 +70,28 @@ describe('checkAppointmentConflicts', () => {
     expect(hasWarnings(conflicts)).toBe(true);
   });
 
+  it('benennt in der Überschneidungs-Meldung den Kunden des anderen Termins', () => {
+    const conflicts = checkAppointmentConflicts(
+      baseInput({
+        existingAppointments: [
+          {
+            id: 'other',
+            startAt: new Date('2026-07-22T08:00:00.000Z'),
+            endAt: new Date('2026-07-22T10:00:00.000Z'),
+            durationMinutes: 120,
+            title: 'Hauswirtschaftlicher Einsatz',
+            customerName: 'Anna Müller',
+            isFlexible: false,
+          },
+        ],
+      }),
+    );
+    expect(conflicts[0]!.type).toBe('OVERLAP');
+    // Meldung nennt konkret Kunde + Titel des kollidierenden Termins.
+    expect(conflicts[0]!.message).toContain('Anna Müller');
+    expect(conflicts[0]!.message).toContain('Hauswirtschaftlicher Einsatz');
+  });
+
   it('ignoriert den Kandidaten selbst beim Überschneidungs-Check (Bearbeitung)', () => {
     const conflicts = checkAppointmentConflicts(
       baseInput({

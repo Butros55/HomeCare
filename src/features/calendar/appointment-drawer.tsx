@@ -133,6 +133,38 @@ export function AppointmentDrawer({
   // „Absagen" (bleibt als abgesagt sichtbar) vs. „Löschen" (vollständig entfernen).
   const [cancelMode, setCancelMode] = React.useState<'cancel' | 'delete'>('cancel');
   const [pending, startTransition] = React.useTransition();
+
+  // Bottom-Sheet per Ziehen am Griff schließen (Mobil): mehr als DISMISS_PX nach
+  // unten ziehen schließt, darunter federt es zurück. Auf Desktop (Seiten-Drawer)
+  // ist der Griff ausgeblendet, daher ohne Wirkung.
+  const DISMISS_PX = 90;
+  const drag = React.useRef({ active: false, startY: 0, y: 0 });
+  const [dragY, setDragY] = React.useState(0);
+  const [dragging, setDragging] = React.useState(false);
+  const onHandlePointerDown = (event: React.PointerEvent) => {
+    drag.current = { active: true, startY: event.clientY, y: 0 };
+    setDragging(true);
+    try {
+      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer-Capture nicht verfügbar – Geste funktioniert trotzdem best effort.
+    }
+  };
+  const onHandlePointerMove = (event: React.PointerEvent) => {
+    if (!drag.current.active) return;
+    const y = Math.max(0, event.clientY - drag.current.startY);
+    drag.current.y = y;
+    setDragY(y);
+  };
+  const endDrag = () => {
+    if (!drag.current.active) return;
+    const y = drag.current.y;
+    drag.current.active = false;
+    setDragging(false);
+    if (y > DISMISS_PX) onClose();
+    else setDragY(0);
+  };
+
   const [assignConflicts, setAssignConflicts] = React.useState<{
     employeeId: string | null;
     conflicts: { message: string }[];
@@ -369,18 +401,34 @@ export function AppointmentDrawer({
       <aside
         role="dialog"
         aria-label="Termindetails"
+        style={{
+          transform: dragY > 0 ? `translateY(${dragY}px)` : undefined,
+          transition: dragging ? 'none' : 'transform 200ms ease-out',
+        }}
         className={cn(
-          'absolute flex flex-col overflow-y-auto bg-[var(--color-panel)]',
+          // overscroll-contain: Scroll bleibt im Sheet (schlägt nicht auf die
+          // Seite dahinter durch); touch-pan-y: Touch-Scroll wird zuverlässig erkannt.
+          'absolute flex flex-col touch-pan-y overflow-y-auto overscroll-contain bg-[var(--color-panel)]',
           // Mobil: App-typisches Bottom-Sheet
           'animate-sheet-in inset-x-0 bottom-0 max-h-[92dvh] rounded-t-[var(--radius-xl)] border-t border-[var(--color-line-subtle)] shadow-[var(--shadow-popover)]',
           // Ab sm: Seiten-Drawer rechts
           'sm:animate-drawer-in sm:inset-x-auto sm:inset-y-0 sm:right-0 sm:max-h-none sm:w-full sm:max-w-md sm:rounded-none sm:border-t-0 sm:border-l sm:shadow-[var(--shadow-drawer)]',
         )}
       >
+        {/* Ziehgriff: am Strich nach unten ziehen schließt das Sheet (Mobil).
+            touch-none: die Geste wird nicht als Scroll interpretiert. */}
         <div
-          className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-[var(--color-line-strong)] sm:hidden"
-          aria-hidden
-        />
+          className="shrink-0 cursor-grab touch-none py-2 active:cursor-grabbing sm:hidden"
+          onPointerDown={onHandlePointerDown}
+          onPointerMove={onHandlePointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          role="button"
+          tabIndex={-1}
+          aria-label="Zum Schließen nach unten ziehen"
+        >
+          <div className="mx-auto h-1.5 w-11 rounded-full bg-[var(--color-line-strong)]" aria-hidden />
+        </div>
         {!detail ? (
           <DrawerContentSkeleton />
         ) : (

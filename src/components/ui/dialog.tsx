@@ -47,7 +47,10 @@ export function DialogContent({
         className={cn(
           // Mobil: Bottom-Sheet. overflow-x-hidden: Dialoge scrollen nie seitlich –
           // Felder müssen sich der Dialogbreite anpassen (Inputs sind min-w-0).
-          'animate-sheet-in fixed inset-x-0 bottom-0 z-50 max-h-[92dvh] w-full overflow-x-hidden overflow-y-auto rounded-t-[var(--radius-xl)]',
+          // overscroll-contain: das Scrollen bleibt IM Sheet und schlägt nicht auf
+          // die Seite dahinter durch. touch-pan-y: vertikale Touch-Gesten werden
+          // zuverlässig als Scroll erkannt.
+          'animate-sheet-in fixed inset-x-0 bottom-0 z-50 max-h-[92dvh] w-full touch-pan-y overflow-x-hidden overflow-y-auto overscroll-contain rounded-t-[var(--radius-xl)]',
           // Desktop: zentriert
           'sm:animate-pop-in sm:inset-x-auto sm:bottom-auto sm:top-1/2 sm:left-1/2 sm:max-h-[85dvh] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[var(--radius-xl)]',
           wide ? 'sm:max-w-2xl' : 'sm:max-w-md',

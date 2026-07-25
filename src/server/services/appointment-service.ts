@@ -280,7 +280,12 @@ export async function collectConflicts(
         select: { latitude: true, longitude: true },
       });
 
-  let existingAppointments: Awaited<ReturnType<typeof db.appointment.findMany>> = [];
+  let existingAppointments: Prisma.AppointmentGetPayload<{
+    include: {
+      locationAddress: { select: { latitude: true; longitude: true } };
+      customer: { select: { firstName: true; lastName: true } };
+    };
+  }>[] = [];
   let absences: { startAt: Date; endAt: Date }[] = [];
   let availabilities: { weekday: number; startTime: string; endTime: string }[] = [];
   let maximumMinutesPerDay: number | null = null;
@@ -308,6 +313,7 @@ export async function collectConflicts(
         },
         include: {
           locationAddress: { select: { latitude: true, longitude: true } },
+          customer: { select: { firstName: true, lastName: true } },
         },
         orderBy: { startAt: 'asc' },
       }),
@@ -409,6 +415,8 @@ export async function collectConflicts(
       endAt: a.endAt,
       durationMinutes: a.durationMinutes,
       title: a.title,
+      customerName: a.customer ? `${a.customer.firstName} ${a.customer.lastName}` : undefined,
+      isFlexible: a.isFlexible,
     })),
     absences,
     availabilities,

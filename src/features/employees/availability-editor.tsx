@@ -1,6 +1,6 @@
 'use client';
 
-import { Plus, Trash2 } from 'lucide-react';
+import { CalendarDays, Plus, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -49,11 +49,42 @@ export function AvailabilityEditor({
   );
   const [pending, startTransition] = React.useTransition();
 
+  const makeKey = (suffix: string | number) => `new-${Date.now()}-${suffix}`;
+
   const addSlot = () => {
-    setSlots((current) => [
-      ...current,
-      { key: `new-${Date.now()}-${current.length}`, weekday: 1, startTime: '08:00', endTime: '12:00' },
-    ]);
+    setSlots((current) => {
+      // Nächster Wochentag NACH dem höchsten bereits erfassten (bei Voll → Montag)
+      // und dieselben Zeiten wie zuletzt – so entstehen aufeinanderfolgende Tage
+      // mit gleichen Zeiten per Klick, ohne jedes Mal den Tag zu ändern.
+      const highest = current.reduce<Slot | null>(
+        (best, slot) => (!best || slot.weekday > best.weekday ? slot : best),
+        null,
+      );
+      const nextWeekday = highest ? (highest.weekday % 7) + 1 : 1;
+      return [
+        ...current,
+        {
+          key: makeKey(current.length),
+          weekday: nextWeekday,
+          startTime: highest?.startTime ?? '08:00',
+          endTime: highest?.endTime ?? '16:00',
+        },
+      ];
+    });
+  };
+
+  /** Schnell alle Werktage (Mo–Fr) ergänzen, die noch fehlen. */
+  const addWorkweek = () => {
+    setSlots((current) => {
+      const reference = current[0];
+      const startTime = reference?.startTime ?? '08:00';
+      const endTime = reference?.endTime ?? '16:00';
+      const usedDays = new Set(current.map((slot) => slot.weekday));
+      const additions = [1, 2, 3, 4, 5]
+        .filter((day) => !usedDays.has(day))
+        .map((day) => ({ key: makeKey(`wk-${day}`), weekday: day, startTime, endTime }));
+      return [...current, ...additions];
+    });
   };
 
   const updateSlot = (key: string, patch: Partial<Slot>) => {
@@ -97,15 +128,15 @@ export function AvailabilityEditor({
 
       <ul className="space-y-2">
         {sorted.map((slot) => (
-          <li key={slot.key} className="flex flex-wrap items-end gap-2 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5">
-            <div className="min-w-36 flex-1">
+          <li key={slot.key} className="space-y-2 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5">
+            <div>
               <Label htmlFor={`day-${slot.key}`}>Wochentag</Label>
               <Select
                 value={String(slot.weekday)}
                 onValueChange={(value) => updateSlot(slot.key, { weekday: Number(value) })}
                 disabled={readOnly}
               >
-                <SelectTrigger id={`day-${slot.key}`}>
+                <SelectTrigger id={`day-${slot.key}`} className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -117,49 +148,62 @@ export function AvailabilityEditor({
                 </SelectContent>
               </Select>
             </div>
-            <div>
-              <Label htmlFor={`start-${slot.key}`}>Von</Label>
-              <Input
-                id={`start-${slot.key}`}
-                type="time"
-                value={slot.startTime}
-                onChange={(event) => updateSlot(slot.key, { startTime: event.target.value })}
-                disabled={readOnly}
-                className="w-28"
-              />
-            </div>
-            <div>
-              <Label htmlFor={`end-${slot.key}`}>Bis</Label>
-              <Input
-                id={`end-${slot.key}`}
-                type="time"
-                value={slot.endTime}
-                onChange={(event) => updateSlot(slot.key, { endTime: event.target.value })}
-                disabled={readOnly}
-                className="w-28"
-              />
-            </div>
-            {!readOnly ? (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => removeSlot(slot.key)}
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <Label htmlFor={`start-${slot.key}`}>Von</Label>
+                <Input
+                  id={`start-${slot.key}`}
+                  type="time"
+                  value={slot.startTime}
+                  onChange={(event) => updateSlot(slot.key, { startTime: event.target.value })}
+                  disabled={readOnly}
+                  className="w-full"
+                />
+              </div>
+              <div className="flex-1">
+                <Label htmlFor={`end-${slot.key}`}>Bis</Label>
+                <Input
+                  id={`end-${slot.key}`}
+                  type="time"
+                  value={slot.endTime}
+                  onChange={(event) => updateSlot(slot.key, { endTime: event.target.value })}
+                  disabled={readOnly}
+                  className="w-full"
+                />
+              </div>
+              {!readOnly ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => removeSlot(slot.key)}
                 aria-label="Zeitfenster entfernen"
                 className="text-[var(--color-danger)]"
               >
-                <Trash2 aria-hidden />
-              </Button>
-            ) : null}
+                  <Trash2 aria-hidden />
+                </Button>
+              ) : null}
+            </div>
           </li>
         ))}
       </ul>
 
       {!readOnly ? (
-        <div className="flex items-center justify-between">
-          <Button variant="secondary" size="sm" onClick={addSlot}>
-            <Plus aria-hidden /> Zeitfenster hinzufügen
-          </Button>
-          <Button variant="primary" size="sm" onClick={save} loading={pending}>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" size="sm" onClick={addSlot}>
+              <Plus aria-hidden /> Zeitfenster
+            </Button>
+            <Button variant="ghost" size="sm" onClick={addWorkweek}>
+              <CalendarDays aria-hidden /> Mo–Fr ergänzen
+            </Button>
+          </div>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={save}
+            loading={pending}
+            className="w-full sm:w-auto"
+          >
             Verfügbarkeit speichern
           </Button>
         </div>

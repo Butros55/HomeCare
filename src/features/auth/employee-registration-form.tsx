@@ -65,10 +65,25 @@ export function EmployeeRegistrationForm({
   const [pending, startTransition] = React.useTransition();
 
   const addSlot = () =>
-    setSlots((current) => [
-      ...current,
-      { key: `slot-${current.length}-${current.reduce((n, s) => n + s.weekday, 0)}`, weekday: 1, startTime: '08:00', endTime: '12:00' },
-    ]);
+    setSlots((current) => {
+      // Nächster Wochentag nach dem höchsten bereits erfassten (bei Voll → Montag)
+      // und dieselben Zeiten wie zuletzt – so lassen sich aufeinanderfolgende Tage
+      // per Klick anlegen, ohne jedes Mal den Wochentag zu ändern.
+      const highest = current.reduce<Slot | null>(
+        (best, slot) => (!best || slot.weekday > best.weekday ? slot : best),
+        null,
+      );
+      const weekday = highest ? (highest.weekday % 7) + 1 : 1;
+      return [
+        ...current,
+        {
+          key: `slot-${current.length}-${Date.now()}`,
+          weekday,
+          startTime: highest?.startTime ?? '08:00',
+          endTime: highest?.endTime ?? '16:00',
+        },
+      ];
+    });
   const updateSlot = (key: string, patch: Partial<Slot>) =>
     setSlots((current) => current.map((slot) => (slot.key === key ? { ...slot, ...patch } : slot)));
   const removeSlot = (key: string) =>
