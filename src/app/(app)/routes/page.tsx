@@ -67,6 +67,7 @@ export default async function RoutesPage({
       canManage={canManageRoutes || canSelfPlan}
       canAccept={canManageRoutes || canSelfPlan}
       soloMode={mode === 'solo'}
+      hourBudgetsEnabled={ctx.organization.hourBudgetsEnabled}
       timezone={ctx.organization.timezone}
     />
   );

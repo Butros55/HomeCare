@@ -23,7 +23,7 @@ import {
   type OrgContext,
 } from '@/server/permissions';
 import { geocodeAddressCached } from '@/server/providers/geocoding';
-import { sendMail } from '@/server/mail';
+import { isMailConfigured, sendMail } from '@/server/mail';
 import type {
   AvailabilityFormInput,
   EmployeeFormData,
@@ -497,9 +497,21 @@ export async function ensureLeadershipEmployeeProfiles(ctx: OrgContext): Promise
 
 const INVITATION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * Ergebnis einer Einladung. `link` ist immer als Fallback kopierbar.
+ * `mailConfigured` = echter Versand-Provider konfiguriert; `emailDelivered` =
+ * Versand wurde ohne Fehler übernommen. Daraus leitet die UI die wahre Aussage
+ * ab (versendet / nicht konfiguriert / Versand fehlgeschlagen).
+ */
+export interface InviteResult {
+  link: string;
+  mailConfigured: boolean;
+  emailDelivered: boolean;
+}
+
 export async function inviteEmployee(
   input: InviteEmployeeInput & { email: string },
-): Promise<{ link: string }> {
+): Promise<InviteResult> {
   const ctx = await requireOrganizationMembership();
   const employee = await db.employee.findUnique({ where: { id: input.employeeId } });
   assertSameOrg(ctx, employee);
@@ -564,7 +576,7 @@ export async function inviteEmployee(
   });
 
   const link = `${APP_URL}/invite/${token}`;
-  await sendMail({
+  const { delivered } = await sendMail({
     to: input.email,
     subject: `${APP_NAME}: Einladung von ${ctx.organization.name}`,
     text: [
@@ -576,9 +588,9 @@ export async function inviteEmployee(
       link,
     ].join('\n'),
   });
-  // Solange kein echter Mailversand verdrahtet ist, gibt die Leitung den Link
-  // selbst weiter (Anzeige im Einladungsdialog).
-  return { link };
+  // Der Link bleibt immer als sicher kopierbarer Fallback verfügbar; die UI
+  // meldet je nach Provider „versendet" bzw. „Link weitergeben".
+  return { link, mailConfigured: isMailConfigured(), emailDelivered: delivered };
 }
 
 /**
@@ -586,7 +598,7 @@ export async function inviteEmployee(
  * ohne vorab angelegtes Mitarbeiterprofil – das Profil entsteht bei der
  * Annahme automatisch, damit die Person sofort selbst zuweisbar ist.
  */
-export async function inviteLeadershipAccount(input: { email: string }): Promise<{ link: string }> {
+export async function inviteLeadershipAccount(input: { email: string }): Promise<InviteResult> {
   const ctx = await requirePermission('members.manage');
 
   const existingUser = await db.user.findUnique({ where: { email: input.email } });
@@ -630,7 +642,7 @@ export async function inviteLeadershipAccount(input: { email: string }): Promise
   });
 
   const link = `${APP_URL}/invite/${token}`;
-  await sendMail({
+  const { delivered } = await sendMail({
     to: input.email,
     subject: `${APP_NAME}: Einladung in die Leitung von ${ctx.organization.name}`,
     text: [
@@ -642,7 +654,7 @@ export async function inviteLeadershipAccount(input: { email: string }): Promise
       link,
     ].join('\n'),
   });
-  return { link };
+  return { link, mailConfigured: isMailConfigured(), emailDelivered: delivered };
 }
 
 /** Einladung einlösen: Benutzer anlegen, Mitgliedschaft aktivieren, Profil verknüpfen. */

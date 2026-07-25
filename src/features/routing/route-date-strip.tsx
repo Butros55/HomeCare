@@ -29,13 +29,15 @@ export function RouteDateStrip({
   const [weekStart, setWeekStart] = React.useState<Date>(() =>
     startOfWeek(parseISO(date), { weekStartsOn: 1 }),
   );
-  // Wandert der ausgewählte Tag aus der sichtbaren Woche, die Woche nachziehen.
-  React.useEffect(() => {
+  // Wandert der ausgewählte Tag aus der sichtbaren Woche, die Woche nachziehen –
+  // als Anpassung während des Renderns (statt im Effekt), damit keine kaskadierende
+  // Neurenderung entsteht. React verarbeitet das setState sofort neu.
+  const [lastDate, setLastDate] = React.useState(date);
+  if (date !== lastDate) {
+    setLastDate(date);
     const target = startOfWeek(parseISO(date), { weekStartsOn: 1 });
-    setWeekStart((current) =>
-      isSameWeek(current, target, { weekStartsOn: 1 }) ? current : target,
-    );
-  }, [date]);
+    if (!isSameWeek(weekStart, target, { weekStartsOn: 1 })) setWeekStart(target);
+  }
 
   const days = React.useMemo(
     () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
@@ -45,9 +47,14 @@ export function RouteDateStrip({
   const [planned, setPlanned] = React.useState<Record<string, string>>({});
   React.useEffect(() => {
     let cancelled = false;
-    setPlanned({});
+    // Marker der sichtbaren Woche laden. Der Zustand wird ausschließlich im
+    // asynchronen Zweig gesetzt (kein synchrones setState im Effekt-Rumpf).
     getRoutePlanDatesAction(employeeId, iso(days[0]!), iso(days[6]!)).then((result) => {
-      if (cancelled || !result.ok) return;
+      if (cancelled) return;
+      if (!result.ok) {
+        setPlanned({});
+        return;
+      }
       const map: Record<string, string> = {};
       for (const entry of result.data) map[entry.date] = entry.status;
       setPlanned(map);

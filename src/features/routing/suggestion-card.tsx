@@ -81,6 +81,7 @@ export function SuggestionCard({
   suggestion,
   timezone,
   canAccept,
+  hourBudgetsEnabled,
   declined,
   pending,
   onAccept,
@@ -90,6 +91,8 @@ export function SuggestionCard({
   suggestion: RouteSuggestionDto;
   timezone: string;
   canAccept: boolean;
+  /** Kunden-Stundenkonten org-weit aktiv? Aus = kein „offen"-Guthaben-Badge. */
+  hourBudgetsEnabled: boolean;
   declined: boolean;
   pending: boolean;
   onAccept: (suggestion: RouteSuggestionDto) => void;
@@ -157,7 +160,9 @@ export function SuggestionCard({
               <Wallet className="size-3.5" aria-hidden /> +{formatEuroCents(suggestion.marginalEarningsCents)}
             </span>
           ) : null}
-          {suggestion.openMinutes > 0 ? (
+          {/* „Offenes Guthaben" nur bei aktiven Stundenkonten – ohne Budget ist
+              openMinutes lediglich die Standarddauer und wäre als „offen" irreführend. */}
+          {hourBudgetsEnabled && suggestion.openMinutes > 0 ? (
             <span className="rounded-full bg-[var(--color-brand-subtle)] px-2 py-0.5 text-[length:var(--text-2xs)] font-medium text-[var(--color-brand)]">
               {formatMinutesVerbose(suggestion.openMinutes)} offen
             </span>
@@ -174,9 +179,6 @@ export function SuggestionCard({
           {suggestion.insertAfterLabel
             ? ` · Einfügeposition: Stopp ${suggestion.position} (nach ${suggestion.insertAfterLabel})`
             : ` · Einfügeposition: Stopp ${suggestion.position}`}
-          {suggestion.needsAllocation
-            ? ' · beim Übernehmen wird die Stundenzuweisung automatisch angelegt'
-            : ''}
         </span>
       </p>
 

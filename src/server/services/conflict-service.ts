@@ -11,6 +11,7 @@ import {
   isoWeekdayInZone,
 } from '@/lib/dates';
 import { estimateTravelSeconds, haversineMeters } from '@/lib/geo';
+import { writeAuditLog } from '@/server/audit';
 import { computeRouteMatrixCached } from '@/server/providers/routing';
 import { db } from '@/server/db';
 import { AppError } from '@/server/errors';
@@ -24,6 +25,10 @@ import {
   type OrgContext,
 } from '@/server/permissions';
 import { collectConflicts, rescheduleAppointment } from '@/server/services/appointment-service';
+import {
+  createNotificationsForUsers,
+  getPlannerUserIds,
+} from '@/server/services/notification-service';
 
 /**
  * Konflikt-Assistent: konkrete Konflikte je Termin anzeigen, organisationsweit
@@ -695,4 +700,154 @@ export async function listScopeConflicts(days = 21): Promise<OrgConflictDto[]> {
   }
 
   return conflicts.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+// ---------------------------------------------------------------------------
+// Konflikte melden (Leitungs-Sammelaktion)
+// ---------------------------------------------------------------------------
+
+export interface ReportConflictsResult {
+  /** Gemeldete Konfliktgruppen (je Mitarbeiter+Tag eine Meldung). */
+  reported: number;
+  /** Gruppen, deren Mitarbeiter (noch) kein Benutzerkonto hat – nicht meldbar. */
+  skippedNoAccount: number;
+  /** Gruppen, die kürzlich bereits gemeldet wurden (Duplikatschutz). */
+  alreadyReported: number;
+  /** Insgesamt betrachtete Konfliktgruppen im Scope. */
+  total: number;
+}
+
+/** Fenster, in dem dieselbe Meldung nicht erneut erzeugt wird (Duplikatschutz). */
+const REPORT_DEDUP_HOURS = 12;
+
+/**
+ * Leitungs-Sammelaktion „Konflikte melden": benachrichtigt die betroffenen
+ * Mitarbeiter (und bei Abwesenheits-Konflikten zusätzlich die Disposition) über
+ * ihre offenen Terminkonflikte.
+ *
+ * Grundsätze:
+ *  - Nur berechtigte Leitung (`appointments.manage`) – identisch zur Auflösung.
+ *  - Es wird DIESELBE zentrale Konfliktliste wie Kalender/Dashboard genutzt
+ *    (`listScopeConflicts`) – nur tatsächlich offene, scope-relevante Konflikte.
+ *  - Zusammenfassung je Mitarbeiter+Tag (eine Meldung, nicht je Termin).
+ *  - Duplikatschutz: dieselbe Gruppe wird binnen `REPORT_DEDUP_HOURS` nicht erneut
+ *    an dieselben Empfänger gemeldet.
+ *  - Jede Meldung enthält den Grund und einen Deep-Link zum Termin und erzeugt
+ *    einen Audit-Eintrag (`conflict.reported`).
+ *
+ * `selection` (optional) beschränkt auf bestimmte Gruppen (employeeId+date);
+ * ohne Auswahl werden alle offenen Konflikte im Scope gemeldet.
+ */
+export async function reportScopeConflicts(
+  selection?: { employeeId: string; date: string }[],
+): Promise<ReportConflictsResult> {
+  const ctx = await requireOrganizationMembership();
+  if (!hasPermission(ctx, 'appointments.manage')) throw new AppError('ACCESS_DENIED');
+
+  const allConflicts = await listScopeConflicts();
+  const selectionSet =
+    selection && selection.length > 0
+      ? new Set(selection.map((entry) => `${entry.employeeId}|${entry.date}`))
+      : null;
+  const conflicts = selectionSet
+    ? allConflicts.filter((conflict) => selectionSet.has(`${conflict.employeeId}|${conflict.date}`))
+    : allConflicts;
+
+  const result: ReportConflictsResult = {
+    reported: 0,
+    skippedNoAccount: 0,
+    alreadyReported: 0,
+    total: conflicts.length,
+  };
+  if (conflicts.length === 0) return result;
+
+  // Benutzerkonten der betroffenen Mitarbeiter (Meldung an sie selbst).
+  const employeeIds = [...new Set(conflicts.map((conflict) => conflict.employeeId))];
+  const employees = await db.employee.findMany({
+    where: { id: { in: employeeIds }, organizationId: ctx.organization.id },
+    select: { id: true, userId: true },
+  });
+  const userIdByEmployee = new Map(employees.map((employee) => [employee.id, employee.userId]));
+
+  // Disposition (für Abwesenheits-Konflikte, die der Mitarbeiter nicht selbst
+  // umplanen kann).
+  const plannerUserIds = await getPlannerUserIds(ctx.organization.id);
+  const dedupSince = new Date(Date.now() - REPORT_DEDUP_HOURS * 60 * 60 * 1000);
+
+  for (const conflict of conflicts) {
+    const firstAppointmentId = conflict.appointments[0]?.id;
+    if (!firstAppointmentId) continue;
+    const targetUrl = `/calendar?termin=${firstAppointmentId}`;
+
+    const employeeUserId = userIdByEmployee.get(conflict.employeeId) ?? null;
+    // Empfänger: der betroffene Mitarbeiter; bei Abwesenheit zusätzlich die
+    // Disposition. Der auslösende Nutzer erhält nie eine Meldung an sich selbst.
+    const recipientIds = new Set<string>();
+    if (employeeUserId && employeeUserId !== ctx.user.id) recipientIds.add(employeeUserId);
+    if (conflict.kind === 'ABSENCE') {
+      for (const planner of plannerUserIds) {
+        if (planner !== ctx.user.id) recipientIds.add(planner);
+      }
+    }
+
+    if (recipientIds.size === 0) {
+      // Kein erreichbarer Empfänger (kein Konto und keine passende Disposition).
+      if (!employeeUserId) result.skippedNoAccount += 1;
+      continue;
+    }
+
+    // Duplikatschutz je Empfänger: wer dieselbe Gruppe (gleicher Ziel-Link)
+    // kürzlich schon gemeldet bekam, wird übersprungen. So entstehen weder
+    // Duplikate noch fehlt eine Meldung, wenn nur ein Teil kürzlich informiert war.
+    const recent = await db.notification.findMany({
+      where: {
+        organizationId: ctx.organization.id,
+        userId: { in: [...recipientIds] },
+        type: 'APPOINTMENT_CONFLICT',
+        targetUrl,
+        createdAt: { gte: dedupSince },
+      },
+      select: { userId: true },
+    });
+    const alreadyNotified = new Set(recent.map((row) => row.userId));
+    const freshRecipients = [...recipientIds].filter((id) => !alreadyNotified.has(id));
+    if (freshRecipients.length === 0) {
+      result.alreadyReported += 1;
+      continue;
+    }
+
+    const kindLabel =
+      conflict.kind === 'OVERLAP' ? 'Terminüberschneidung' : 'Termin während Abwesenheit';
+    const first = conflict.appointments[0]!;
+    const extra =
+      conflict.appointments.length > 1 ? ` (+${conflict.appointments.length - 1})` : '';
+    const message = `${kindLabel} am ${conflict.dateLabel}: ${first.customerName}, ${first.timeLabel}${extra}`;
+
+    await createNotificationsForUsers(freshRecipients, {
+      organizationId: ctx.organization.id,
+      type: 'APPOINTMENT_CONFLICT',
+      title: 'Terminkonflikt – bitte prüfen',
+      message,
+      targetUrl,
+    });
+
+    await writeAuditLog({
+      organizationId: ctx.organization.id,
+      actorUserId: ctx.user.id,
+      action: 'conflict.reported',
+      entityType: 'Appointment',
+      entityId: firstAppointmentId,
+      metadata: {
+        employeeId: conflict.employeeId,
+        kind: conflict.kind,
+        date: conflict.date,
+        appointmentIds: conflict.appointments.map((appointment) => appointment.id),
+        recipients: recipientIds.size,
+      },
+    });
+
+    result.reported += 1;
+  }
+
+  return result;
 }

@@ -154,16 +154,19 @@ export function AppointmentFormDialog({
   // Bei Serien-Bearbeitung folgt das Datumsfeld dem gewählten Umfang:
   //  - „Ganze Serie": Serienstart – das Datum verschiebt die ganze Serie.
   //  - „Dieser und folgende"/„Nur dieser": das gewählte Vorkommen.
-  React.useEffect(() => {
-    if (!isEdit || !editTarget?.isSeriesMember) return;
-    setDate(
-      scope === 'all' && editTarget.seriesStartDate
-        ? editTarget.seriesStartDate
-        : editTarget.values.date,
-    );
-    // Nur beim Umschalten des Umfangs neu setzen (nicht bei jeder Eingabe).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope]);
+  // Umgesetzt als Anpassung während des Renderns beim Umschalten des Umfangs
+  // (statt im Effekt), damit keine kaskadierende Neurenderung entsteht.
+  const [lastScope, setLastScope] = React.useState(scope);
+  if (scope !== lastScope) {
+    setLastScope(scope);
+    if (isEdit && editTarget?.isSeriesMember) {
+      setDate(
+        scope === 'all' && editTarget.seriesStartDate
+          ? editTarget.seriesStartDate
+          : editTarget.values.date,
+      );
+    }
+  }
 
   // Rhythmus lässt sich bei „Ganze Serie“ und „Dieser und folgende“ ändern –
   // beide planen künftige Termine. „Nur dieser Termin“ ändert die Serie nicht.

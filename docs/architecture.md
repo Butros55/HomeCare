@@ -98,7 +98,7 @@ implementiert** (deaktiviert statt scheinbar funktionierend – kein Datenverlus
 
 ## Erweiterungspunkte
 
-- `MailProvider` (Konsole → SMTP/API), Benachrichtigungskanäle (E-Mail/Push/SMS-Adapter
+- `MailProvider` (Konsole → Resend-HTTP-API), Benachrichtigungskanäle (E-Mail/Push/SMS-Adapter
   an `createNotification`), `GeocodingProvider`/`RoutingProvider` (mock/nominatim/osrm →
   Google/Mapbox/ORS/GraphHopper), Redis für Rate-Limit/Matrix-Cache, Abrechnung auf
   Basis `TimeEntry`.

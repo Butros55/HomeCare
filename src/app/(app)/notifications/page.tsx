@@ -37,7 +37,10 @@ export default async function NotificationsPage() {
         }
       />
       <div className="mx-auto w-full max-w-[var(--page-max)] p-4 sm:p-5">
-        <ConflictNoticeList conflicts={conflicts} />
+        <ConflictNoticeList
+          conflicts={conflicts}
+          canReport={hasPermission(ctx, 'appointments.manage')}
+        />
         <NotificationList
           items={notifications.map((notification) => ({
             id: notification.id,

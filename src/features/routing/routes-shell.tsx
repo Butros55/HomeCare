@@ -128,6 +128,7 @@ export function RoutesShell({
   canManage,
   canAccept,
   soloMode,
+  hourBudgetsEnabled,
   timezone,
 }: {
   /** true = Leitungs-UI mit Einzelroute + Teamplanung; false = nur eigene Route. */
@@ -139,13 +140,18 @@ export function RoutesShell({
   /** Beim Öffnen (Deep-Link ?plan=1) den „Tag automatisch planen"-Dialog aufklappen. */
   autoPlan?: boolean;
   canManage: boolean;
-  /** Vorschläge übernehmen dürfen nur Leitungs-Konten. */
+  /**
+   * Vorschläge übernehmen: eigene Route (Selbstplanung) immer, fremde/Team nur
+   * mit Leitungsrolle. Serverseitig zusätzlich per Scope durchgesetzt.
+   */
   canAccept: boolean;
   /**
    * Alleine-Modus: Es gibt niemanden, für den etwas freigegeben werden müsste.
    * Änderungen werden deshalb sofort gespeichert, „Freigeben" entfällt.
    */
   soloMode: boolean;
+  /** Kunden-Stundenkonten org-weit aktiv? Aus = keine „offene Stunden"-Texte. */
+  hourBudgetsEnabled: boolean;
   timezone: string;
 }) {
   const [date, setDate] = React.useState(initialDate);
@@ -201,6 +207,7 @@ export function RoutesShell({
                 canManage={effManage}
                 canAccept={effAccept}
                 soloMode={soloMode}
+                hourBudgetsEnabled={hourBudgetsEnabled}
                 timezone={timezone}
                 autoPlan={autoPlan}
                 showEmployeeSelect
@@ -216,6 +223,8 @@ export function RoutesShell({
                 setReturnToStart={setReturnToStart}
                 timezone={timezone}
                 canAccept={effAccept}
+                canManage={effManage}
+                hourBudgetsEnabled={hourBudgetsEnabled}
               />
             </TabsContent>
           </Tabs>
@@ -233,6 +242,7 @@ export function RoutesShell({
             canManage={effManage}
             canAccept={effAccept}
             soloMode={soloMode}
+            hourBudgetsEnabled={hourBudgetsEnabled}
             timezone={timezone}
             autoPlan={autoPlan}
             showEmployeeSelect={false}
@@ -260,6 +270,7 @@ function SingleRoutePlanner({
   canManage,
   canAccept,
   soloMode,
+  hourBudgetsEnabled,
   timezone,
   autoPlan = false,
   showEmployeeSelect,
@@ -277,6 +288,8 @@ function SingleRoutePlanner({
   canAccept: boolean;
   /** Alleine-Modus: sofort speichern statt speichern/freigeben. */
   soloMode: boolean;
+  /** Kunden-Stundenkonten org-weit aktiv? Aus = keine „offene Stunden"-Texte. */
+  hourBudgetsEnabled: boolean;
   timezone: string;
   /** Deep-Link ?plan=1: „Tag automatisch planen" gleich öffnen. */
   autoPlan?: boolean;
@@ -948,7 +961,7 @@ function SingleRoutePlanner({
         {showEmployeeSelect ? (
           <ControlField label="Mitarbeiter" className="col-span-2 sm:w-[11rem]">
             <Select value={employeeId} onValueChange={setEmployeeId}>
-              <SelectTrigger id="route-employee" className="h-8 w-full">
+              <SelectTrigger id="route-employee" aria-label="Mitarbeiter" className="h-8 w-full">
                 <SelectValue placeholder="Mitarbeiter wählen" />
               </SelectTrigger>
               <SelectContent>
@@ -964,7 +977,7 @@ function SingleRoutePlanner({
 
         <ControlField label="Startpunkt" className="sm:w-[11rem]">
           <Select value={originType} onValueChange={(v) => setOriginType(v as OriginType)}>
-            <SelectTrigger id="route-origin" data-tour="routes-origin" className="h-8 w-full">
+            <SelectTrigger id="route-origin" aria-label="Startpunkt" data-tour="routes-origin" className="h-8 w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -1008,27 +1021,35 @@ function SingleRoutePlanner({
           <span className="truncate">Rückkehr</span>
         </label>
 
-        <div className="col-span-2 flex items-center gap-2 self-end sm:col-auto sm:ml-auto">
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => setDayDialogOpen(true)}
-            disabled={!data || loading}
-            title="Kompletten Tag aus Terminen und offenen Stunden planen"
-          >
-            <Wand2 aria-hidden /> Tag planen
-          </Button>
-          <Button
-            size="sm"
-            variant="primary"
-            onClick={() => compute()}
-            loading={pending}
-            disabled={!data || selectedIds.length === 0}
-            data-tour="routes-compute-button"
-          >
-            <RefreshCcw aria-hidden /> Optimieren
-          </Button>
-        </div>
+        {/* Planungsaktionen: an vergangenen Tagen (canManage=false) vollständig
+            entfernt – kein Generieren/Optimieren, nur Ansicht. */}
+        {canManage ? (
+          <div className="col-span-2 flex items-center gap-2 self-end sm:col-auto sm:ml-auto">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setDayDialogOpen(true)}
+              disabled={!data || loading}
+              title={
+                hourBudgetsEnabled
+                  ? 'Kompletten Tag aus Terminen und offenen Stunden planen'
+                  : 'Kompletten Tag aus Terminen und offenem Kundenbedarf planen'
+              }
+            >
+              <Wand2 aria-hidden /> Tag planen
+            </Button>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => compute()}
+              loading={pending}
+              disabled={!data || selectedIds.length === 0}
+              data-tour="routes-compute-button"
+            >
+              <RefreshCcw aria-hidden /> Optimieren
+            </Button>
+          </div>
+        ) : null}
       </div>
 
 
@@ -1167,7 +1188,8 @@ function SingleRoutePlanner({
                           <Wand2 aria-hidden /> Tag automatisch planen
                         </Button>
                         <p className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
-                          Erstellt komplette Routenvorschläge aus offenen Kundenstunden
+                          Erstellt komplette Routenvorschläge aus{' '}
+                          {hourBudgetsEnabled ? 'offenen Kundenstunden' : 'offenem Kundenbedarf'}
                           {allCandidates.length > 0 ? ' und den Terminen des Tages' : ''}.
                         </p>
                       </>
@@ -1232,6 +1254,7 @@ function SingleRoutePlanner({
                 canAccept={canAccept}
                 acceptingToken={acceptingToken}
                 timezone={timezone}
+                hourBudgetsEnabled={hourBudgetsEnabled}
                 onGenerate={() => generateSuggestions()}
                 onAccept={acceptSuggestion}
                 onDecline={declineSuggestion}
@@ -1381,6 +1404,8 @@ function TeamPlanner({
   setReturnToStart,
   timezone,
   canAccept,
+  canManage,
+  hourBudgetsEnabled,
 }: {
   date: string;
   setDate: (value: string) => void;
@@ -1390,6 +1415,10 @@ function TeamPlanner({
   setReturnToStart: (value: boolean) => void;
   timezone: string;
   canAccept: boolean;
+  /** Team-Vorschläge erzeugen: nur Leitung und nur für heutige/künftige Tage. */
+  canManage: boolean;
+  /** Kunden-Stundenkonten org-weit aktiv? Aus = keine „offene Stunden"-Texte. */
+  hourBudgetsEnabled: boolean;
 }) {
   const [result, setResult] = React.useState<GenerateSuggestionsResult | null>(null);
   const [generating, setGenerating] = React.useState(false);
@@ -1477,14 +1506,19 @@ function TeamPlanner({
               Rückkehr
             </label>
           </div>
-          <div className="col-span-2 flex items-end justify-end lg:col-span-2">
-            <Button variant="primary" onClick={generate} loading={generating}>
-              <Sparkles aria-hidden /> Teamplanung berechnen
-            </Button>
-          </div>
+          {/* Team-Vorschläge erzeugen: an vergangenen Tagen (canManage=false)
+              vollständig entfernt – nur Ansicht. */}
+          {canManage ? (
+            <div className="col-span-2 flex items-end justify-end lg:col-span-2">
+              <Button variant="primary" onClick={generate} loading={generating}>
+                <Sparkles aria-hidden /> Teamplanung berechnen
+              </Button>
+            </div>
+          ) : null}
           <p className="col-span-2 text-[length:var(--text-xs)] text-[var(--color-ink-subtle)] lg:col-span-8">
             Startpunkt je Mitarbeiter: Zuhause-Adresse, ersatzweise das Büro. Vorschläge
-            berücksichtigen Verfügbarkeiten, Abwesenheiten, offene Stunden und die bestehende
+            berücksichtigen Verfügbarkeiten, Abwesenheiten,{' '}
+            {hourBudgetsEnabled ? 'offene Stunden' : 'den offenen Kundenbedarf'} und die bestehende
             Tagesroute jedes Mitarbeiters; jeder Kundenbedarf erscheint nur bei einem Mitarbeiter.
           </p>
         </PanelBody>
@@ -1508,7 +1542,11 @@ function TeamPlanner({
         <EmptyState
           icon={<Users />}
           title="Noch keine Teamplanung berechnet"
-          description="„Teamplanung berechnen“ erstellt für jeden Mitarbeiter Terminvorschläge aus offenen Kundenstunden – getrennt nach Verfügbarkeit, Abwesenheiten und bestehender Route."
+          description={
+            hourBudgetsEnabled
+              ? '„Teamplanung berechnen“ erstellt für jeden Mitarbeiter Terminvorschläge aus offenen Kundenstunden – getrennt nach Verfügbarkeit, Abwesenheiten und bestehender Route.'
+              : '„Teamplanung berechnen“ erstellt für jeden Mitarbeiter Terminvorschläge aus dem offenen Kundenbedarf – getrennt nach Verfügbarkeit, Abwesenheiten und bestehender Route.'
+          }
         />
       ) : (
         result.employees.map((panel) => (
@@ -1517,6 +1555,7 @@ function TeamPlanner({
             panel={panel}
             timezone={timezone}
             canAccept={canAccept}
+            hourBudgetsEnabled={hourBudgetsEnabled}
             declinedTokens={declinedTokens}
             acceptingToken={acceptingToken}
             onAccept={acceptSuggestion}
@@ -1533,6 +1572,7 @@ function TeamEmployeePanel({
   panel,
   timezone,
   canAccept,
+  hourBudgetsEnabled,
   declinedTokens,
   acceptingToken,
   onAccept,
@@ -1542,6 +1582,7 @@ function TeamEmployeePanel({
   panel: EmployeeSuggestionPanel;
   timezone: string;
   canAccept: boolean;
+  hourBudgetsEnabled: boolean;
   declinedTokens: Set<string>;
   acceptingToken: string | null;
   onAccept: (suggestion: RouteSuggestionDto) => void;
@@ -1615,6 +1656,7 @@ function TeamEmployeePanel({
             suggestion={suggestion}
             timezone={timezone}
             canAccept={canAccept}
+            hourBudgetsEnabled={hourBudgetsEnabled}
             declined={false}
             pending={acceptingToken === suggestion.token}
             onAccept={onAccept}
@@ -1628,6 +1670,7 @@ function TeamEmployeePanel({
             suggestion={suggestion}
             timezone={timezone}
             canAccept={canAccept}
+            hourBudgetsEnabled={hourBudgetsEnabled}
             declined
             pending={false}
             onAccept={onAccept}
@@ -1872,6 +1915,8 @@ interface SuggestionListProps {
   canAccept: boolean;
   acceptingToken: string | null;
   timezone: string;
+  /** Kunden-Stundenkonten org-weit aktiv? Aus = keine „offene Stunden"-Texte/Badges. */
+  hourBudgetsEnabled: boolean;
   onGenerate: () => void;
   onAccept: (suggestion: RouteSuggestionDto) => void;
   onDecline: (suggestion: RouteSuggestionDto) => void;
@@ -1909,6 +1954,7 @@ function SuggestionsBody({
   canAccept,
   acceptingToken,
   timezone,
+  hourBudgetsEnabled,
   onAccept,
   onDecline,
   onUndoDecline,
@@ -1936,8 +1982,9 @@ function SuggestionsBody({
   if (suggestions === null) {
     return (
       <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
-        Prüft Kunden mit offenen Stunden und Verfügbarkeit am {date} und schlägt Einsätze vor, die
-        zur aktuellen Route passen – inklusive Auswirkung auf Fahrzeit und Arbeitstag.
+        Prüft Kunden mit {hourBudgetsEnabled ? 'offenen Stunden' : 'Bedarf'} und Verfügbarkeit am{' '}
+        {date} und schlägt Einsätze vor, die zur aktuellen Route passen – inklusive Auswirkung auf
+        Fahrzeit und Arbeitstag.
       </p>
     );
   }
@@ -1969,6 +2016,7 @@ function SuggestionsBody({
                 suggestion={suggestion}
                 timezone={timezone}
                 canAccept={canAccept}
+                hourBudgetsEnabled={hourBudgetsEnabled}
                 declined={false}
                 pending={acceptingToken === suggestion.token}
                 onAccept={onAccept}
@@ -1987,6 +2035,7 @@ function SuggestionsBody({
               suggestion={suggestion}
               timezone={timezone}
               canAccept={canAccept}
+              hourBudgetsEnabled={hourBudgetsEnabled}
               declined
               pending={false}
               onAccept={onAccept}
@@ -1998,7 +2047,7 @@ function SuggestionsBody({
       ) : null}
       {!canAccept ? (
         <p className="mt-2.5 text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
-          Vorschläge können nur von der Leitung übernommen werden.
+          Vorschläge lassen sich hier nicht übernehmen.
         </p>
       ) : null}
     </div>
@@ -2020,7 +2069,7 @@ function OpenHoursSuggestions(props: SuggestionListProps) {
             <PanelTitle>
               <span className="inline-flex items-center gap-1.5">
                 <Sparkles className="size-4 text-[var(--color-brand)]" aria-hidden />
-                Vorschläge aus offenen Stunden
+                {props.hourBudgetsEnabled ? 'Vorschläge aus offenen Stunden' : 'Vorschläge aus Kundenbedarf'}
               </span>
             </PanelTitle>
             <div className="flex items-center gap-2">
@@ -2062,12 +2111,14 @@ function SuggestionsSheet(props: SuggestionListProps) {
           <Sparkles className="size-4 shrink-0 text-[var(--color-brand)]" aria-hidden />
           <span className="min-w-0">
             <span className="block text-[length:var(--text-sm)] font-medium">
-              Vorschläge aus offenen Stunden
+              {props.hourBudgetsEnabled ? 'Vorschläge aus offenen Stunden' : 'Vorschläge aus Kundenbedarf'}
             </span>
             <span className="block text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
               {count > 0
                 ? `${count} ${count === 1 ? 'Vorschlag' : 'Vorschläge'} – tippen zum Ansehen`
-                : 'Einsätze aus offenen Kundenstunden finden'}
+                : props.hourBudgetsEnabled
+                  ? 'Einsätze aus offenen Kundenstunden finden'
+                  : 'Einsätze aus offenem Kundenbedarf finden'}
             </span>
           </span>
         </span>
@@ -2078,7 +2129,10 @@ function SuggestionsSheet(props: SuggestionListProps) {
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent title="Vorschläge aus offenen Stunden" wide>
+        <DialogContent
+          title={props.hourBudgetsEnabled ? 'Vorschläge aus offenen Stunden' : 'Vorschläge aus Kundenbedarf'}
+          wide
+        >
           <div className="mb-3 flex items-center justify-between gap-2">
             {props.suggestionInfo ? (
               <span className="text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">

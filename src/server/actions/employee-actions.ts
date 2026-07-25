@@ -9,6 +9,7 @@ import {
   deleteAbsence,
   deleteEmployeeAccount,
   inviteEmployee,
+  type InviteResult,
   replaceAvailability,
   setEmployeeAccountSuspended,
   setEmployeeStatus,
@@ -137,7 +138,7 @@ export async function deleteAbsenceAction(
 
 export async function inviteEmployeeAction(
   input: InviteEmployeeInput,
-): Promise<ActionResult<{ link: string }>> {
+): Promise<ActionResult<InviteResult>> {
   return runAction(async () => {
     const data = inviteEmployeeSchema.parse(input);
     const result = await inviteEmployee(data);

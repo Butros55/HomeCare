@@ -90,6 +90,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   'route.generated': 'Route erzeugt',
   'route.published': 'Route freigegeben',
   'route.discarded': 'Route verworfen',
+  'conflict.reported': 'Terminkonflikte gemeldet',
 };
 
 export function auditActionLabel(action: string): string {

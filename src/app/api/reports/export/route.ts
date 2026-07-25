@@ -18,34 +18,36 @@ export async function GET(request: NextRequest) {
     });
 
     const esc = (value: string | number) => `"${String(value).replace(/"/g, '""')}"`;
+    const h = (minutes: number) => formatMinutesAsDecimalHours(minutes).replace(' h', '');
+    // Ohne Stundenbudgets entfallen die budget-/zuweisungsbezogenen Spalten
+    // (Budget/Zugewiesen/Offen) – sie wären ohne Kundenkonten irreführend. Es
+    // bleiben Geplant und Geleistet (immer aussagekräftig).
+    const withBudget = data.hourBudgetsEnabled;
     const lines: string[] = [];
-    lines.push(['Bereich', 'Name', 'Budget (h)', 'Zugewiesen (h)', 'Geplant (h)', 'Geleistet (h)', 'Offen (h)'].map(esc).join(';'));
+    lines.push(
+      (withBudget
+        ? ['Bereich', 'Name', 'Budget (h)', 'Zugewiesen (h)', 'Geplant (h)', 'Geleistet (h)', 'Offen (h)']
+        : ['Bereich', 'Name', 'Geplant (h)', 'Geleistet (h)']
+      )
+        .map(esc)
+        .join(';'),
+    );
     for (const row of data.customerRows) {
       lines.push(
-        [
-          'Kunde',
-          row.name,
-          formatMinutesAsDecimalHours(row.budgetMinutes).replace(' h', ''),
-          formatMinutesAsDecimalHours(row.allocatedMinutes).replace(' h', ''),
-          formatMinutesAsDecimalHours(row.plannedMinutes).replace(' h', ''),
-          formatMinutesAsDecimalHours(row.completedMinutes).replace(' h', ''),
-          formatMinutesAsDecimalHours(row.openMinutes).replace(' h', ''),
-        ]
+        (withBudget
+          ? ['Kunde', row.name, h(row.budgetMinutes), h(row.allocatedMinutes), h(row.plannedMinutes), h(row.completedMinutes), h(row.openMinutes)]
+          : ['Kunde', row.name, h(row.plannedMinutes), h(row.completedMinutes)]
+        )
           .map(esc)
           .join(';'),
       );
     }
     for (const row of data.employeeRows) {
       lines.push(
-        [
-          'Mitarbeiter',
-          row.name,
-          '',
-          formatMinutesAsDecimalHours(row.allocatedMinutes).replace(' h', ''),
-          formatMinutesAsDecimalHours(row.plannedMinutes).replace(' h', ''),
-          formatMinutesAsDecimalHours(row.completedMinutes).replace(' h', ''),
-          formatMinutesAsDecimalHours(row.selfObligationMinutes).replace(' h', ''),
-        ]
+        (withBudget
+          ? ['Mitarbeiter', row.name, '', h(row.allocatedMinutes), h(row.plannedMinutes), h(row.completedMinutes), h(row.selfObligationMinutes)]
+          : ['Mitarbeiter', row.name, h(row.plannedMinutes), h(row.completedMinutes)]
+        )
           .map(esc)
           .join(';'),
       );

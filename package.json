@@ -4,7 +4,7 @@
   "private": true,
   "description": "Einsatzplanung für Haushaltshilfen – Kunden, Stundenkontingente, Termine, Routen (PWA)",
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=20.12.0"
   },
   "scripts": {
     "dev": "next dev -H 0.0.0.0",
@@ -25,9 +25,6 @@
     "db:studio": "prisma studio",
     "icons": "node scripts/generate-icons.mjs",
     "retention:cleanup": "tsx scripts/retention-cleanup.ts"
-  },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@date-fns/tz": "^1.5.0",

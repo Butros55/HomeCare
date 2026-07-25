@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { z } from 'zod';
 
 import { runAction, type ActionResult } from '@/server/errors';
 import {
@@ -8,10 +9,12 @@ import {
   applyResolutionForAppointment,
   getAppointmentConflicts,
   listScopeConflicts,
+  reportScopeConflicts,
   suggestReplacementEmployees,
   suggestResolutionForAppointment,
   type OrgConflictDto,
   type ReplacementSuggestion,
+  type ReportConflictsResult,
   type ResolutionProposal,
   type SerializedConflict,
 } from '@/server/services/conflict-service';
@@ -62,4 +65,31 @@ export async function applyConflictResolutionAction(
 
 export async function listScopeConflictsAction(): Promise<ActionResult<OrgConflictDto[]>> {
   return runAction(() => listScopeConflicts());
+}
+
+const reportSelectionSchema = z
+  .array(
+    z.object({
+      employeeId: z.string().min(1),
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    }),
+  )
+  .max(200)
+  .optional();
+
+/**
+ * Leitungs-Sammelaktion „Konflikte melden": benachrichtigt die betroffenen
+ * Mitarbeiter/Disposition über offene Terminkonflikte. `selection` beschränkt
+ * optional auf bestimmte Gruppen; ohne Auswahl werden alle im Scope gemeldet.
+ */
+export async function reportScopeConflictsAction(
+  selection?: { employeeId: string; date: string }[],
+): Promise<ActionResult<ReportConflictsResult>> {
+  return runAction(async () => {
+    const parsed = reportSelectionSchema.parse(selection);
+    const result = await reportScopeConflicts(parsed);
+    revalidatePath('/notifications');
+    revalidatePath('/dashboard');
+    return result;
+  });
 }

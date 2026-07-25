@@ -160,7 +160,11 @@ export function AddLeadershipButton() {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [email, setEmail] = React.useState('');
-  const [inviteLink, setInviteLink] = React.useState<string | null>(null);
+  const [invite, setInvite] = React.useState<{
+    link: string;
+    mailConfigured: boolean;
+    emailDelivered: boolean;
+  } | null>(null);
   const [copied, setCopied] = React.useState(false);
   const [pending, startTransition] = React.useTransition();
 
@@ -168,8 +172,12 @@ export function AddLeadershipButton() {
     startTransition(async () => {
       const result = await inviteLeadershipAction({ email });
       if (result.ok) {
-        setInviteLink(result.data.link);
-        toast.success(`Einladung für ${email} erstellt.`);
+        setInvite(result.data);
+        toast.success(
+          result.data.emailDelivered
+            ? `Einladung an ${email} versendet.`
+            : `Einladung für ${email} erstellt.`,
+        );
         router.refresh();
       } else {
         toast.error(result.message);
@@ -178,9 +186,9 @@ export function AddLeadershipButton() {
   };
 
   const copyLink = async () => {
-    if (!inviteLink) return;
+    if (!invite) return;
     try {
-      await navigator.clipboard.writeText(inviteLink);
+      await navigator.clipboard.writeText(invite.link);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -190,7 +198,7 @@ export function AddLeadershipButton() {
 
   const close = () => {
     setOpen(false);
-    setInviteLink(null);
+    setInvite(null);
     setCopied(false);
     setEmail('');
   };
@@ -205,17 +213,32 @@ export function AddLeadershipButton() {
           title="Leitungs-Konto hinzufügen"
           description="Die Person erhält einen Einladungslink, legt ihr Konto an und kann danach alle leitenden Aufgaben übernehmen – mit den unten eingestellten Standard-Berechtigungen."
         >
-          {inviteLink ? (
+          {invite ? (
             <div className="space-y-4">
               <div className="rounded-[var(--radius-md)] border border-[var(--color-line-subtle)] bg-[var(--color-panel-sunken)] p-3">
-                <p className="text-[length:var(--text-sm)] font-medium">Einladungslink erstellt</p>
+                <p className="text-[length:var(--text-sm)] font-medium">
+                  {invite.emailDelivered ? 'Einladung versendet' : 'Einladungslink erstellt'}
+                </p>
                 <p className="mt-0.5 text-[length:var(--text-xs)] text-[var(--color-ink-muted)]">
-                  Der Versand per E-Mail ist noch nicht aktiv – gib diesen Link (7 Tage gültig) an{' '}
-                  <strong>{email}</strong> weiter.
+                  {invite.emailDelivered ? (
+                    <>
+                      Die Einladung wurde per E-Mail an <strong>{email}</strong> versendet. Den Link
+                      (7 Tage gültig) kannst du bei Bedarf zusätzlich weitergeben.
+                    </>
+                  ) : invite.mailConfigured ? (
+                    <>
+                      Der E-Mail-Versand ist fehlgeschlagen – gib diesen Link (7 Tage gültig) sicher
+                      an <strong>{email}</strong> weiter.
+                    </>
+                  ) : (
+                    <>
+                      Gib diesen Link (7 Tage gültig) an <strong>{email}</strong> weiter.
+                    </>
+                  )}
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <Input readOnly value={inviteLink} onFocus={(e) => e.target.select()} className="flex-1" />
+                <Input readOnly value={invite.link} onFocus={(e) => e.target.select()} className="flex-1" />
                 <Button variant="secondary" onClick={copyLink} aria-label="Link kopieren">
                   {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
                   {copied ? 'Kopiert' : 'Kopieren'}
@@ -242,9 +265,9 @@ export function AddLeadershipButton() {
                   autoComplete="off"
                 />
                 <FieldHint>
-                  Die Person wird automatisch auch als zuweisbarer Mitarbeiter angelegt. Der
-                  Versand per E-Mail ist noch nicht aktiv – du erhältst danach den Link zum
-                  Weitergeben.
+                  Die Person wird automatisch auch als zuweisbarer Mitarbeiter angelegt. Ist der
+                  E-Mail-Versand konfiguriert, wird die Einladung direkt zugestellt; den Link
+                  erhältst du anschließend immer zum Weitergeben.
                 </FieldHint>
               </div>
               <DialogFooter>

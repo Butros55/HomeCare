@@ -22,10 +22,14 @@ export interface MailMessage {
 }
 
 export interface MailProvider {
+  /** Versendet die Nachricht wirklich (true) oder protokolliert sie nur (false, Konsole)? */
+  readonly delivers: boolean;
   send(message: MailMessage): Promise<void>;
 }
 
 class ConsoleMailProvider implements MailProvider {
+  readonly delivers = false;
+
   async send(message: MailMessage): Promise<void> {
     console.info(
       [
@@ -44,6 +48,8 @@ class ConsoleMailProvider implements MailProvider {
 
 /** Resend HTTP-API (https://resend.com) – ohne zusätzliche Abhängigkeit. */
 class ResendMailProvider implements MailProvider {
+  readonly delivers = true;
+
   constructor(
     private readonly apiKey: string,
     private readonly from: string,
@@ -97,13 +103,30 @@ export function getMailProvider(): MailProvider {
 }
 
 /**
+ * Ist ein echter (versendender) Mail-Provider konfiguriert? Der Konsolen-Adapter
+ * protokolliert nur und gilt hier als „nicht konfiguriert". So können Aufrufer
+ * wahrheitsgemäße Rückmeldungen geben (E-Mail versendet vs. Link kopieren).
+ */
+export function isMailConfigured(): boolean {
+  return getMailProvider().delivers;
+}
+
+/**
  * Nachricht senden. Best effort: Provider-Fehler werden protokolliert, aber nicht
  * weitergeworfen, damit einladende/anfordernde Abläufe nicht daran scheitern.
+ *
+ * Rückgabe `delivered`: true nur, wenn ein echter Provider die Nachricht ohne
+ * Fehler übernommen hat – bei Konsole (nur Log) oder Versandfehler false. Damit
+ * lässt sich in der Oberfläche zwischen „versendet", „nicht konfiguriert" und
+ * „Versand fehlgeschlagen" unterscheiden.
  */
-export async function sendMail(message: MailMessage): Promise<void> {
+export async function sendMail(message: MailMessage): Promise<{ delivered: boolean }> {
+  const mailProvider = getMailProvider();
   try {
-    await getMailProvider().send(message);
+    await mailProvider.send(message);
+    return { delivered: mailProvider.delivers };
   } catch (error) {
     console.error('[mail] Versand fehlgeschlagen:', error);
+    return { delivered: false };
   }
 }

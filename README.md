@@ -15,7 +15,9 @@ Radix UI · FullCalendar 6 · Leaflet · Zod 4 + React Hook Form · eigene DB-Se
 
 ## Voraussetzungen
 
-- Node.js ≥ 20.9 (getestet mit 24)
+- Node.js ≥ 20.12 (getestet mit 24 LTS; die Version ist in [.nvmrc](.nvmrc) gepinnt).
+  Der Mindeststand 20.12 ist erforderlich, weil Setup und Prisma-Konfiguration
+  `process.loadEnvFile` nutzen.
 - Docker (für PostgreSQL)
 - npm
 
@@ -68,6 +70,11 @@ UI-Modi mit echten Daten (Termine, Stundenkonten, Routen, Verdienst) erleben.
 | `npm run icons` | PWA-Platzhalter-Icons erzeugen |
 | `npm run retention:cleanup` | Aufbewahrungsfristen anwenden (docs/privacy.md) |
 
+> **Prisma-Konfiguration:** Schema-Pfad und Seed-Befehl liegen in
+> [prisma.config.ts](prisma.config.ts) (löst den veralteten `package.json#prisma`-Block
+> ab). Die Datei lädt `.env` selbst, da Prisma das bei vorhandener Config-Datei nicht
+> mehr automatisch tut. `npm run db:seed` funktioniert unverändert.
+
 ## Umgebungsvariablen
 
 Alle Variablen mit Erklärung: [.env.example](.env.example). Wichtig:
@@ -111,8 +118,10 @@ Details: [docs/testing.md](docs/testing.md)
 - UI-Sprache Deutsch (kein i18n-Framework); Kalenderanzeige nutzt die Browser-Zeitzone
   (Annahme: Nutzer arbeiten in der Organisations-Zeitzone; Serienberechnung ist
   serverseitig zeitzonen-korrekt inkl. DST).
-- E-Mail-Versand als Konsolen-Adapter (Einladungs-/Reset-Links im Server-Log);
-  SMTP/Push/SMS-Adapter vorbereitet, WhatsApp bewusst nicht (rechtliche Prüfung nötig).
+- E-Mail-Versand über `MAIL_PROVIDER`: `console` (Dev – Einladungs-/Reset-Links im
+  Server-Log) oder `resend` (echter Versand über die Resend-HTTP-API, benötigt
+  `RESEND_API_KEY` und `MAIL_FROM`). Der Einladungslink bleibt immer als kopierbarer
+  Fallback verfügbar. Push/SMS-Adapter vorbereitet, WhatsApp bewusst nicht.
 - Rate Limiting in-memory pro Prozess (Redis-Adapter als Erweiterungspunkt).
 - Offline (PWA): Lesezugriff auf heutige Termine/Route; Offline-Mutationen bewusst
   deaktiviert (kein Risiko stiller Datenverluste).

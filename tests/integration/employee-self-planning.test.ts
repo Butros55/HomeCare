@@ -15,7 +15,12 @@ vi.mock('@/server/permissions', async (importOriginal) => {
 });
 
 import { db } from '@/server/db';
-import { discardRoutePlan } from '@/server/services/route-service';
+import { computeRoutePlan, discardRoutePlan, saveRoutePlan } from '@/server/services/route-service';
+import { generateDayRoutes } from '@/server/services/day-route-service';
+import {
+  acceptRouteSuggestion,
+  createSuggestionToken,
+} from '@/server/services/route-suggestion-service';
 
 import { buildContext, createEmployee, createOrg, createUserWithMembership, resetDatabase } from './helpers';
 
@@ -25,12 +30,15 @@ import { buildContext, createEmployee, createOrg, createUserWithMembership, rese
  */
 describe('Mitarbeiter-Selbstplanung: nur eigene Route', () => {
   const routeDate = new Date('2026-08-10T00:00:00.000Z');
+  const futureDate = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
   let ownEmployeeId: string;
   let otherEmployeeId: string;
+  let organizationId: string;
 
   beforeAll(async () => {
     await resetDatabase();
     const organization = await createOrg('SelfPlanOrg');
+    organizationId = organization.id;
     const account = await createUserWithMembership(organization.id, 'EMPLOYEE', 'Selbst');
     const own = await createEmployee(organization.id, 'Selbst', { userId: account.user.id });
     const other = await createEmployee(organization.id, 'Fremd');
@@ -74,5 +82,65 @@ describe('Mitarbeiter-Selbstplanung: nur eigene Route', () => {
       where: { employeeId_routeDate: { employeeId: otherEmployeeId, routeDate } },
     });
     expect(plan).not.toBeNull();
+  });
+
+  const denied = { code: 'ACCESS_DENIED' };
+
+  it('darf keine fremde Route optimieren (computeRoutePlan)', async () => {
+    await expect(
+      computeRoutePlan({
+        employeeId: otherEmployeeId,
+        date: futureDate,
+        appointmentIds: [],
+        originType: 'office',
+        bufferMinutes: 10,
+        returnToStart: true,
+      }),
+    ).rejects.toMatchObject(denied);
+  });
+
+  it('darf keine fremde Route speichern (saveRoutePlan)', async () => {
+    await expect(
+      saveRoutePlan({
+        employeeId: otherEmployeeId,
+        date: futureDate,
+        appointmentIds: [],
+        originType: 'office',
+        bufferMinutes: 10,
+        returnToStart: true,
+        publish: false,
+      }),
+    ).rejects.toMatchObject(denied);
+  });
+
+  it('darf keine fremde Tagesroute generieren (generateDayRoutes)', async () => {
+    await expect(
+      generateDayRoutes({
+        employeeId: otherEmployeeId,
+        date: futureDate,
+        bufferMinutes: 10,
+        returnToStart: true,
+      }),
+    ).rejects.toMatchObject(denied);
+  });
+
+  it('darf keinen Vorschlag für einen fremden Mitarbeiter übernehmen (acceptRouteSuggestion)', async () => {
+    const token = createSuggestionToken({
+      v: 2,
+      org: organizationId,
+      emp: otherEmployeeId,
+      cust: 'irrelevant',
+      date: futureDate,
+      start: `${futureDate}T09:00:00.000Z`,
+      dur: 120,
+      originType: 'office',
+      oLat: 51.96,
+      oLng: 7.62,
+      oLabel: 'Büro',
+      buffer: 10,
+      ret: true,
+      exp: Date.now() + 60_000,
+    });
+    await expect(acceptRouteSuggestion(token)).rejects.toMatchObject(denied);
   });
 });

@@ -38,7 +38,11 @@ export function InviteEmployeeDialog({
   const [role, setRole] = React.useState<'ADMIN' | 'DISPATCHER' | 'TEAM_MANAGER' | 'EMPLOYEE'>(
     'EMPLOYEE',
   );
-  const [inviteLink, setInviteLink] = React.useState<string | null>(null);
+  const [invite, setInvite] = React.useState<{
+    link: string;
+    mailConfigured: boolean;
+    emailDelivered: boolean;
+  } | null>(null);
   const [copied, setCopied] = React.useState(false);
   const [pending, startTransition] = React.useTransition();
 
@@ -46,8 +50,12 @@ export function InviteEmployeeDialog({
     startTransition(async () => {
       const result = await inviteEmployeeAction({ employeeId, email, role });
       if (result.ok) {
-        setInviteLink(result.data.link);
-        toast.success(`Einladung für ${email} erstellt.`);
+        setInvite(result.data);
+        toast.success(
+          result.data.emailDelivered
+            ? `Einladung an ${email} versendet.`
+            : `Einladung für ${email} erstellt.`,
+        );
         router.refresh();
       } else {
         toast.error(result.message);
@@ -56,9 +64,9 @@ export function InviteEmployeeDialog({
   };
 
   const copyLink = async () => {
-    if (!inviteLink) return;
+    if (!invite) return;
     try {
-      await navigator.clipboard.writeText(inviteLink);
+      await navigator.clipboard.writeText(invite.link);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -67,7 +75,7 @@ export function InviteEmployeeDialog({
   };
 
   const close = () => {
-    setInviteLink(null);
+    setInvite(null);
     setCopied(false);
     onOpenChange(false);
   };
@@ -78,17 +86,33 @@ export function InviteEmployeeDialog({
         title={`${name} einladen`}
         description="Der Mitarbeiter erhält einen Link, um ein Konto zu erstellen und seine Termine einzusehen."
       >
-        {inviteLink ? (
+        {invite ? (
           <div className="space-y-4">
             <div className="rounded-[var(--radius-md)] border border-[var(--color-line-subtle)] bg-[var(--color-panel-sunken)] p-3">
-              <p className="text-[length:var(--text-sm)] font-medium">Einladungslink erstellt</p>
+              <p className="text-[length:var(--text-sm)] font-medium">
+                {invite.emailDelivered ? 'Einladung versendet' : 'Einladungslink erstellt'}
+              </p>
               <p className="mt-0.5 text-[length:var(--text-xs)] text-[var(--color-ink-muted)]">
-                Der Versand per E-Mail ist noch nicht aktiv – gib diesen Link (7 Tage gültig) an{' '}
-                <strong>{email}</strong> weiter. Nur über den Link ist die Registrierung möglich.
+                {invite.emailDelivered ? (
+                  <>
+                    Die Einladung wurde per E-Mail an <strong>{email}</strong> versendet. Den Link (7
+                    Tage gültig) kannst du bei Bedarf zusätzlich weitergeben.
+                  </>
+                ) : invite.mailConfigured ? (
+                  <>
+                    Der E-Mail-Versand ist fehlgeschlagen – gib diesen Link (7 Tage gültig) sicher an{' '}
+                    <strong>{email}</strong> weiter. Nur über den Link ist die Registrierung möglich.
+                  </>
+                ) : (
+                  <>
+                    Gib diesen Link (7 Tage gültig) an <strong>{email}</strong> weiter. Nur über den
+                    Link ist die Registrierung möglich.
+                  </>
+                )}
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <Input readOnly value={inviteLink} onFocus={(e) => e.target.select()} className="flex-1" />
+              <Input readOnly value={invite.link} onFocus={(e) => e.target.select()} className="flex-1" />
               <Button variant="secondary" onClick={copyLink} aria-label="Link kopieren">
                 {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
                 {copied ? 'Kopiert' : 'Kopieren'}
@@ -116,8 +140,8 @@ export function InviteEmployeeDialog({
                   autoComplete="off"
                 />
                 <FieldHint>
-                  Der Versand per E-Mail ist noch nicht aktiv – du erhältst danach den
-                  Einladungslink zum Weitergeben.
+                  Ist der E-Mail-Versand konfiguriert, wird die Einladung direkt zugestellt. Den
+                  Einladungslink (7 Tage gültig) erhältst du anschließend immer zum Weitergeben.
                 </FieldHint>
               </div>
               {allowRoleSelection ? (

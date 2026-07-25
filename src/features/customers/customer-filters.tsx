@@ -24,10 +24,13 @@ export function CustomerFilters({
   cities,
   employees,
   view,
+  showOpenHours,
 }: {
   cities: string[];
   employees: { id: string; name: string }[];
   view: 'table' | 'cards';
+  /** Kunden-Stundenkonten org-weit aktiv? Aus = kein „Offene Stunden"-Filter. */
+  showOpenHours: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -122,14 +125,16 @@ export function CustomerFilters({
         </SelectContent>
       </Select>
 
-      <label className="flex h-9 pointer-coarse:h-11 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-line)] bg-[var(--color-panel-sunken)] px-3 text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
-        <Checkbox
-          checked={openHours}
-          onCheckedChange={(checked) => setParam('openHours', checked ? '1' : null)}
-          aria-label="Nur Kunden mit offenen Stunden"
-        />
-        Offene Stunden
-      </label>
+      {showOpenHours ? (
+        <label className="flex h-9 pointer-coarse:h-11 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-line)] bg-[var(--color-panel-sunken)] px-3 text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+          <Checkbox
+            checked={openHours}
+            onCheckedChange={(checked) => setParam('openHours', checked ? '1' : null)}
+            aria-label="Nur Kunden mit offenen Stunden"
+          />
+          Offene Stunden
+        </label>
+      ) : null}
 
       <label className="hidden h-9 pointer-coarse:h-11 cursor-pointer items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-line)] bg-[var(--color-panel-sunken)] px-3 text-[length:var(--text-sm)] text-[var(--color-ink-muted)] md:flex">
         <Checkbox

@@ -321,6 +321,11 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
     } else {
       showOpenHours = false;
     }
+  } else if (!hourBudgetsEnabled) {
+    // Ohne Stundenbudgets gibt es keine Kunden-Stundenzuweisung → die
+    // „zugewiesen minus verplant"-Kachel entfällt (sie ist Zuweisungs-, keine
+    // Arbeitszeit-Info und wäre ohne Budgets irreführend).
+    showOpenHours = false;
   } else {
     const allocations = ownEmployeeId
       ? await db.hourAllocation.findMany({
@@ -600,14 +605,21 @@ export async function getDashboardData(ctx: OrgContext) {
     },
   });
 
-  const monthAllocations = await db.hourAllocation.findMany({
-    where: {
-      organizationId: orgId,
-      status: 'ACTIVE',
-      validFrom: { lt: month.end },
-      validUntil: { gte: month.start },
-    },
-  });
+  // Stunden-Zuweisungen (Kundenstunden an Mitarbeiter) gibt es nur bei aktiven
+  // Stundenbudgets. Ohne Budgets bleibt die Liste leer, damit „Brauchen Stunden"
+  // nicht fälschlich jeden Mitarbeiter als komplett unterversorgt anzeigt
+  // (target − 0). Arbeitszeitziele selbst bleiben auf Mitarbeiter-/Berichtsseiten
+  // sichtbar – hier geht es ausschließlich um die Kundenstunden-Verteilung.
+  const monthAllocations = hourBudgetsEnabled
+    ? await db.hourAllocation.findMany({
+        where: {
+          organizationId: orgId,
+          status: 'ACTIVE',
+          validFrom: { lt: month.end },
+          validUntil: { gte: month.start },
+        },
+      })
+    : [];
   const receivedByEmployee = new Map<string, number>();
   for (const allocation of monthAllocations) {
     receivedByEmployee.set(
@@ -615,18 +627,20 @@ export async function getDashboardData(ctx: OrgContext) {
       (receivedByEmployee.get(allocation.allocatedToEmployeeId) ?? 0) + allocation.allocatedMinutes,
     );
   }
-  const employeesNeedingHours = employees
-    .map((employee) => {
-      const target = effectiveMonthTarget(employee);
-      const received = receivedByEmployee.get(employee.id) ?? 0;
-      return {
-        id: employee.id,
-        name: `${employee.firstName} ${employee.lastName}`,
-        missingMinutes: target ? Math.max(0, target - received) : 0,
-      };
-    })
-    .filter((entry) => entry.missingMinutes > 0)
-    .sort((a, b) => b.missingMinutes - a.missingMinutes);
+  const employeesNeedingHours = hourBudgetsEnabled
+    ? employees
+        .map((employee) => {
+          const target = effectiveMonthTarget(employee);
+          const received = receivedByEmployee.get(employee.id) ?? 0;
+          return {
+            id: employee.id,
+            name: `${employee.firstName} ${employee.lastName}`,
+            missingMinutes: target ? Math.max(0, target - received) : 0,
+          };
+        })
+        .filter((entry) => entry.missingMinutes > 0)
+        .sort((a, b) => b.missingMinutes - a.missingMinutes)
+    : [];
 
   // Eigene noch zu erledigende Stunden (Eigenverpflichtung des Nutzers).
   const ownObligationMinutes = ctx.employee

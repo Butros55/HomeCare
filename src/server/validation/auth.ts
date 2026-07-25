@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
-import { availabilitySlotSchema, homeLocationSchema } from '@/server/validation/employee';
+import {
+  availabilitySlotSchema,
+  availabilitySlotsOverlap,
+  homeLocationSchema,
+} from '@/server/validation/employee';
 
 /**
  * Auth-Schemas – identisch für Client-Formulare (react-hook-form) und
@@ -76,21 +80,26 @@ export type AcceptInvitationInput = z.infer<typeof acceptInvitationSchema>;
  * und wöchentliche Verfügbarkeiten an. Adresse & Verfügbarkeit sind optional –
  * die Leitung kann sie später ergänzen.
  */
-export const registerEmployeeSchema = z.object({
-  token: z.string().min(10).max(200),
-  firstName: nameSchema,
-  lastName: nameSchema,
-  password: passwordSchema,
-  phone: z
-    .string()
-    .trim()
-    .max(40, 'Höchstens 40 Zeichen.')
-    .optional()
-    .or(z.literal(''))
-    .transform((value) => (value ? value : undefined)),
-  homeLocation: homeLocationSchema,
-  availabilitySlots: z.array(availabilitySlotSchema).max(40).default([]),
-});
+export const registerEmployeeSchema = z
+  .object({
+    token: z.string().min(10).max(200),
+    firstName: nameSchema,
+    lastName: nameSchema,
+    password: passwordSchema,
+    phone: z
+      .string()
+      .trim()
+      .max(40, 'Höchstens 40 Zeichen.')
+      .optional()
+      .or(z.literal(''))
+      .transform((value) => (value ? value : undefined)),
+    homeLocation: homeLocationSchema,
+    availabilitySlots: z.array(availabilitySlotSchema).max(40).default([]),
+  })
+  .refine((value) => !availabilitySlotsOverlap(value.availabilitySlots), {
+    message: 'Zeitfenster desselben Wochentags dürfen sich nicht überschneiden oder doppeln.',
+    path: ['availabilitySlots'],
+  });
 export type RegisterEmployeeInput = z.input<typeof registerEmployeeSchema>;
 
 export const changePasswordSchema = z.object({

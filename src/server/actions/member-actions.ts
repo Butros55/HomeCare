@@ -9,7 +9,7 @@ import { writeAuditLog } from '@/server/audit';
 import { db } from '@/server/db';
 import { AppError, runAction, type ActionResult } from '@/server/errors';
 import { hasPermission, requirePermission } from '@/server/permissions';
-import { inviteLeadershipAccount } from '@/server/services/employee-service';
+import { inviteLeadershipAccount, type InviteResult } from '@/server/services/employee-service';
 
 const roleSchema = z.enum(['ADMIN', 'DISPATCHER', 'TEAM_MANAGER', 'EMPLOYEE']);
 const permissionListSchema = z
@@ -139,7 +139,7 @@ export async function updateMemberPermissionsAction(
 /** Leitungs-Konto per E-Mail einladen (Einstellungen → Leitung). */
 export async function inviteLeadershipAction(input: {
   email: string;
-}): Promise<ActionResult<{ link: string }>> {
+}): Promise<ActionResult<InviteResult>> {
   return runAction(async () => {
     const email = z.string().trim().toLowerCase().pipe(z.email()).parse(input.email);
     const result = await inviteLeadershipAccount({ email });

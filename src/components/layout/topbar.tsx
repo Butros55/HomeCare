@@ -74,12 +74,13 @@ export function Topbar({
   // Optimistisch: die Pille springt SOFORT auf die gewählte Ansicht (animiert),
   // der Server-Wechsel läuft im Hintergrund als Soft-Update – kein Reload-Gefühl.
   const [optimisticPersonal, setOptimisticPersonal] = React.useState<boolean | null>(null);
+  // Optimistische Anzeige zurücksetzen, sobald der Server-Wert eingeholt hat –
+  // als Anpassung während des Renderns (statt im Effekt), damit keine
+  // kaskadierende Neurenderung entsteht.
+  if (optimisticPersonal !== null && personalViewToggle?.personalView === optimisticPersonal) {
+    setOptimisticPersonal(null);
+  }
   const activePersonal = optimisticPersonal ?? personalViewToggle?.personalView ?? false;
-  React.useEffect(() => {
-    if (optimisticPersonal !== null && personalViewToggle?.personalView === optimisticPersonal) {
-      setOptimisticPersonal(null);
-    }
-  }, [personalViewToggle?.personalView, optimisticPersonal]);
 
   const switchView = (personal: boolean) => {
     if (switchPending || !personalViewToggle || activePersonal === personal) return;

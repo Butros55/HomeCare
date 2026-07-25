@@ -1,32 +1,80 @@
 'use client';
 
-import { AlertTriangle, CalendarClock, Check, Sparkles } from 'lucide-react';
+import { AlertTriangle, CalendarClock, Check, Megaphone, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
-import { applyConflictResolutionAction } from '@/server/actions/conflict-actions';
+import {
+  applyConflictResolutionAction,
+  reportScopeConflictsAction,
+} from '@/server/actions/conflict-actions';
 import type { OrgConflictDto } from '@/server/services/conflict-service';
 
 /**
  * Aktuelle Terminkonflikte in den Benachrichtigungen: konkret benannt (welche
  * Termine, wann) und – wo flexible Termine beteiligt sind – mit einem Klick
- * automatisch auflösbar.
+ * automatisch auflösbar. Berechtigte Leitung kann die offenen Konflikte per
+ * Sammelaktion „Konflikte melden" an die betroffenen Mitarbeiter senden.
  */
-export function ConflictNoticeList({ conflicts }: { conflicts: OrgConflictDto[] }) {
+export function ConflictNoticeList({
+  conflicts,
+  canReport,
+}: {
+  conflicts: OrgConflictDto[];
+  /** Leitung mit `appointments.manage`: Sammelaktion „Konflikte melden" sichtbar. */
+  canReport: boolean;
+}) {
+  const router = useRouter();
+  const [reporting, setReporting] = React.useState(false);
+
   if (conflicts.length === 0) return null;
+
+  const report = () => {
+    setReporting(true);
+    reportScopeConflictsAction(
+      conflicts.map((conflict) => ({ employeeId: conflict.employeeId, date: conflict.date })),
+    ).then((result) => {
+      setReporting(false);
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+      const { reported, alreadyReported, skippedNoAccount } = result.data;
+      if (reported === 0 && alreadyReported > 0 && skippedNoAccount === 0) {
+        toast.info('Alle Konflikte wurden bereits kürzlich gemeldet.');
+      } else if (reported === 0 && skippedNoAccount > 0 && alreadyReported === 0) {
+        toast.warning(
+          `Keine Meldung möglich – ${skippedNoAccount} Konflikt${skippedNoAccount === 1 ? '' : 'e'} betreffen Mitarbeiter ohne Konto.`,
+        );
+      } else {
+        const parts = [`${reported} gemeldet`];
+        if (alreadyReported > 0) parts.push(`${alreadyReported} bereits gemeldet`);
+        if (skippedNoAccount > 0) parts.push(`${skippedNoAccount} ohne Mitarbeiterkonto`);
+        toast.success(parts.join(' · '));
+      }
+      router.refresh();
+    });
+  };
 
   return (
     <section className="mb-4" aria-labelledby="conflict-notices-title">
-      <h2
-        id="conflict-notices-title"
-        className="mb-2 flex items-center gap-1.5 text-[length:var(--text-sm)] font-semibold text-[var(--color-warning)]"
-      >
-        <AlertTriangle className="size-4" aria-hidden />
-        {conflicts.length === 1 ? 'Ein Terminkonflikt' : `${conflicts.length} Terminkonflikte`}
-      </h2>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h2
+          id="conflict-notices-title"
+          className="flex items-center gap-1.5 text-[length:var(--text-sm)] font-semibold text-[var(--color-warning)]"
+        >
+          <AlertTriangle className="size-4" aria-hidden />
+          {conflicts.length === 1 ? 'Ein Terminkonflikt' : `${conflicts.length} Terminkonflikte`}
+        </h2>
+        {canReport ? (
+          <Button variant="secondary" size="sm" loading={reporting} onClick={report}>
+            <Megaphone aria-hidden /> Konflikte melden
+          </Button>
+        ) : null}
+      </div>
       <ul className="space-y-2">
         {conflicts.map((conflict, index) => (
           <ConflictCard key={`${conflict.employeeId}-${conflict.date}-${index}`} conflict={conflict} />

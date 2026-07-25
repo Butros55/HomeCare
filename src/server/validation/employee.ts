@@ -79,10 +79,39 @@ export const availabilitySlotSchema = z
     message: 'Ende muss nach dem Beginn liegen.',
   });
 
-export const availabilityFormSchema = z.object({
-  employeeId: z.string().min(1),
-  slots: z.array(availabilitySlotSchema).max(40),
-});
+/**
+ * Überschneiden oder doppeln sich Zeitfenster desselben Wochentags? "HH:MM"
+ * vergleicht als String korrekt (nullgepolstert). Aneinandergrenzende Fenster
+ * (z. B. 08:00–12:00 und 12:00–16:00) gelten NICHT als Überschneidung; exakte
+ * Duplikate schon.
+ */
+export function availabilitySlotsOverlap(
+  slots: { weekday: number; startTime: string; endTime: string }[],
+): boolean {
+  const byWeekday = new Map<number, { startTime: string; endTime: string }[]>();
+  for (const slot of slots) {
+    const list = byWeekday.get(slot.weekday);
+    if (list) list.push(slot);
+    else byWeekday.set(slot.weekday, [slot]);
+  }
+  for (const list of byWeekday.values()) {
+    const sorted = [...list].sort((a, b) => a.startTime.localeCompare(b.startTime));
+    for (let i = 1; i < sorted.length; i += 1) {
+      if (sorted[i]!.startTime < sorted[i - 1]!.endTime) return true;
+    }
+  }
+  return false;
+}
+
+export const availabilityFormSchema = z
+  .object({
+    employeeId: z.string().min(1),
+    slots: z.array(availabilitySlotSchema).max(40),
+  })
+  .refine((value) => !availabilitySlotsOverlap(value.slots), {
+    message: 'Zeitfenster desselben Wochentags dürfen sich nicht überschneiden oder doppeln.',
+    path: ['slots'],
+  });
 export type AvailabilityFormInput = z.infer<typeof availabilityFormSchema>;
 
 export const absenceFormSchema = z

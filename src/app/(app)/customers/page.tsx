@@ -95,6 +95,7 @@ export default async function CustomersPage({
             cities={cities}
             employees={employees.map((e) => ({ id: e.id, name: employeeDisplayName(e, ctx.user.id) }))}
             view={params.view}
+            showOpenHours={showAccount}
           />
         </div>
       </PageHeader>

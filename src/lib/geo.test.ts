@@ -166,4 +166,13 @@ describe('Zuständigkeitsgebiet (Umkreis)', () => {
     expect(area.radiusMeters).toBeNull();
     expect(isWithinCoverage(area, { latitude: 0, longitude: 0 })).toBe(true);
   });
+
+  it('schließt den Kunden exakt an der Grenze ein (Umkreis ist inklusiv)', () => {
+    const center = { latitude: 51.9607, longitude: 7.6261 };
+    const point = { latitude: 51.9697, longitude: 7.6261 };
+    const distance = haversineMeters(center, point);
+    // Genau am Radius → drin; einen Meter enger → draußen.
+    expect(isWithinCoverage({ center, radiusMeters: distance }, point)).toBe(true);
+    expect(isWithinCoverage({ center, radiusMeters: distance - 1 }, point)).toBe(false);
+  });
 });

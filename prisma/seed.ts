@@ -140,16 +140,6 @@ async function clearDatabase(): Promise<void> {
 // Gemeinsame Bausteine
 // ---------------------------------------------------------------------------
 
-const CLEANING_TITLES = [
-  'Grundreinigung',
-  'Reinigung & Wäsche',
-  'Fensterputz',
-  'Bad & Küche',
-  'Bügeln & Aufräumen',
-  'Wohnungsreinigung',
-  'Einkauf & Reinigung',
-];
-
 interface ScheduledCustomer {
   number: string;
   customerId: string;
@@ -243,7 +233,6 @@ async function seedHistory(args: {
     if (!c.series) continue;
     const s = c.series;
     const endTime = addMinutesToTime(s.startTime, s.durationMinutes);
-    const anchor = occurrenceOffsets(s.weekday, s.cadenceWeeks, -14, FUTURE_END_OFFSET)[0] ?? 1;
 
     const series = await db.appointmentSeries.create({
       data: {

@@ -1,5 +1,6 @@
 'use client';
 
+import { AlertTriangle } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import * as React from 'react';
 import { toast } from 'sonner';
@@ -191,6 +192,23 @@ export function CoverageEditor({
                   </div>
                 )}
               </>
+            ) : null}
+
+            {/* Fail-open sichtbar machen: Ohne Zentrum mit Koordinaten kann der
+                Umkreis in der Planung nicht angewendet werden (kein stiller
+                Total-Ausschluss – stattdessen ehrliche Warnung). */}
+            {limited && !effectiveCenter ? (
+              <div className="flex items-start gap-2 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-warning-soft)] p-3 text-[length:var(--text-xs)] text-[var(--color-warning)]">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden />
+                <span>
+                  Der Umkreis wirkt noch nicht: Ohne Zentrum mit Koordinaten werden weiterhin alle
+                  Kunden vorgeschlagen und geplant. Bitte{' '}
+                  {useHome
+                    ? 'eine Zuhause-Adresse mit Koordinaten im Profil'
+                    : 'ein Zentrum mit gültiger Adresse'}{' '}
+                  hinterlegen.
+                </span>
+              </div>
             ) : null}
 
             <div className="flex justify-end">

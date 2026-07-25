@@ -481,6 +481,9 @@ export async function computeRoutePlan(input: ComputeRouteInput) {
 
   const date = fromDateInputValue(input.date);
   if (!date) throw new AppError('VALIDATION_FAILED');
+  // Optimieren/Neuberechnen ist eine Planungsaktion – für vergangene Tage
+  // gesperrt (nur Ansicht). Reine Anzeige läuft über getRoutePlanningData.
+  assertNotPastPlanningDay(date, ctx.organization.timezone);
 
   const employee = await db.employee.findUnique({ where: { id: input.employeeId } });
   assertSameOrg(ctx, employee);

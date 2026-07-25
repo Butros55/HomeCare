@@ -700,7 +700,12 @@ export async function acceptDayRoute(input: {
   assertSameOrg(ctx, employee);
   if (employee.status !== 'ACTIVE' || employee.deletedAt) throw new AppError('SUGGESTION_STALE');
 
-  await ensureRecurringTopupsMaterialized(ctx.organization.id, timezone);
+  // Konto-Materialisierung nur, wenn Stundenbudgets geführt werden – bei
+  // abgeschaltetem Stundenkonto laufen keine Guthaben-/Aufladungslogiken
+  // (identisch zu acceptRouteSuggestion).
+  if (ctx.organization.hourBudgetsEnabled) {
+    await ensureRecurringTopupsMaterialized(ctx.organization.id, timezone);
+  }
 
   // ---- Neue Einsätze normalisieren + Kunden laden -------------------------
   const visits = payload.visits.map((visit) => {
@@ -719,6 +724,14 @@ export async function acceptDayRoute(input: {
       })
     : [];
   const customerById = new Map(customers.map((c) => [c.id, c]));
+  // Zuständigkeitsgebiet erneut prüfen (könnte sich seit dem Generieren geändert
+  // haben) – konsistent zum harten Filter der Tagesroutengenerierung.
+  const coverageArea = resolveCoverageArea({
+    coverageUseHome: employee.coverageUseHome,
+    startLocation: employee.startLocation,
+    coverageCenter: employee.coverageCenter,
+    coverageRadiusKm: employee.coverageRadiusKm,
+  });
   for (const visit of visits) {
     const customer = customerById.get(visit.cust);
     if (!customer || customer.status !== 'ACTIVE' || customer.deletedAt) {
@@ -727,6 +740,11 @@ export async function acceptDayRoute(input: {
     const address = customer.addresses[0];
     if (!address || address.latitude == null || address.longitude == null) {
       throw new AppError('SUGGESTION_STALE');
+    }
+    if (!isWithinCoverage(coverageArea, { latitude: address.latitude, longitude: address.longitude })) {
+      throw new AppError('SUGGESTION_STALE', {
+        message: 'Ein Kunde liegt nicht mehr im Zuständigkeitsgebiet des Mitarbeiters.',
+      });
     }
   }
 

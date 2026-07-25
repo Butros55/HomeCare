@@ -205,6 +205,13 @@ export interface EmployeeSuggestionPanel {
 export interface GenerateSuggestionsResult {
   aiUsed: boolean;
   employees: EmployeeSuggestionPanel[];
+  /**
+   * Darf der Aufrufer die erzeugten Vorschläge übernehmen? Einheitliche Regel
+   * (identisch zur Durchsetzung in `acceptRouteSuggestion` via Scope-Prüfung):
+   *  - scope 'self':  ja – die eigene Route darf man selbst planen (Mitarbeiter-
+   *    Selbstplanung ebenso wie Leitung in der persönlichen/Solo-Ansicht).
+   *  - scope 'team':  nur Leitungs-Konten mit `routes.manage`.
+   */
   canAccept: boolean;
 }
 
@@ -317,6 +324,33 @@ export async function loadOpenDemand(
       .map((appointment) => appointment.customerId),
   );
 
+  // Wunschmitarbeiter nur berücksichtigen, wenn er tatsächlich einsatzfähig ist
+  // (aktiv, nicht gelöscht, selbe Organisation). Ein inaktiver, gelöschter oder
+  // organisationsfremder Wunschmitarbeiter darf die Planung nicht dauerhaft
+  // blockieren: Der Kunde gilt dann als „ohne Wunschmitarbeiter" und kann
+  // regulär anderen Mitarbeitern vorgeschlagen/zugeteilt werden.
+  const preferredIds = [
+    ...new Set(
+      customers.map((c) => c.preferredEmployeeId).filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  const activePreferredIds =
+    preferredIds.length > 0
+      ? new Set(
+          (
+            await db.employee.findMany({
+              where: {
+                id: { in: preferredIds },
+                organizationId: ctx.organization.id,
+                status: 'ACTIVE',
+                deletedAt: null,
+              },
+              select: { id: true },
+            })
+          ).map((e) => e.id),
+        )
+      : new Set<string>();
+
   const result: DemandCandidate[] = [];
   for (const customer of customers) {
     if (customersWithDayAppointment.has(customer.id)) continue;
@@ -334,7 +368,10 @@ export async function loadOpenDemand(
       customerId: customer.id,
       customerName: `${customer.firstName} ${customer.lastName}`,
       customerColor: customer.color,
-      preferredEmployeeId: customer.preferredEmployeeId,
+      preferredEmployeeId:
+        customer.preferredEmployeeId && activePreferredIds.has(customer.preferredEmployeeId)
+          ? customer.preferredEmployeeId
+          : null,
       defaultDurationMinutes: customer.defaultAppointmentDurationMinutes,
       availabilitySlots: customer.availabilities
         .filter((slot) => slot.weekday === weekday)
@@ -601,7 +638,10 @@ export async function generateRouteSuggestions(
 
   return {
     aiUsed,
-    canAccept: isLeadership,
+    // Einheitliche Regel: eigene Route (scope 'self') darf immer übernommen
+    // werden (der Panel-Aufbau begrenzt scope 'self' bereits auf das eigene
+    // Profil); Teamvorschläge nur mit Leitungsrolle.
+    canAccept: input.scope === 'self' ? ctx.employee !== null : isLeadership,
     employees: panels.map((entry) => entry.panel),
   };
 }
@@ -1117,6 +1157,21 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
   const address = customer.addresses[0];
   if (!address || address.latitude == null || address.longitude == null) {
     throw new AppError('SUGGESTION_STALE');
+  }
+
+  // Zuständigkeitsgebiet erneut prüfen: Ändert die Leitung Umkreis/Zentrum
+  // innerhalb der Token-Laufzeit, darf ein inzwischen außerhalb liegender Kunde
+  // nicht mehr angenommen werden – konsistent zum harten Filter der Vorschläge.
+  const coverageArea = resolveCoverageArea({
+    coverageUseHome: employee.coverageUseHome,
+    startLocation: employee.startLocation,
+    coverageCenter: employee.coverageCenter,
+    coverageRadiusKm: employee.coverageRadiusKm,
+  });
+  if (!isWithinCoverage(coverageArea, { latitude: address.latitude, longitude: address.longitude })) {
+    throw new AppError('SUGGESTION_STALE', {
+      message: 'Der Kunde liegt nicht mehr im Zuständigkeitsgebiet des Mitarbeiters.',
+    });
   }
 
   // ---- Routenentwurf vorbereiten (Matrix-Aufrufe vor der Transaktion) -----
