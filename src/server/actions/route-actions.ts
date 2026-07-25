@@ -12,6 +12,7 @@ import {
   computeRoutePlan,
   discardRoutePlan,
   getRoutePlanningData,
+  listRoutePlanDates,
   saveRoutePlan,
   type ComputedRoute,
 } from '@/server/services/route-service';
@@ -30,6 +31,11 @@ import {
 
 export async function getRoutePlanningDataAction(employeeId: string, date: string) {
   return runAction(() => getRoutePlanningData(employeeId, date));
+}
+
+/** Tage mit gespeicherter Route im Zeitraum (für die Datumsleiste-Markierung). */
+export async function getRoutePlanDatesAction(employeeId: string, from: string, to: string) {
+  return runAction(() => listRoutePlanDates(employeeId, from, to));
 }
 
 const routePathSchema = z.object({

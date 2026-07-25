@@ -2,10 +2,15 @@ import 'server-only';
 
 import { addDays } from 'date-fns';
 
-import type { Conflict } from '@/lib/conflicts';
+import { isOutsideAvailabilityWindows, type Conflict } from '@/lib/conflicts';
 import { resolveDayOverlaps, type ResolverAppointment } from '@/lib/conflict-resolver';
-import { calendarDayInZone, dayPeriodInZone, formatTime } from '@/lib/dates';
-import { estimateTravelSeconds } from '@/lib/geo';
+import {
+  calendarDayInZone,
+  dayPeriodInZone,
+  formatTime,
+  isoWeekdayInZone,
+} from '@/lib/dates';
+import { estimateTravelSeconds, haversineMeters } from '@/lib/geo';
 import { computeRouteMatrixCached } from '@/server/providers/routing';
 import { db } from '@/server/db';
 import { AppError } from '@/server/errors';
@@ -100,6 +105,175 @@ function serialize(conflict: Conflict): SerializedConflict {
     message: conflict.message,
     ...(conflict.relatedAppointmentId ? { relatedAppointmentId: conflict.relatedAppointmentId } : {}),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Umweisungs-Vorschlag: freie + nächstgelegene Mitarbeiter
+// ---------------------------------------------------------------------------
+
+export interface ReplacementCandidateDto {
+  employeeId: string;
+  name: string;
+  /** Verfügbar = im Zeitfenster, nicht abwesend, keine Überschneidung. */
+  available: boolean;
+  outsideAvailability: boolean;
+  absent: boolean;
+  hasOverlap: boolean;
+  /** Luftlinie Zuhause → Kundenort (m); null ohne Koordinaten. */
+  distanceMeters: number | null;
+}
+
+export interface ReplacementSuggestion {
+  appointmentId: string;
+  candidates: ReplacementCandidateDto[];
+}
+
+function homePoint(value: unknown): { latitude: number; longitude: number } | null {
+  if (!value || typeof value !== 'object') return null;
+  const loc = value as { latitude?: unknown; longitude?: unknown };
+  if (typeof loc.latitude !== 'number' || typeof loc.longitude !== 'number') return null;
+  return { latitude: loc.latitude, longitude: loc.longitude };
+}
+
+/**
+ * Bei einem Termin (typisch mit Konflikt „außerhalb Verfügbarkeit") passende
+ * Ersatz-Mitarbeiter vorschlagen: zuerst die FREIEN (im Zeitfenster verfügbar,
+ * nicht abwesend, ohne Überschneidung), darunter nach Nähe zum Kundenort. So
+ * lässt sich der Termin mit einem Klick sinnvoll umweisen.
+ */
+export async function suggestReplacementEmployees(
+  appointmentId: string,
+): Promise<ReplacementSuggestion> {
+  const ctx = await requireOrganizationMembership();
+  if (!hasPermission(ctx, 'appointments.manage')) throw new AppError('ACCESS_DENIED');
+
+  const appointment = await db.appointment.findUnique({
+    where: { id: appointmentId },
+    select: {
+      id: true,
+      organizationId: true,
+      assignedEmployeeId: true,
+      customerId: true,
+      startAt: true,
+      endAt: true,
+      durationMinutes: true,
+      locationAddress: { select: { latitude: true, longitude: true } },
+    },
+  });
+  assertSameOrg(ctx, appointment);
+
+  const timezone = ctx.organization.timezone;
+  const weekday = isoWeekdayInZone(appointment.startAt, timezone);
+
+  // Kundenort: Termin-Adresse, ersatzweise erste geokodierte Kundenadresse.
+  let customerPoint =
+    appointment.locationAddress?.latitude != null && appointment.locationAddress.longitude != null
+      ? { latitude: appointment.locationAddress.latitude, longitude: appointment.locationAddress.longitude }
+      : null;
+  if (!customerPoint) {
+    const address = await db.address.findFirst({
+      where: { customerId: appointment.customerId, latitude: { not: null }, longitude: { not: null } },
+      select: { latitude: true, longitude: true },
+    });
+    if (address?.latitude != null && address.longitude != null) {
+      customerPoint = { latitude: address.latitude, longitude: address.longitude };
+    }
+  }
+
+  const scope = await getManagedEmployeeIds(ctx);
+  const employees = await db.employee.findMany({
+    where: {
+      organizationId: ctx.organization.id,
+      deletedAt: null,
+      status: 'ACTIVE',
+      ...employeeScopeFilter(scope),
+      ...(appointment.assignedEmployeeId ? { id: { not: appointment.assignedEmployeeId } } : {}),
+    },
+    select: { id: true, firstName: true, lastName: true, startLocation: true },
+  });
+  if (employees.length === 0) return { appointmentId, candidates: [] };
+  const employeeIds = employees.map((employee) => employee.id);
+
+  const [availabilities, absences, overlapping] = await Promise.all([
+    db.employeeAvailability.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        weekday,
+        validFrom: { lte: appointment.startAt },
+        OR: [{ validUntil: null }, { validUntil: { gte: appointment.startAt } }],
+      },
+      select: { employeeId: true, startTime: true, endTime: true, validFrom: true, validUntil: true },
+    }),
+    db.employeeAbsence.findMany({
+      where: {
+        employeeId: { in: employeeIds },
+        status: 'APPROVED',
+        startAt: { lt: appointment.endAt },
+        endAt: { gt: appointment.startAt },
+      },
+      select: { employeeId: true },
+    }),
+    db.appointment.findMany({
+      where: {
+        assignedEmployeeId: { in: employeeIds },
+        deletedAt: null,
+        status: { in: [...RESERVING_STATUSES] },
+        startAt: { lt: appointment.endAt },
+        endAt: { gt: appointment.startAt },
+        id: { not: appointment.id },
+      },
+      select: { assignedEmployeeId: true },
+    }),
+  ]);
+
+  const availByEmployee = new Map<string, { weekday: number; startTime: string; endTime: string }[]>();
+  for (const slot of availabilities) {
+    const list = availByEmployee.get(slot.employeeId) ?? [];
+    list.push({ weekday, startTime: slot.startTime, endTime: slot.endTime });
+    availByEmployee.set(slot.employeeId, list);
+  }
+  const absentIds = new Set(absences.map((absence) => absence.employeeId));
+  const overlapIds = new Set(
+    overlapping.map((row) => row.assignedEmployeeId).filter((id): id is string => Boolean(id)),
+  );
+
+  const candidates: ReplacementCandidateDto[] = employees.map((employee) => {
+    const slots = availByEmployee.get(employee.id) ?? [];
+    // Ohne gepflegte Fenster gilt „immer verfügbar" (App-Konvention).
+    const outsideAvailability =
+      slots.length > 0 &&
+      isOutsideAvailabilityWindows(
+        appointment.startAt,
+        appointment.durationMinutes,
+        slots,
+        timezone,
+      );
+    const absent = absentIds.has(employee.id);
+    const hasOverlap = overlapIds.has(employee.id);
+    const home = homePoint(employee.startLocation);
+    const distanceMeters =
+      home && customerPoint ? Math.round(haversineMeters(home, customerPoint)) : null;
+    return {
+      employeeId: employee.id,
+      name: `${employee.firstName} ${employee.lastName}`,
+      available: !outsideAvailability && !absent && !hasOverlap,
+      outsideAvailability,
+      absent,
+      hasOverlap,
+      distanceMeters,
+    };
+  });
+
+  // Freie zuerst, darunter nach Nähe (ohne Koordinaten ans Ende), dann Name.
+  candidates.sort((a, b) => {
+    if (a.available !== b.available) return a.available ? -1 : 1;
+    const da = a.distanceMeters ?? Number.POSITIVE_INFINITY;
+    const db2 = b.distanceMeters ?? Number.POSITIVE_INFINITY;
+    if (da !== db2) return da - db2;
+    return a.name.localeCompare(b.name);
+  });
+
+  return { appointmentId, candidates };
 }
 
 // ---------------------------------------------------------------------------

@@ -76,6 +76,7 @@ import type {
   RouteSuggestionDto,
 } from '@/server/services/route-suggestion-service';
 import { SuggestionCard } from '@/features/routing/suggestion-card';
+import { RouteDateStrip } from '@/features/routing/route-date-strip';
 import { DayRouteDialog, type DayRouteFormValues } from '@/features/routing/day-route-dialog';
 import { computeRouteEarnings, formatEuroCents } from '@/lib/earnings';
 
@@ -918,6 +919,10 @@ function SingleRoutePlanner({
 
   return (
     <div className="space-y-4">
+      {/* Datumsleiste wie in der Kalender-Tagesansicht: Woche mit Tag-Buttons,
+          zwischen Wochen scrollbar, Farbmarker für Tage mit geplanter Route. */}
+      <RouteDateStrip date={date} onSelect={setDate} employeeId={employeeId} />
+
       {/* Kompakte Steuerleiste: mobil ein 2-Spalten-Raster mit vollbreiten
           Feldern, ab sm eine schlanke Zeile. */}
       <div
@@ -940,16 +945,6 @@ function SingleRoutePlanner({
             </Select>
           </ControlField>
         ) : null}
-
-        <ControlField label="Datum" className="sm:w-[9.5rem]">
-          <Input
-            id="route-date"
-            type="date"
-            value={date}
-            onChange={(event) => setDate(event.target.value)}
-            className="h-8 w-full"
-          />
-        </ControlField>
 
         <ControlField label="Startpunkt" className="sm:w-[11rem]">
           <Select value={originType} onValueChange={(v) => setOriginType(v as OriginType)}>

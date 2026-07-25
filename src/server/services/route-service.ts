@@ -1,6 +1,6 @@
 import 'server-only';
 
-import type { Employee, Prisma } from '@prisma/client';
+import type { Employee, Prisma, RoutePlanStatus } from '@prisma/client';
 
 import { dayPeriodInZone, fromDateInputValue } from '@/lib/dates';
 import type { StructuredLocation } from '@/lib/geo';
@@ -145,6 +145,36 @@ export function isPastForRoutePlanning(
     return (appointment.latestEndAt ?? appointment.endAt).getTime() <= now.getTime();
   }
   return appointment.startAt.getTime() <= now.getTime();
+}
+
+/**
+ * Tage mit gespeicherter Route eines Mitarbeiters im Bereich [from, to] – für die
+ * Datumsleiste der Routenplanung (Farbmarker „geplant"). Datumssemantik: routeDate
+ * ist die Kalender-Mitternacht in UTC, YYYY-MM-DD wird direkt daraus abgeleitet.
+ */
+export async function listRoutePlanDates(
+  employeeId: string,
+  fromInput: string,
+  toInput: string,
+): Promise<{ date: string; status: RoutePlanStatus }[]> {
+  const ctx = await requireOrganizationMembership();
+  const isOwn = ctx.employee?.id === employeeId;
+  if (!hasPermission(ctx, 'routes.manage') && !isOwn) throw new AppError('ACCESS_DENIED');
+  const from = fromDateInputValue(fromInput);
+  const to = fromDateInputValue(toInput);
+  if (!from || !to) throw new AppError('VALIDATION_FAILED', { message: 'Ungültiger Zeitraum.' });
+  const plans = await db.routePlan.findMany({
+    where: {
+      organizationId: ctx.organization.id,
+      employeeId,
+      routeDate: { gte: from, lte: to },
+    },
+    select: { routeDate: true, status: true },
+  });
+  return plans.map((plan) => ({
+    date: plan.routeDate.toISOString().slice(0, 10),
+    status: plan.status,
+  }));
 }
 
 export async function getRoutePlanningData(employeeId: string, dateInput: string) {

@@ -1,12 +1,26 @@
 'use client';
 
-import { Car, Check, Clock, MapPin, RotateCcw, Sparkles, Undo2, X } from 'lucide-react';
+import {
+  Car,
+  Check,
+  Clock,
+  Home,
+  Hourglass,
+  MapPin,
+  Navigation,
+  RotateCcw,
+  Sparkles,
+  Undo2,
+  Wallet,
+  X,
+} from 'lucide-react';
 import * as React from 'react';
 
 import { Button } from '@/components/ui/button';
+import { EntityAvatar } from '@/components/ui/misc';
 import { formatTime } from '@/lib/dates';
 import { formatMinutesVerbose } from '@/lib/duration';
-import { formatDistance } from '@/lib/geo';
+import { formatEuroCents } from '@/lib/earnings';
 import type { RouteSuggestionDto } from '@/server/services/route-suggestion-service';
 
 /** Sekunden → vorzeichenbehaftete Minutenangabe ("+12 Min.", "±0 Min."). */
@@ -16,26 +30,52 @@ function signedMinutes(seconds: number): string {
   return `${minutes > 0 ? '+' : '−'}${Math.abs(minutes)} Min.`;
 }
 
-function DeltaTile({ label, value, tone }: { label: string; value: string; tone?: 'warn' }) {
+/** Icon-Kachel im „Tag planen"-Stil: rundes Icon-Badge + Label + Wert. */
+function IconTile({
+  icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  tone?: 'success' | 'warn';
+}) {
   return (
-    <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-2.5 py-1.5">
-      <p className="text-[length:var(--text-2xs)] tracking-wide text-[var(--color-ink-subtle)] uppercase">
-        {label}
-      </p>
-      <p
-        className={`text-[length:var(--text-sm)] font-medium ${
-          tone === 'warn' ? 'text-[var(--color-warning)]' : ''
-        }`}
+    <div className="flex items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] px-2.5 py-1.5">
+      <span
+        className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand-subtle)] text-[var(--color-brand)] [&_svg]:size-3.5"
+        aria-hidden
       >
-        {value}
-      </p>
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[length:var(--text-2xs)] tracking-wide text-[var(--color-ink-subtle)] uppercase">
+          {label}
+        </span>
+        <span
+          className="block truncate text-[length:var(--text-sm)] font-semibold"
+          style={{
+            color:
+              tone === 'success'
+                ? 'var(--color-success)'
+                : tone === 'warn'
+                  ? 'var(--color-warning)'
+                  : undefined,
+          }}
+        >
+          {value}
+        </span>
+      </span>
     </div>
   );
 }
 
 /**
- * Vorschlagskarte: neuer Einsatz mit allen Auswirkungen auf die aktuelle Route.
- * „Ablehnen" gilt nur für den aktuellen Generierungslauf und ist umkehrbar.
+ * Vorschlagskarte im „Tag planen"-Stil: Kunden-Avatar, Icon-Kacheln und der
+ * Grenzverdienst „+X €" (was der Einsatz zusätzlich bringt). „Ablehnen" gilt nur
+ * für den aktuellen Generierungslauf und ist umkehrbar.
  */
 export function SuggestionCard({
   suggestion,
@@ -57,6 +97,7 @@ export function SuggestionCard({
   onUndoDecline: (suggestion: RouteSuggestionDto) => void;
 }) {
   const { impact } = suggestion;
+  const hasEarnings = suggestion.marginalEarningsCents > 0;
 
   if (declined) {
     return (
@@ -78,10 +119,11 @@ export function SuggestionCard({
     <div className="@container space-y-3 rounded-[var(--radius-lg)] border border-[var(--color-line)] bg-[var(--color-panel)] p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2.5">
-          <span
-            className="mt-0.5 h-9 w-1 shrink-0 rounded-full"
-            style={{ backgroundColor: suggestion.customerColor }}
-            aria-hidden
+          <EntityAvatar
+            id={suggestion.customerId}
+            name={suggestion.customerName}
+            color={suggestion.customerColor}
+            size="sm"
           />
           <div className="min-w-0">
             <p className="truncate text-[length:var(--text-sm)] font-semibold">
@@ -108,9 +150,19 @@ export function SuggestionCard({
             </p>
           </div>
         </div>
-        <span className="shrink-0 rounded-full bg-[var(--color-brand-subtle)] px-2.5 py-1 text-[length:var(--text-2xs)] font-medium text-[var(--color-brand)]">
-          {formatMinutesVerbose(suggestion.openMinutes)} offen
-        </span>
+        {/* Grenzverdienst prominent: „+X €" für diesen zusätzlichen Stopp. */}
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          {hasEarnings ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-success-soft)] px-2.5 py-1 text-[length:var(--text-sm)] font-semibold text-[var(--color-success)]">
+              <Wallet className="size-3.5" aria-hidden /> +{formatEuroCents(suggestion.marginalEarningsCents)}
+            </span>
+          ) : null}
+          {suggestion.openMinutes > 0 ? (
+            <span className="rounded-full bg-[var(--color-brand-subtle)] px-2 py-0.5 text-[length:var(--text-2xs)] font-medium text-[var(--color-brand)]">
+              {formatMinutesVerbose(suggestion.openMinutes)} offen
+            </span>
+          ) : null}
+        </div>
       </div>
 
       <p className="flex items-start gap-1.5 text-[length:var(--text-xs)] text-[var(--color-ink-muted)]">
@@ -129,24 +181,39 @@ export function SuggestionCard({
       </p>
 
       <div className="grid grid-cols-2 gap-2 @xs:grid-cols-3 @2xl:grid-cols-6">
-        <DeltaTile
+        {hasEarnings ? (
+          <IconTile
+            icon={<Wallet aria-hidden />}
+            label="Verdienst"
+            value={`+${formatEuroCents(suggestion.marginalEarningsCents)}`}
+            tone="success"
+          />
+        ) : null}
+        <IconTile
+          icon={<Car aria-hidden />}
           label="Fahrzeit"
           value={signedMinutes(impact.extraTravelSeconds)}
           tone={impact.extraTravelSeconds > 15 * 60 ? 'warn' : undefined}
         />
-        <DeltaTile label="Distanz" value={`+${formatDistance(Math.max(0, impact.extraDistanceMeters))}`} />
-        <DeltaTile
+        <IconTile
+          icon={<Clock aria-hidden />}
           label="Wartezeit"
           value={signedMinutes(impact.extraWaitSeconds)}
           tone={impact.extraWaitSeconds > 20 * 60 ? 'warn' : undefined}
         />
-        <DeltaTile label="Arbeitstag" value={signedMinutes(impact.workdayDeltaSeconds)} />
-        <DeltaTile
-          label="Neue Abfahrt"
+        <IconTile
+          icon={<Hourglass aria-hidden />}
+          label="Arbeitstag"
+          value={signedMinutes(impact.workdayDeltaSeconds)}
+        />
+        <IconTile
+          icon={<Navigation aria-hidden />}
+          label="Abfahrt"
           value={formatTime(new Date(impact.departureAt), timezone)}
         />
-        <DeltaTile
-          label="Neue Rückkehr"
+        <IconTile
+          icon={<Home aria-hidden />}
+          label="Rückkehr"
           value={impact.returnAt ? formatTime(new Date(impact.returnAt), timezone) : '—'}
         />
       </div>
@@ -169,21 +236,11 @@ export function SuggestionCard({
           )}
         </p>
         <div className="flex shrink-0 gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={pending}
-            onClick={() => onDecline(suggestion)}
-          >
+          <Button variant="secondary" size="sm" disabled={pending} onClick={() => onDecline(suggestion)}>
             <X aria-hidden /> Ablehnen
           </Button>
           {canAccept ? (
-            <Button
-              variant="primary"
-              size="sm"
-              loading={pending}
-              onClick={() => onAccept(suggestion)}
-            >
+            <Button variant="primary" size="sm" loading={pending} onClick={() => onAccept(suggestion)}>
               <Check aria-hidden /> Termin übernehmen
             </Button>
           ) : null}

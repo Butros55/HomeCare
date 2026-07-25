@@ -8,8 +8,10 @@ import {
   applyResolutionForAppointment,
   getAppointmentConflicts,
   listScopeConflicts,
+  suggestReplacementEmployees,
   suggestResolutionForAppointment,
   type OrgConflictDto,
+  type ReplacementSuggestion,
   type ResolutionProposal,
   type SerializedConflict,
 } from '@/server/services/conflict-service';
@@ -24,6 +26,13 @@ export async function suggestResolutionForAppointmentAction(
   appointmentId: string,
 ): Promise<ActionResult<ResolutionProposal>> {
   return runAction(() => suggestResolutionForAppointment(appointmentId));
+}
+
+/** Passende Ersatz-Mitarbeiter (frei + nächstgelegen) für die Umweisung. */
+export async function suggestReplacementEmployeesAction(
+  appointmentId: string,
+): Promise<ActionResult<ReplacementSuggestion>> {
+  return runAction(() => suggestReplacementEmployees(appointmentId));
 }
 
 export async function applyResolutionForAppointmentAction(

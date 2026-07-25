@@ -71,11 +71,25 @@ export function Topbar({
   const { theme, setTheme } = useTheme();
   const [switchPending, startSwitchTransition] = React.useTransition();
 
+  // Optimistisch: die Pille springt SOFORT auf die gewählte Ansicht (animiert),
+  // der Server-Wechsel läuft im Hintergrund als Soft-Update – kein Reload-Gefühl.
+  const [optimisticPersonal, setOptimisticPersonal] = React.useState<boolean | null>(null);
+  const activePersonal = optimisticPersonal ?? personalViewToggle?.personalView ?? false;
+  React.useEffect(() => {
+    if (optimisticPersonal !== null && personalViewToggle?.personalView === optimisticPersonal) {
+      setOptimisticPersonal(null);
+    }
+  }, [personalViewToggle?.personalView, optimisticPersonal]);
+
   const switchView = (personal: boolean) => {
-    if (switchPending || !personalViewToggle || personalViewToggle.personalView === personal) return;
+    if (switchPending || !personalViewToggle || activePersonal === personal) return;
+    setOptimisticPersonal(personal);
     startSwitchTransition(async () => {
       const result = await togglePersonalViewAction(personal);
-      if (!result.ok) toast.error(result.message);
+      if (!result.ok) {
+        toast.error(result.message);
+        setOptimisticPersonal(null); // bei Fehler zurückspringen
+      }
     });
   };
 
@@ -124,12 +138,11 @@ export function Topbar({
           <button
             type="button"
             onClick={() => switchView(false)}
-            disabled={switchPending}
-            aria-pressed={!personalViewToggle.personalView}
+            aria-pressed={!activePersonal}
             title="Verwaltungsansicht: Mitarbeiter, Zuweisungen, Auswertungen"
             className={cn(
-              'flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[length:var(--text-xs)] font-medium transition-colors pointer-coarse:h-9 pointer-coarse:px-3',
-              !personalViewToggle.personalView
+              'flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[length:var(--text-xs)] font-medium transition-all pointer-coarse:h-9 pointer-coarse:px-3',
+              !activePersonal
                 ? 'bg-[var(--color-panel)] text-[var(--color-ink)] shadow-[var(--shadow-panel)]'
                 : 'text-[var(--color-ink-subtle)] hover:text-[var(--color-ink)]',
             )}
@@ -140,12 +153,11 @@ export function Topbar({
           <button
             type="button"
             onClick={() => switchView(true)}
-            disabled={switchPending}
-            aria-pressed={personalViewToggle.personalView}
+            aria-pressed={activePersonal}
             title="Meine Ansicht: nur eigene Termine, Routen und Stunden"
             className={cn(
-              'flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[length:var(--text-xs)] font-medium transition-colors pointer-coarse:h-9 pointer-coarse:px-3',
-              personalViewToggle.personalView
+              'flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[length:var(--text-xs)] font-medium transition-all pointer-coarse:h-9 pointer-coarse:px-3',
+              activePersonal
                 ? 'bg-[var(--color-panel)] text-[var(--color-ink)] shadow-[var(--shadow-panel)]'
                 : 'text-[var(--color-ink-subtle)] hover:text-[var(--color-ink)]',
             )}

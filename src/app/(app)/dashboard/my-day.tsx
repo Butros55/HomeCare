@@ -85,25 +85,29 @@ export async function MyDayDashboard({
           </Link>
         ) : null}
 
-        {/* Kompakte Kennzahlen */}
+        {/* Kompakte Kennzahlen – klickbar, führen zu passenden Ansichten. */}
         <div className="grid grid-cols-2 gap-3 xl:grid-cols-4" data-tour="my-day-stats">
-          <StatTile
-            icon={<CalendarDays />}
-            label="Termine heute"
-            value={data.counts.todayCount}
-            hint={`${formatMinutesAsHours(data.counts.todayMinutes)} Einsatzzeit`}
-          />
-          <StatTile
-            icon={<Car />}
-            label="Losfahren um"
-            value={data.firstDeparture ? formatTime(data.firstDeparture, timezone) : '—'}
-            hint={
-              data.counts.todayTravelSeconds > 0
-                ? `${formatTravelSeconds(data.counts.todayTravelSeconds)} Fahrt heute`
-                : 'keine Fahrten berechnet'
-            }
-            tone={data.firstDeparture ? 'default' : 'success'}
-          />
+          <Link href={`/calendar?datum=${todayIso}`} className="rounded-[var(--radius-xl)]">
+            <StatTile
+              icon={<CalendarDays />}
+              label="Termine heute"
+              value={data.counts.todayCount}
+              hint={`${formatMinutesAsHours(data.counts.todayMinutes)} Einsatzzeit`}
+            />
+          </Link>
+          <Link href={`/routes?datum=${todayIso}`} className="rounded-[var(--radius-xl)]">
+            <StatTile
+              icon={<Car />}
+              label="Losfahren um"
+              value={data.firstDeparture ? formatTime(data.firstDeparture, timezone) : '—'}
+              hint={
+                data.counts.todayTravelSeconds > 0
+                  ? `${formatTravelSeconds(data.counts.todayTravelSeconds)} Fahrt heute`
+                  : 'keine Fahrten berechnet'
+              }
+              tone={data.firstDeparture ? 'default' : 'success'}
+            />
+          </Link>
           {data.counts.showOpenHours ? (
             <StatTile
               icon={<Clock />}
@@ -113,25 +117,28 @@ export async function MyDayDashboard({
               tone={data.counts.openMinutes > 0 ? 'warning' : 'success'}
             />
           ) : null}
-          <StatTile
-            icon={<CalendarDays />}
-            label="Diese Woche"
-            value={formatMinutesAsHours(data.counts.weekPlannedMinutes)}
-            hint="geplante Einsätze"
-          />
-          {data.counts.projectedEarningsCents != null ? (
+          <Link href="/calendar" className="rounded-[var(--radius-xl)]">
             <StatTile
-              icon={<Wallet />}
-              label="Verdienst heute (voraussichtlich)"
-              value={formatEuroCents(data.counts.projectedEarningsCents)}
-              hint={
-                data.counts.projectedMileageCents > 0
-                  ? `inkl. ${formatEuroCents(data.counts.projectedMileageCents)} Kilometergeld`
-                  : 'aus den geplanten Einsätzen'
-              }
-              tone="success"
-              className="col-span-2 xl:col-span-4"
+              icon={<CalendarDays />}
+              label="Diese Woche"
+              value={formatMinutesAsHours(data.counts.weekPlannedMinutes)}
+              hint="geplante Einsätze"
             />
+          </Link>
+          {data.counts.projectedEarningsCents != null ? (
+            <Link href="/reports" className="col-span-2 rounded-[var(--radius-xl)] xl:col-span-4">
+              <StatTile
+                icon={<Wallet />}
+                label="Verdienst heute (voraussichtlich)"
+                value={formatEuroCents(data.counts.projectedEarningsCents)}
+                hint={
+                  data.counts.projectedMileageCents > 0
+                    ? `inkl. ${formatEuroCents(data.counts.projectedMileageCents)} Kilometergeld`
+                    : 'aus den geplanten Einsätzen'
+                }
+                tone="success"
+              />
+            </Link>
           ) : null}
         </div>
 

@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Sparkles,
   Trash2,
+  Users,
   X,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -35,7 +36,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { QuickCompleteButton } from '@/features/appointments/quick-complete-button';
 import { formatDateTime, formatTime, toDateInputValue } from '@/lib/dates';
 import { formatMinutesVerbose } from '@/lib/duration';
-import { googleMapsDirectionsUrl } from '@/lib/geo';
+import { formatDistance, googleMapsDirectionsUrl } from '@/lib/geo';
 import { describeRecurrenceRule, parseRuleToForm } from '@/lib/recurrence';
 import {
   APPOINTMENT_STATUS,
@@ -58,6 +59,7 @@ import {
 import {
   applyResolutionForAppointmentAction,
   getAppointmentConflictsAction,
+  suggestReplacementEmployeesAction,
   suggestResolutionForAppointmentAction,
 } from '@/server/actions/conflict-actions';
 import {
@@ -147,6 +149,23 @@ export function AppointmentDrawer({
     | null
   >(null);
   const [resolving, setResolving] = React.useState(false);
+  const [replacements, setReplacements] = React.useState<
+    | Extract<Awaited<ReturnType<typeof suggestReplacementEmployeesAction>>, { ok: true }>['data']
+    | null
+  >(null);
+  const [loadingReplacements, setLoadingReplacements] = React.useState(false);
+
+  const loadReplacements = () => {
+    setLoadingReplacements(true);
+    suggestReplacementEmployeesAction(appointmentId).then((result) => {
+      setLoadingReplacements(false);
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+      setReplacements(result.data);
+    });
+  };
 
   const loadConflicts = React.useCallback(() => {
     getAppointmentConflictsAction(appointmentId).then((result) => {
@@ -189,6 +208,7 @@ export function AppointmentDrawer({
   const refresh = () => {
     load();
     loadConflicts();
+    setReplacements(null);
     updateCalendar([appointmentId]);
   };
 
@@ -490,6 +510,73 @@ export function AppointmentDrawer({
                     >
                       <Sparkles aria-hidden /> Konflikt automatisch auflösen
                     </Button>
+                  ) : null}
+
+                  {/* Umweisung: freie + nächstgelegene Mitarbeiter. Hilft
+                      besonders bei „außerhalb Verfügbarkeit" – da löst ein
+                      anderer Mitarbeiter den Konflikt, nicht das Umplanen. */}
+                  {canManage && detail?.employee ? (
+                    <div className="mt-2.5">
+                      {!replacements ? (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          loading={loadingReplacements}
+                          onClick={loadReplacements}
+                        >
+                          <Users aria-hidden /> Freie Mitarbeiter in der Nähe
+                        </Button>
+                      ) : replacements.candidates.length === 0 ? (
+                        <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+                          Keine anderen Mitarbeiter im Bereich gefunden.
+                        </p>
+                      ) : (
+                        <div className="rounded-[var(--radius-md)] border border-[var(--color-line)] bg-[var(--color-panel)] p-2.5">
+                          <p className="mb-1.5 text-[length:var(--text-xs)] font-medium text-[var(--color-ink-muted)]">
+                            Passende Mitarbeiter (frei zuerst, dann nach Nähe) – ein Klick weist um:
+                          </p>
+                          <ul className="space-y-1">
+                            {replacements.candidates.slice(0, 5).map((candidate) => (
+                              <li key={candidate.employeeId} className="flex items-center gap-2">
+                                <EntityAvatar id={candidate.employeeId} name={candidate.name} size="sm" />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-[length:var(--text-sm)] font-medium">
+                                    {candidate.name}
+                                  </span>
+                                  <span className="block truncate text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+                                    {candidate.available
+                                      ? 'frei'
+                                      : [
+                                          candidate.outsideAvailability && 'außerhalb Verfügbarkeit',
+                                          candidate.absent && 'abwesend',
+                                          candidate.hasOverlap && 'Überschneidung',
+                                        ]
+                                          .filter(Boolean)
+                                          .join(' · ')}
+                                    {candidate.distanceMeters != null
+                                      ? ` · ${formatDistance(candidate.distanceMeters)}`
+                                      : ''}
+                                  </span>
+                                </span>
+                                {candidate.available ? (
+                                  <span className="shrink-0 rounded-full bg-[var(--color-success-soft)] px-1.5 py-px text-[length:var(--text-2xs)] font-medium text-[var(--color-success)]">
+                                    frei
+                                  </span>
+                                ) : null}
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  disabled={pending}
+                                  onClick={() => assign(candidate.employeeId, false)}
+                                >
+                                  Zuweisen
+                                </Button>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
                   ) : null}
                 </section>
               ) : null}

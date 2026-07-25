@@ -448,30 +448,42 @@ export default async function DashboardPage() {
                 />
               </div>
               <dl className="grid grid-cols-2 gap-2 text-center">
-                <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5">
+                <Link
+                  href="/calendar"
+                  className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5 transition-colors hover:bg-[var(--color-panel-raised)]"
+                >
                   <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">Termine</dt>
                   <dd className="tabular text-[length:var(--text-lg)] font-semibold">
                     {data.next7.appointmentCount}
                   </dd>
-                </div>
-                <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5">
+                </Link>
+                <Link
+                  href="/reports"
+                  className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5 transition-colors hover:bg-[var(--color-panel-raised)]"
+                >
                   <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">Geplant</dt>
                   <dd className="tabular text-[length:var(--text-lg)] font-semibold">
                     {formatMinutesAsHours(data.next7.plannedMinutes)}
                   </dd>
-                </div>
-                <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5">
+                </Link>
+                <Link
+                  href="/employees?missingHours=1"
+                  className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5 transition-colors hover:bg-[var(--color-panel-raised)]"
+                >
                   <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">Frei</dt>
                   <dd className="tabular text-[length:var(--text-lg)] font-semibold text-[var(--color-success)]">
                     {formatMinutesAsHours(data.next7.freeMinutes)}
                   </dd>
-                </div>
-                <div className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5">
+                </Link>
+                <Link
+                  href="/routes"
+                  className="rounded-[var(--radius-md)] bg-[var(--color-panel-sunken)] p-2.5 transition-colors hover:bg-[var(--color-panel-raised)]"
+                >
                   <dt className="text-[10px] text-[var(--color-ink-subtle)] uppercase">Fahrtzeit ca.</dt>
                   <dd className="tabular text-[length:var(--text-lg)] font-semibold">
                     {formatTravelSeconds(data.next7.expectedTravelSeconds)}
                   </dd>
-                </div>
+                </Link>
               </dl>
             </PanelBody>
           </Panel>
