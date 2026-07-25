@@ -542,6 +542,9 @@ export async function createAppointment(
 
     await materializeSeries(seriesId);
     await notifyAssignment(ctx, assignedEmployeeId, input.customerId, startAt, true);
+    if (assignedEmployeeId) {
+      await notifyAppointmentConflict(ctx, assignedEmployeeId, input.customerId, startAt, conflicts);
+    }
     return { requiresConfirmation: false, seriesId };
   }
 
@@ -586,6 +589,9 @@ export async function createAppointment(
   });
 
   await notifyAssignment(ctx, assignedEmployeeId, input.customerId, startAt, false);
+  if (assignedEmployeeId) {
+    await notifyAppointmentConflict(ctx, assignedEmployeeId, input.customerId, startAt, conflicts);
+  }
   await notifyLeadershipAboutEmployeePlanning(ctx, appointment.id, input.customerId, startAt, 'angelegt');
   return { requiresConfirmation: false, appointmentId: appointment.id };
 }
@@ -616,6 +622,46 @@ async function notifyAssignment(
       'de-DE',
       { timeZone: ctx.organization.timezone, dateStyle: 'medium', timeStyle: 'short' },
     ).format(startAt)}`,
+    targetUrl: '/calendar',
+  });
+}
+
+/**
+ * Auslöser a): Beim Speichern eines Termins mit (bewusst bestätigtem) Warn-
+ * Konflikt den zugewiesenen Mitarbeiter über sein Konto benachrichtigen. Wirkt
+ * nur, wenn der Mitarbeiter ein Benutzerkonto hat und nicht selbst gespeichert hat.
+ */
+async function notifyAppointmentConflict(
+  ctx: OrgContext,
+  employeeId: string,
+  customerId: string,
+  startAt: Date,
+  conflicts: Conflict[],
+): Promise<void> {
+  const warnings = conflicts.filter((conflict) => conflict.severity === 'WARNING');
+  if (warnings.length === 0) return;
+  const employee = await db.employee.findUnique({
+    where: { id: employeeId },
+    select: { userId: true },
+  });
+  if (!employee?.userId || employee.userId === ctx.user.id) return;
+  const customer = await db.customer.findUnique({
+    where: { id: customerId },
+    select: { firstName: true, lastName: true },
+  });
+  const when = new Intl.DateTimeFormat('de-DE', {
+    timeZone: ctx.organization.timezone,
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(startAt);
+  await createNotification({
+    organizationId: ctx.organization.id,
+    userId: employee.userId,
+    type: 'APPOINTMENT_CONFLICT',
+    title: 'Terminkonflikt – bitte prüfen',
+    message: `${customer?.firstName ?? ''} ${customer?.lastName ?? ''}, ${when}: ${warnings[0]!.message}${
+      warnings.length > 1 ? ` (+${warnings.length - 1})` : ''
+    }`,
     targetUrl: '/calendar',
   });
 }
@@ -1118,6 +1164,9 @@ export async function updateAppointment(
     startAt,
     'geändert',
   );
+  if (assignedEmployeeId) {
+    await notifyAppointmentConflict(ctx, assignedEmployeeId, appointment.customerId, startAt, conflicts);
+  }
 
   return { requiresConfirmation: false, appointmentId: appointment.id };
 }

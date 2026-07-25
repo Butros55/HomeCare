@@ -407,6 +407,13 @@ model Employee {
   /// Strukturierter Standort (JSON) für Routenstart/-ende; null = Org-Standard.
   startLocation         Json?
   endLocation           Json?
+  /// Zuständigkeitsgebiet: Umkreis in km um das Zentrum; null = unbeschränkt.
+  coverageRadiusKm      Int?
+  /// Zentrum des Zuständigkeitsgebiets als strukturierter Standort (JSON) mit
+  /// Koordinaten; nur relevant, wenn coverageUseHome = false.
+  coverageCenter        Json?
+  /// true: Zentrum = eigene Zuhause-Adresse (startLocation); false: coverageCenter.
+  coverageUseHome       Boolean        @default(true)
   notes                 String?
   createdAt             DateTime       @default(now())
   updatedAt             DateTime       @updatedAt

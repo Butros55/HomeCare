@@ -7,7 +7,7 @@ import { redirect } from 'next/navigation';
 
 import { APP_NAME, APP_URL } from '@/lib/app-config';
 import { hashPassword, verifyPassword } from '@/server/auth/password';
-import { consumeRateLimit, RESET_RATE_LIMIT } from '@/server/auth/rate-limit';
+import { consumeRateLimit, REGISTER_RATE_LIMIT, RESET_RATE_LIMIT } from '@/server/auth/rate-limit';
 import {
   createSession,
   deleteSessionCookie,
@@ -21,12 +21,15 @@ import { db } from '@/server/db';
 import { AppError, runAction, type ActionResult } from '@/server/errors';
 import { sendMail } from '@/server/mail';
 import { ACTIVE_ORG_COOKIE, requireAuthenticatedUser } from '@/server/permissions';
+import { acceptInvitation } from '@/server/services/employee-service';
 import {
   changePasswordSchema,
   forgotPasswordSchema,
+  registerEmployeeSchema,
   updateProfileSchema,
   type ChangePasswordInput,
   type ForgotPasswordInput,
+  type RegisterEmployeeInput,
   type UpdateProfileInput,
 } from '@/server/validation/auth';
 
@@ -99,6 +102,44 @@ export async function forgotPasswordAction(
       ].join('\n'),
     });
 
+    return { done: true as const };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Mitarbeiter-Selbstregistrierung (nur über den Einladungslink)
+// ---------------------------------------------------------------------------
+
+/**
+ * Mitarbeiter-Registrierung über den Einladungslink: legt das Konto an,
+ * verknüpft das Mitarbeiterprofil und übernimmt direkt Zuhause-Adresse und
+ * Verfügbarkeiten. Bei Erfolg wird die Session gesetzt; der Client leitet
+ * anschließend in die eigene Ansicht weiter.
+ */
+export async function registerEmployeeAction(
+  input: RegisterEmployeeInput,
+): Promise<ActionResult<{ done: true }>> {
+  return runAction(async () => {
+    const parsed = registerEmployeeSchema.parse(input);
+
+    const ip = await clientIp();
+    if (!consumeRateLimit(`register:ip:${ip}`, REGISTER_RATE_LIMIT)) {
+      throw new AppError('RATE_LIMITED');
+    }
+
+    const passwordHash = await hashPassword(parsed.password);
+    const { userId } = await acceptInvitation({
+      token: parsed.token,
+      firstName: parsed.firstName,
+      lastName: parsed.lastName,
+      passwordHash,
+      phone: parsed.phone,
+      homeLocation: parsed.homeLocation ?? undefined,
+      availabilitySlots: parsed.availabilitySlots,
+    });
+
+    const { token } = await createSession(userId);
+    await setSessionCookie(token);
     return { done: true as const };
   });
 }

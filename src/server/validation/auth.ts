@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { availabilitySlotSchema, homeLocationSchema } from '@/server/validation/employee';
+
 /**
  * Auth-Schemas – identisch für Client-Formulare (react-hook-form) und
  * Server-Validierung (Actions). Meldungen deutsch.
@@ -67,6 +69,29 @@ export const acceptInvitationSchema = z.object({
   password: passwordSchema,
 });
 export type AcceptInvitationInput = z.infer<typeof acceptInvitationSchema>;
+
+/**
+ * Mitarbeiter-Selbstregistrierung (nur über den Einladungslink erreichbar):
+ * zusätzlich zum Konto legt der Mitarbeiter direkt Zuhause-Adresse (Routenstart)
+ * und wöchentliche Verfügbarkeiten an. Adresse & Verfügbarkeit sind optional –
+ * die Leitung kann sie später ergänzen.
+ */
+export const registerEmployeeSchema = z.object({
+  token: z.string().min(10).max(200),
+  firstName: nameSchema,
+  lastName: nameSchema,
+  password: passwordSchema,
+  phone: z
+    .string()
+    .trim()
+    .max(40, 'Höchstens 40 Zeichen.')
+    .optional()
+    .or(z.literal(''))
+    .transform((value) => (value ? value : undefined)),
+  homeLocation: homeLocationSchema,
+  availabilitySlots: z.array(availabilitySlotSchema).max(40).default([]),
+});
+export type RegisterEmployeeInput = z.input<typeof registerEmployeeSchema>;
 
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, 'Aktuelles Passwort ist erforderlich.').max(128),

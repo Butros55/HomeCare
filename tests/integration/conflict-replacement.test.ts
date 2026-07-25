@@ -20,7 +20,6 @@ import { suggestReplacementEmployees } from '@/server/services/conflict-service'
 import { buildContext, createEmployee, createOrg, createUserWithMembership, resetDatabase } from './helpers';
 
 describe('Konfliktlösung: Ersatz-Mitarbeiter (frei + nächste)', () => {
-  let customerId: string;
   let assignedId: string;
   let freeId: string;
   let busyId: string;
@@ -36,7 +35,6 @@ describe('Konfliktlösung: Ersatz-Mitarbeiter (frei + nächste)', () => {
     const customer = await db.customer.create({
       data: { organizationId: organization.id, customerNumber: 'RP-1', firstName: 'Ersatz', lastName: 'Kunde' },
     });
-    customerId = customer.id;
     await db.address.create({
       data: {
         organizationId: organization.id,

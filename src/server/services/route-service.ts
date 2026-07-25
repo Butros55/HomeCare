@@ -650,7 +650,10 @@ export async function saveRoutePlan(
   input: ComputeRouteInput & { publish: boolean },
 ): Promise<{ routePlanId: string }> {
   const ctx = await requireOrganizationMembership();
-  if (!hasPermission(ctx, 'routes.manage')) throw new AppError('ACCESS_DENIED');
+  // Mitarbeiter dürfen ihre eigene Route speichern (Selbstplanung); für fremde
+  // Routen ist routes.manage erforderlich.
+  const isOwn = ctx.employee?.id === input.employeeId;
+  if (!hasPermission(ctx, 'routes.manage') && !isOwn) throw new AppError('ACCESS_DENIED');
   const employee = await db.employee.findUnique({ where: { id: input.employeeId } });
   assertSameOrg(ctx, employee);
 
@@ -801,7 +804,8 @@ export async function detachAppointmentsFromRoutePlans(
 
 export async function discardRoutePlan(employeeId: string, dateInput: string): Promise<void> {
   const ctx = await requireOrganizationMembership();
-  if (!hasPermission(ctx, 'routes.manage')) throw new AppError('ACCESS_DENIED');
+  const isOwn = ctx.employee?.id === employeeId;
+  if (!hasPermission(ctx, 'routes.manage') && !isOwn) throw new AppError('ACCESS_DENIED');
   const date = fromDateInputValue(dateInput);
   if (!date) throw new AppError('VALIDATION_FAILED');
   const plan = await db.routePlan.findUnique({

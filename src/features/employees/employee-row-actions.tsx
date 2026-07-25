@@ -1,6 +1,6 @@
 'use client';
 
-import { Mail, MoreHorizontal, Pencil, UserCheck, UserX } from 'lucide-react';
+import { Lock, LockOpen, Mail, MoreHorizontal, Pencil, Trash2, UserCheck, UserX } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
@@ -15,7 +15,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { setEmployeeStatusAction } from '@/server/actions/employee-actions';
+import {
+  deleteEmployeeAccountAction,
+  setEmployeeAccountSuspendedAction,
+  setEmployeeStatusAction,
+} from '@/server/actions/employee-actions';
 import { InviteEmployeeDialog } from '@/features/employees/invite-dialog';
 
 export function EmployeeRowActions({
@@ -26,6 +30,8 @@ export function EmployeeRowActions({
   email,
   canManage,
   canInvite,
+  accountSuspended,
+  redirectAfterDelete,
 }: {
   employeeId: string;
   name: string;
@@ -34,13 +40,26 @@ export function EmployeeRowActions({
   email: string | null;
   canManage: boolean;
   canInvite: boolean;
+  /** Login gesperrt? Nur gesetzt, wo der Mitgliedschaftsstatus bekannt ist (Detailseite). */
+  accountSuspended?: boolean;
+  /** Nach dem Löschen dorthin navigieren (sonst nur Liste aktualisieren). */
+  redirectAfterDelete?: string;
 }) {
   const router = useRouter();
   const [confirmDeactivate, setConfirmDeactivate] = React.useState(false);
+  const [confirmDelete, setConfirmDelete] = React.useState(false);
   const [inviteOpen, setInviteOpen] = React.useState(false);
   const [pending, setPending] = React.useState(false);
 
   if (!canManage && !canInvite) return null;
+
+  const toggleSuspended = async () => {
+    const result = await setEmployeeAccountSuspendedAction(employeeId, !accountSuspended);
+    if (result.ok) {
+      toast.success(accountSuspended ? 'Zugang entsperrt.' : 'Zugang gesperrt.');
+      router.refresh();
+    } else toast.error(result.message);
+  };
 
   return (
     <>
@@ -83,6 +102,22 @@ export function EmployeeRowActions({
                   <UserCheck aria-hidden /> Reaktivieren
                 </DropdownMenuItem>
               )}
+              {hasUser && accountSuspended !== undefined ? (
+                <DropdownMenuItem onSelect={toggleSuspended}>
+                  {accountSuspended ? (
+                    <>
+                      <LockOpen aria-hidden /> Zugang entsperren
+                    </>
+                  ) : (
+                    <>
+                      <Lock aria-hidden /> Zugang sperren
+                    </>
+                  )}
+                </DropdownMenuItem>
+              ) : null}
+              <DropdownMenuItem destructive onSelect={() => setConfirmDelete(true)}>
+                <Trash2 aria-hidden /> Löschen
+              </DropdownMenuItem>
             </>
           ) : null}
         </DropdownMenuContent>
@@ -104,6 +139,31 @@ export function EmployeeRowActions({
           if (result.ok) {
             toast.success('Mitarbeiter deaktiviert.');
             router.refresh();
+          } else toast.error(result.message);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title={`${name} löschen?`}
+        description={
+          hasUser
+            ? 'Das Mitarbeiterprofil wird archiviert und der zugehörige Login entfernt – eine Anmeldung ist danach nicht mehr möglich. Bereits geleistete Termine und Stunden bleiben zur Nachvollziehbarkeit erhalten.'
+            : 'Das Mitarbeiterprofil wird archiviert. Bereits geleistete Termine und Stunden bleiben zur Nachvollziehbarkeit erhalten.'
+        }
+        confirmLabel="Löschen"
+        destructive
+        loading={pending}
+        onConfirm={async () => {
+          setPending(true);
+          const result = await deleteEmployeeAccountAction(employeeId);
+          setPending(false);
+          setConfirmDelete(false);
+          if (result.ok) {
+            toast.success('Mitarbeiter gelöscht.');
+            if (redirectAfterDelete) router.push(redirectAfterDelete);
+            else router.refresh();
           } else toast.error(result.message);
         }}
       />

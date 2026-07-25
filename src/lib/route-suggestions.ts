@@ -167,6 +167,33 @@ export function computeOpenBudgetMinutes(budgetMinutes: number, reservedMinutes:
   return Math.max(0, budgetMinutes - reservedMinutes);
 }
 
+/**
+ * Teamlauf-Zuweisung: jeder Kunde geht an genau einen Mitarbeiter. Der
+ * Wunschmitarbeiter gewinnt immer, sofern er einen machbaren Vorschlag hat
+ * (unabhängig vom Vergleichswert); nur wenn er nicht kann, entscheidet unter
+ * den übrigen der beste Vergleichswert (kleiner ist besser) – letzter Ausweg.
+ * Rein funktional, damit die Regel isoliert testbar ist.
+ */
+export function resolveTeamCustomerAssignment(
+  evaluations: { employeeId: string; customerId: string; rankScore: number }[],
+  preferredByCustomer: Map<string, string | null>,
+): Map<string, string> {
+  const best = new Map<string, { employeeId: string; score: number; preferred: boolean }>();
+  for (const evaluation of evaluations) {
+    const preferred = preferredByCustomer.get(evaluation.customerId) === evaluation.employeeId;
+    const current = best.get(evaluation.customerId);
+    const candidate = { employeeId: evaluation.employeeId, score: evaluation.rankScore, preferred };
+    if (!current) {
+      best.set(evaluation.customerId, candidate);
+    } else if (candidate.preferred && !current.preferred) {
+      best.set(evaluation.customerId, candidate);
+    } else if (candidate.preferred === current.preferred && candidate.score < current.score) {
+      best.set(evaluation.customerId, candidate);
+    }
+  }
+  return new Map([...best].map(([customerId, winner]) => [customerId, winner.employeeId]));
+}
+
 export const MIN_SUGGESTION_MINUTES = 15;
 
 /**

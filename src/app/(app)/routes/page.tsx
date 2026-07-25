@@ -46,6 +46,12 @@ export default async function RoutesPage({
       : (ownEmployeeId ?? employees[0]?.id ?? '')
     : (ownEmployeeId ?? '');
 
+  const canManageRoutes = hasPermission(ctx, 'routes.manage');
+  // Reine Eigen-Ansicht (Mitarbeiter/solo/persönlich): die eigene Route darf
+  // selbst geplant, gespeichert und übernommen werden. Serverseitig ist jede
+  // Schreibaktion auf die eigene employeeId begrenzt (isOwn/Scope).
+  const canSelfPlan = !teamMode && Boolean(ownEmployeeId);
+
   return (
     <RoutesShell
       teamMode={teamMode}
@@ -58,8 +64,8 @@ export default async function RoutesPage({
       initialEmployeeId={initialEmployeeId}
       initialDate={params.datum ?? toDateInputValue(new Date(), ctx.organization.timezone)}
       autoPlan={params.plan === '1'}
-      canManage={hasPermission(ctx, 'routes.manage')}
-      canAccept={ctx.membership.role !== 'EMPLOYEE'}
+      canManage={canManageRoutes || canSelfPlan}
+      canAccept={canManageRoutes || canSelfPlan}
       soloMode={mode === 'solo'}
       timezone={ctx.organization.timezone}
     />

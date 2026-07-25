@@ -11,7 +11,7 @@ import {
   zonedWallTimeToUtc,
 } from '@/lib/dates';
 import { computeRouteEarnings } from '@/lib/earnings';
-import { haversineMeters } from '@/lib/geo';
+import { haversineMeters, isWithinCoverage, resolveCoverageArea } from '@/lib/geo';
 import { plannableMinutesAt } from '@/lib/hour-account';
 import {
   buildDayVariants,
@@ -367,9 +367,25 @@ export async function generateDayRoutes(
     windows: MinuteWindow[];
     distance: number;
   }
+  // Zuständigkeitsgebiet (harte Regel): Kunden außerhalb des Umkreises entfallen.
+  const coverageArea = resolveCoverageArea({
+    coverageUseHome: employee.coverageUseHome,
+    startLocation: employee.startLocation,
+    coverageCenter: employee.coverageCenter,
+    coverageRadiusKm: employee.coverageRadiusKm,
+  });
+
   const filtered: CandidateEntry[] = demand
     .filter((candidate) => {
       if (candidate.preferredEmployeeId && candidate.preferredEmployeeId !== employee.id) {
+        return false;
+      }
+      if (
+        !isWithinCoverage(coverageArea, {
+          latitude: candidate.latitude,
+          longitude: candidate.longitude,
+        })
+      ) {
         return false;
       }
       if (
@@ -654,11 +670,8 @@ export async function acceptDayRoute(input: {
   const payload = verifyDayRouteToken(input.token);
 
   if (payload.org !== ctx.organization.id) throw new AppError('SUGGESTION_STALE');
-  if (ctx.membership.role === 'EMPLOYEE') {
-    throw new AppError('ACCESS_DENIED', {
-      message: 'Generierte Routen kann nur die Leitung übernehmen.',
-    });
-  }
+  // Mitarbeiter dürfen ihre eigene generierte Route übernehmen (Selbstplanung);
+  // die Scope-Prüfung begrenzt EMPLOYEE auf die eigene employeeId.
   const scope = await getManagedEmployeeIds(ctx);
   if (!scopeContains(scope, payload.emp)) {
     throw new AppError('ACCESS_DENIED', {

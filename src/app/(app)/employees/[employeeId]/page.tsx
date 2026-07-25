@@ -33,8 +33,10 @@ import {
   warningLabels,
 } from '@/server/services/employee-insights';
 import { getEmployeeHourStats } from '@/server/services/hours-service';
+import { formatLocationLine, pointFromLocationJson } from '@/lib/geo';
 import { AbsenceManager, DeleteAbsenceButton } from '@/features/employees/absence-manager';
 import { AvailabilityEditor } from '@/features/employees/availability-editor';
+import { CoverageEditor } from '@/features/employees/coverage-editor';
 import { EmployeeRowActions } from '@/features/employees/employee-row-actions';
 import { AllocateFromEmployeeButton } from '@/features/hours/allocate-from-employee-button';
 import { EmployeeHourTiles } from '@/features/hours/hour-detail-tiles';
@@ -48,6 +50,7 @@ const TABS = [
   { key: 'kunden', label: 'Kunden' },
   { key: 'stunden', label: 'Stunden' },
   { key: 'verfuegbarkeit', label: 'Verfügbarkeit' },
+  { key: 'zustaendigkeit', label: 'Zuständigkeit' },
   { key: 'abwesenheiten', label: 'Abwesenheiten' },
   { key: 'team', label: 'Unterstellte' },
   { key: 'auswertungen', label: 'Auswertungen' },
@@ -91,6 +94,13 @@ export default async function EmployeeDetailPage({
   const labels = warningLabels(warnings);
 
   const name = `${employee.firstName} ${employee.lastName}`;
+  const accountMembership = employee.user
+    ? await db.organizationMembership.findFirst({
+        where: { organizationId: ctx.organization.id, userId: employee.user.id },
+        select: { status: true },
+      })
+    : null;
+  const accountSuspended = accountMembership?.status === 'SUSPENDED';
   const canManage =
     hasPermission(ctx, 'employees.manage') && (await canAccessEmployee(ctx, employeeId, 'manage'));
   const canInvite =
@@ -116,6 +126,7 @@ export default async function EmployeeDetailPage({
             <StatusPill tone={statusOf(EMPLOYEE_STATUS, employee.status).tone}>
               {statusOf(EMPLOYEE_STATUS, employee.status).label}
             </StatusPill>
+            {accountSuspended ? <StatusPill tone="stuck">Zugang gesperrt</StatusPill> : null}
             {canAllocate && employee.status === 'ACTIVE' && employee.canReceiveHours ? (
               <AllocateFromEmployeeButton employeeId={employeeId} />
             ) : null}
@@ -134,6 +145,8 @@ export default async function EmployeeDetailPage({
               email={employee.email}
               canManage={canManage}
               canInvite={canInvite}
+              accountSuspended={accountSuspended}
+              redirectAfterDelete="/employees"
             />
           </>
         }
@@ -184,6 +197,9 @@ export default async function EmployeeDetailPage({
         ) : null}
         {tab === 'verfuegbarkeit' ? (
           <AvailabilityTab employeeId={employeeId} readOnly={!canManage && !isSelf} />
+        ) : null}
+        {tab === 'zustaendigkeit' ? (
+          <CoverageTab employeeId={employeeId} readOnly={!canManage} />
         ) : null}
         {tab === 'abwesenheiten' ? (
           <AbsencesTab employeeId={employeeId} timezone={timezone} readOnly={!canManage && !isSelf} />
@@ -637,6 +653,71 @@ async function AvailabilityTab({ employeeId, readOnly }: { employeeId: string; r
             endTime: slot.endTime,
           }))}
           readOnly={readOnly}
+        />
+      </PanelBody>
+    </Panel>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+async function CoverageTab({ employeeId, readOnly }: { employeeId: string; readOnly: boolean }) {
+  const employee = await db.employee.findUnique({
+    where: { id: employeeId },
+    select: {
+      coverageRadiusKm: true,
+      coverageUseHome: true,
+      coverageCenter: true,
+      startLocation: true,
+    },
+  });
+  if (!employee) notFound();
+
+  const homePoint = pointFromLocationJson(employee.startLocation);
+  const homeLine =
+    formatLocationLine(
+      employee.startLocation as {
+        street?: string | null;
+        houseNumber?: string | null;
+        postalCode?: string | null;
+        city?: string | null;
+      } | null,
+    ) || null;
+  const centerPoint = pointFromLocationJson(employee.coverageCenter);
+  const centerJson =
+    employee.coverageCenter && typeof employee.coverageCenter === 'object'
+      ? (employee.coverageCenter as Record<string, unknown>)
+      : null;
+  const center = centerJson
+    ? {
+        street: String(centerJson.street ?? ''),
+        houseNumber: String(centerJson.houseNumber ?? ''),
+        postalCode: String(centerJson.postalCode ?? ''),
+        city: String(centerJson.city ?? ''),
+      }
+    : null;
+
+  return (
+    <Panel>
+      <PanelHeader>
+        <PanelTitle>Zuständigkeitsgebiet</PanelTitle>
+      </PanelHeader>
+      <PanelBody>
+        <p className="mb-4 text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+          Der Umkreis begrenzt, welche Kunden diesem Mitarbeiter in Routenplanung und
+          Terminvorschlägen angeboten werden. Ohne Umkreis gilt keine Begrenzung.
+        </p>
+        <CoverageEditor
+          employeeId={employeeId}
+          readOnly={readOnly}
+          initial={{
+            radiusKm: employee.coverageRadiusKm,
+            useHome: employee.coverageUseHome,
+            center,
+          }}
+          homePoint={homePoint}
+          homeLine={homeLine}
+          centerPoint={centerPoint}
         />
       </PanelBody>
     </Panel>

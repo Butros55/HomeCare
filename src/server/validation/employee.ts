@@ -98,6 +98,17 @@ export const absenceFormSchema = z
   });
 export type AbsenceFormInput = z.input<typeof absenceFormSchema>;
 
+/** Zuständigkeitsgebiet: Umkreis (km) + Zentrum (Zuhause oder manuelle Adresse). */
+export const coverageFormSchema = z.object({
+  employeeId: z.string().min(1),
+  /** null = unbeschränkt (kein Umkreis). */
+  radiusKm: z.number().int().min(1, 'Mindestens 1 km.').max(300, 'Höchstens 300 km.').nullable(),
+  /** true: Zentrum = eigene Zuhause-Adresse; false: manuelles Zentrum unten. */
+  useHome: z.boolean().default(true),
+  center: homeLocationSchema,
+});
+export type CoverageFormInput = z.input<typeof coverageFormSchema>;
+
 export const inviteEmployeeSchema = z.object({
   employeeId: z.string().min(1),
   email: z

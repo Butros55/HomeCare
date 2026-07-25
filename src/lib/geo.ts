@@ -39,6 +39,50 @@ export function haversineMeters(a: LatLng, b: LatLng): number {
  * bei ~30 km/h Stadtverkehr, plus 60 s fixe Rüstzeit (Parken etc.).
  * Deterministisch – Grundlage aller Tests ohne externe API.
  */
+/** Koordinaten aus einem strukturierten Standort-JSON lesen (null-tolerant). */
+export function pointFromLocationJson(location: unknown): LatLng | null {
+  if (!location || typeof location !== 'object') return null;
+  const record = location as Record<string, unknown>;
+  const { latitude, longitude } = record;
+  if (
+    typeof latitude === 'number' &&
+    typeof longitude === 'number' &&
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude)
+  ) {
+    return { latitude, longitude };
+  }
+  return null;
+}
+
+/**
+ * Effektives Zuständigkeitsgebiet eines Mitarbeiters. Ohne Umkreis (null) gilt
+ * das Gebiet als unbeschränkt. Zentrum ist entweder die eigene Zuhause-Adresse
+ * (coverageUseHome) oder ein manuell gesetztes Zentrum – nur mit Koordinaten
+ * wirkt der Umkreis überhaupt.
+ */
+export function resolveCoverageArea(input: {
+  coverageUseHome: boolean;
+  startLocation: unknown;
+  coverageCenter: unknown;
+  coverageRadiusKm: number | null;
+}): { center: LatLng | null; radiusMeters: number | null } {
+  if (input.coverageRadiusKm == null) return { center: null, radiusMeters: null };
+  const center = pointFromLocationJson(
+    input.coverageUseHome ? input.startLocation : input.coverageCenter,
+  );
+  return { center, radiusMeters: center ? input.coverageRadiusKm * 1000 : null };
+}
+
+/** Liegt ein Punkt innerhalb des Zuständigkeitsgebiets? Ohne Umkreis immer true. */
+export function isWithinCoverage(
+  area: { center: LatLng | null; radiusMeters: number | null },
+  point: LatLng,
+): boolean {
+  if (area.radiusMeters == null || !area.center) return true;
+  return haversineMeters(area.center, point) <= area.radiusMeters;
+}
+
 export function estimateTravelSeconds(a: LatLng, b: LatLng): number {
   const distance = haversineMeters(a, b) * 1.3;
   const speedMetersPerSecond = 30_000 / 3600;

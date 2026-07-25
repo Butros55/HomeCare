@@ -9,6 +9,7 @@ import {
   intersectWindows,
   minutesToTime,
   planRouteWithAutoDeparture,
+  resolveTeamCustomerAssignment,
   sliceMatrix,
   slotsToWindows,
   subtractWindows,
@@ -358,5 +359,41 @@ describe('evaluateCandidate', () => {
     expect(result.insertAfterStopId).toBe('base');
     expect(result.impact!.departureAt).toBeInstanceOf(Date);
     expect(result.impact!.previousDepartureAt).toEqual(baseRoute.latestDepartureAt);
+  });
+});
+
+describe('resolveTeamCustomerAssignment (Wunschmitarbeiter zuerst, sonst letzter Ausweg)', () => {
+  it('ordnet ohne Präferenz dem besten Vergleichswert zu (kleiner ist besser)', () => {
+    const result = resolveTeamCustomerAssignment(
+      [
+        { employeeId: 'E1', customerId: 'C1', rankScore: 500 },
+        { employeeId: 'E2', customerId: 'C1', rankScore: 200 },
+      ],
+      new Map([['C1', null]]),
+    );
+    expect(result.get('C1')).toBe('E2');
+  });
+
+  it('gibt den Kunden immer dem Wunschmitarbeiter, auch bei schlechterem Wert', () => {
+    const result = resolveTeamCustomerAssignment(
+      [
+        { employeeId: 'E1', customerId: 'C1', rankScore: 900 }, // Wunsch, schlechter Wert
+        { employeeId: 'E2', customerId: 'C1', rankScore: 100 }, // besser, aber nicht Wunsch
+      ],
+      new Map([['C1', 'E1']]),
+    );
+    expect(result.get('C1')).toBe('E1');
+  });
+
+  it('fällt auf den besten anderen zurück, wenn der Wunschmitarbeiter nicht kann', () => {
+    // E1 (Wunsch) hat KEINE machbare Bewertung → nur E2/E3 übrig.
+    const result = resolveTeamCustomerAssignment(
+      [
+        { employeeId: 'E2', customerId: 'C1', rankScore: 400 },
+        { employeeId: 'E3', customerId: 'C1', rankScore: 250 },
+      ],
+      new Map([['C1', 'E1']]),
+    );
+    expect(result.get('C1')).toBe('E3');
   });
 });
