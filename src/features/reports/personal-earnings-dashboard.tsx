@@ -1,4 +1,13 @@
-import { Car, Clock3, Euro, Sparkles, TrendingUp, UsersRound, Wallet } from 'lucide-react';
+import {
+  CalendarClock,
+  Car,
+  Clock3,
+  Euro,
+  Sparkles,
+  TrendingUp,
+  UsersRound,
+  Wallet,
+} from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 
@@ -86,6 +95,66 @@ export function PersonalEarningsDashboard({ data }: { data: PersonalEarningsData
             : 'Hinterlege deine Provision je Mitarbeiterstunde in den Einstellungen.'}
           <span className="ml-auto shrink-0">→</span>
         </Link>
+      ) : null}
+
+      {data.forecast.relevant ? (
+        <Panel>
+          <PanelHeader>
+            <div>
+              <PanelTitle>Prognose</PanelTitle>
+              <p className="mt-0.5 text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                Noch anstehende, bereits geplante Einsätze im gewählten Zeitraum
+              </p>
+            </div>
+          </PanelHeader>
+          <PanelBody>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <MetricCard
+                icon={<TrendingUp />}
+                accent="var(--color-brand)"
+                label="Voraussichtlicher Verdienst"
+                value={formatEuroCents(data.forecast.totalEarningsCents)}
+                hint="Lohn, Provision und geplante Zuschläge"
+                warn={missingOwnRate}
+              />
+              <MetricCard
+                icon={<Clock3 />}
+                accent="var(--color-info)"
+                label="Voraussichtliche eigene Stunden"
+                value={formatMinutesAsHours(data.forecast.ownMinutes)}
+                hint={`${data.forecast.ownAppointmentCount} geplante Kundentermine`}
+              />
+              <MetricCard
+                icon={<CalendarClock />}
+                accent="var(--color-success)"
+                label="Kundeneinsätze"
+                value={String(data.forecast.ownAppointmentCount)}
+                hint={`${data.forecast.customerCount} unterschiedliche Kunden`}
+              />
+              {data.showCommission ? (
+                <MetricCard
+                  icon={<UsersRound />}
+                  accent="var(--color-warning)"
+                  label="Voraussichtliche Provision"
+                  value={formatEuroCents(data.forecast.commissionEarningsCents)}
+                  hint={`${formatMinutesAsHours(data.forecast.commissionMinutes)} geplante Mitarbeiterstunden`}
+                />
+              ) : (
+                <MetricCard
+                  icon={<Car />}
+                  accent="var(--color-warning)"
+                  label="Geplantes Kilometergeld"
+                  value={formatEuroCents(data.forecast.mileage.cents)}
+                  hint={`${formatDistance(data.forecast.mileage.drivenMeters)} aus gespeicherten Routen`}
+                />
+              )}
+            </div>
+            <p className="mt-3 text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+              Prognose auf Basis der aktuell geplanten Termine und Routen. Änderungen,
+              Absagen und noch nicht eingeplante Kunden verändern den Wert.
+            </p>
+          </PanelBody>
+        </Panel>
       ) : null}
 
       {/* Kennzahlen-Karten mit Akzentleiste. */}

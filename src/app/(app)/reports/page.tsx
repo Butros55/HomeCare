@@ -138,6 +138,43 @@ export default async function ReportsPage({
       <div className="mx-auto w-full max-w-[var(--page-max)] space-y-4 p-4 sm:p-5">
         <PersonalEarningsDashboard data={earnings} />
 
+        {data.forecast.relevant ? (
+          <Panel>
+            <PanelHeader>
+              <div>
+                <PanelTitle>Planungsprognose</PanelTitle>
+                <p className="mt-0.5 text-[length:var(--text-xs)] text-[var(--color-ink-subtle)]">
+                  Noch anstehende Einsätze im ausgewählten Zeitraum
+                </p>
+              </div>
+            </PanelHeader>
+            <PanelBody>
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+                <StatTile
+                  label="Voraussichtliche Kundenstunden"
+                  value={formatMinutesAsHours(data.forecast.serviceMinutes)}
+                />
+                <StatTile label="Kundentermine" value={data.forecast.appointmentCount} />
+                <StatTile label="Kunden" value={data.forecast.customerCount} />
+                <StatTile
+                  label="Zugewiesen"
+                  value={data.forecast.assignedCount}
+                  tone="success"
+                />
+                <StatTile
+                  label="Noch unbesetzt"
+                  value={data.forecast.unassignedCount}
+                  tone={data.forecast.unassignedCount > 0 ? 'warning' : 'success'}
+                />
+              </div>
+              <p className="mt-3 text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
+                Grundlage sind geplante und bestätigte Termine. Absagen und noch nicht
+                angelegte Einsätze sind nicht enthalten.
+              </p>
+            </PanelBody>
+          </Panel>
+        ) : null}
+
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-5" data-tour="reports-stats">
           {data.hourBudgetsEnabled ? (
             <StatTile label="Kundenstunden (Konto)" value={formatMinutesAsHours(data.totals.budgetMinutes)} />
@@ -155,7 +192,7 @@ export default async function ReportsPage({
           <StatTile
             label="Fahrtzeit"
             value={formatTravelSeconds(data.totals.travelSeconds)}
-            hint="erfasste Fahrten"
+            hint="reine erfasste Fahrten · ohne Wartezeit"
           />
           <StatTile
             label="Entfernung"

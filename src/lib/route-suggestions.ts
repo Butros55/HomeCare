@@ -356,9 +356,11 @@ export interface CandidateEvaluation {
 
 function routePenalty(route: PlannedRoute, base: PlannedRoute): number {
   const extraTravel = route.totalTravelSeconds - base.totalTravelSeconds;
-  const extraWait = route.totalWaitSeconds - base.totalWaitSeconds;
   const workdayDelta = route.workdaySeconds - base.workdaySeconds;
-  return extraTravel + Math.max(0, extraWait) * 0.3 + Math.max(0, workdayDelta) * 0.2;
+  // Primär zählt die reine zusätzliche Fahrzeit. Der Arbeitstag bleibt ein
+  // separates, schwächeres Kriterium; Wartezeit wird nicht doppelt als Fahrt
+  // und nochmals als Zeitabstand bewertet.
+  return extraTravel + Math.max(0, workdayDelta) * 0.2;
 }
 
 /**

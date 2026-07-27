@@ -97,6 +97,7 @@ export async function getReportData(filters: ReportFilters) {
         assignedEmployeeId: true,
         customerId: true,
         status: true,
+        startAt: true,
         durationMinutes: true,
       },
     }),
@@ -155,6 +156,12 @@ export async function getReportData(filters: ReportFilters) {
 
   const cancelled = appointments.filter((a) => a.status === 'CANCELLED' || a.status === 'NO_SHOW');
   const unassigned = appointments.filter((a) => a.assignedEmployeeId === null);
+  const now = new Date();
+  const forecastAppointments = appointments.filter(
+    (appointment) =>
+      appointment.startAt >= now &&
+      ['PLANNED', 'CONFIRMED', 'IN_PROGRESS'].includes(appointment.status),
+  );
   // Fahrzeit = tatsächlich erfasste Fahrminuten. Entfernung daraus geschätzt
   // (~25 km/h Stadtschnitt) – belastbarer als die nur tageweise geplanten Routen.
   const travelMinutes = timeEntries.reduce((sum, e) => sum + (e.travelMinutes ?? 0), 0);
@@ -185,6 +192,22 @@ export async function getReportData(filters: ReportFilters) {
       cancelledCount: cancelled.length,
       unassignedCount: unassigned.length,
       appointmentCount: appointments.length,
+    },
+    forecast: {
+      relevant: period.end > now,
+      serviceMinutes: forecastAppointments.reduce(
+        (sum, appointment) => sum + appointment.durationMinutes,
+        0,
+      ),
+      appointmentCount: forecastAppointments.length,
+      customerCount: new Set(forecastAppointments.map((appointment) => appointment.customerId))
+        .size,
+      assignedCount: forecastAppointments.filter(
+        (appointment) => appointment.assignedEmployeeId !== null,
+      ).length,
+      unassignedCount: forecastAppointments.filter(
+        (appointment) => appointment.assignedEmployeeId === null,
+      ).length,
     },
     employeeRows: employees.map((employee) => {
       const stats = employeeStats.get(employee.id)!;

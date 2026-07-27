@@ -85,7 +85,28 @@ describe('computeSchedule', () => {
     expect(result.stops[0]!.arrivalAt).toEqual(t(8, 10));
     expect(result.stops[0]!.serviceStartAt).toEqual(t(10));
     expect(result.stops[0]!.waitSeconds).toBe(110 * 60);
+    expect(result.totalWaitSeconds).toBe(110 * 60);
+    // Die lange Wartezeit verändert die reine Routing-Fahrzeit nicht.
+    expect(result.totalTravelSeconds).toBe(10 * 60);
     expect(result.feasible).toBe(true);
+  });
+
+  it('addiert Wartezeit und Puffer niemals zur Fahrtzeit', () => {
+    const input = baseInput({
+      stops: [
+        { id: 'a', latitude: 0, longitude: 0, serviceMinutes: 60, fixedStartAt: t(9) },
+        { id: 'b', latitude: 0, longitude: 0, serviceMinutes: 60, fixedStartAt: t(12) },
+      ],
+      matrix: linearMatrix(2, 11 * 60),
+      bufferMinutes: 10,
+      returnToEnd: true,
+    });
+    const result = computeSchedule([0, 1], input);
+
+    expect(result.totalWaitSeconds).toBeGreaterThan(58 * 60);
+    expect(result.returnTravelSeconds).toBe(11 * 60);
+    // 3 reine Abschnitte à 11 Min.; weder Warten noch 10-Min.-Puffer.
+    expect(result.totalTravelSeconds).toBe(33 * 60);
   });
 
   it('meldet Verletzung des spätesten Endes', () => {

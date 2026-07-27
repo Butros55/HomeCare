@@ -41,6 +41,9 @@ export interface OptimizedRoute {
   stops: ScheduledStop[];
   departureAt: Date;
   returnArrivalAt: Date | null;
+  /** Reine Fahrzeit des Rückwegs; Wartezeit und Puffer sind niemals enthalten. */
+  returnTravelSeconds: number;
+  /** Summe aller reinen Matrix-Fahrzeiten inkl. Rückweg, ohne Wartezeit/Puffer. */
   totalTravelSeconds: number;
   totalDistanceMeters: number;
   totalServiceMinutes: number;
@@ -70,6 +73,25 @@ export interface OptimizeInput {
 const defaultFmt = (date: Date) =>
   `${date.getUTCHours().toString().padStart(2, '0')}:${date.getUTCMinutes().toString().padStart(2, '0')}`;
 
+/**
+ * Bildet die Fahrzeitsumme ausschließlich aus Routing-Abschnitten.
+ *
+ * Diese kleine, zentrale Invariante verhindert, dass Zeitabstände zwischen
+ * Terminen (Warten/Puffer) versehentlich wieder als Fahrtzeit ausgewiesen oder
+ * für die Routenbewertung verwendet werden.
+ */
+export function sumPureTravelSeconds(
+  stops: Pick<ScheduledStop, 'travelSecondsFromPrevious'>[],
+  returnTravelSeconds = 0,
+): number {
+  return (
+    stops.reduce(
+      (sum, stop) => sum + Math.max(0, Math.round(stop.travelSecondsFromPrevious)),
+      0,
+    ) + Math.max(0, Math.round(returnTravelSeconds))
+  );
+}
+
 /** Zeitplan für eine gegebene Reihenfolge simulieren (Kern der Heuristik). */
 export function computeSchedule(
   order: number[], // Stop-Indizes (0-basiert auf stops-Array)
@@ -87,7 +109,6 @@ export function computeSchedule(
 
   let currentMatrixIndex = startIndex;
   let currentTime = input.departureAt;
-  let totalTravel = 0;
   let totalDistance = 0;
   let totalWait = 0;
 
@@ -124,7 +145,6 @@ export function computeSchedule(
     }
 
     const wait = Math.max(0, Math.round((serviceStart.getTime() - arrival.getTime()) / 1000));
-    totalTravel += travel;
     totalDistance += distance;
     totalWait += wait;
 
@@ -149,10 +169,11 @@ export function computeSchedule(
   });
 
   let returnArrivalAt: Date | null = null;
+  let returnTravelSeconds = 0;
   if (input.returnToEnd && order.length > 0) {
     const travel = matrix.travelSeconds[currentMatrixIndex]?.[endIndex] ?? 0;
     const distance = matrix.distanceMeters[currentMatrixIndex]?.[endIndex] ?? 0;
-    totalTravel += travel;
+    returnTravelSeconds = travel;
     totalDistance += distance;
     const lastEnd = scheduled[scheduled.length - 1]!.serviceEndAt;
     returnArrivalAt = new Date(lastEnd.getTime() + travel * 1000);
@@ -162,7 +183,8 @@ export function computeSchedule(
     stops: scheduled,
     departureAt: input.departureAt,
     returnArrivalAt,
-    totalTravelSeconds: totalTravel,
+    returnTravelSeconds,
+    totalTravelSeconds: sumPureTravelSeconds(scheduled, returnTravelSeconds),
     totalDistanceMeters: totalDistance,
     totalServiceMinutes: order.reduce((sum, i) => sum + stops[i]!.serviceMinutes, 0),
     totalWaitSeconds: totalWait,
@@ -172,8 +194,10 @@ export function computeSchedule(
 }
 
 function routeCost(route: OptimizedRoute): number {
-  // Verletzungen dominieren, danach Fahrzeit, dann Wartezeit.
-  return route.warnings.length * 1_000_000 + route.totalTravelSeconds + route.totalWaitSeconds / 10;
+  // Verletzungen dominieren; die Wegwahl selbst bewertet ausschließlich reine
+  // Routing-Fahrzeit. Wartezeit bleibt für Machbarkeit und Arbeitstag sichtbar,
+  // wird aber nicht mehr in eine vermeintlich „schnellere Route" eingepreist.
+  return route.warnings.length * 1_000_000 + route.totalTravelSeconds;
 }
 
 /** Haupteinstieg: feste sortieren → flexible einfügen → 2-opt in Blöcken. */

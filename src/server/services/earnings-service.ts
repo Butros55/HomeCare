@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { fromDateInputValue } from '@/lib/dates';
+import { dayPeriodInZone, fromDateInputValue } from '@/lib/dates';
 import { centsForKilometers, centsForMinutes, computePersonalEarnings } from '@/lib/earnings';
 import { computeNetPay, isCompensationProfileComplete } from '@/lib/net-pay';
 import { db } from '@/server/db';
@@ -93,13 +93,16 @@ export async function getPersonalEarningsData(filters: PersonalEarningsFilters) 
           where: {
             organizationId: ctx.organization.id,
             deletedAt: null,
-            status: 'COMPLETED',
+            status: { in: ['PLANNED', 'CONFIRMED', 'IN_PROGRESS', 'COMPLETED'] },
             startAt: { gte: period.start, lt: period.end },
             assignedEmployeeId: { in: relevantEmployeeIds },
           },
           select: {
             id: true,
+            customerId: true,
             assignedEmployeeId: true,
+            status: true,
+            startAt: true,
             durationMinutes: true,
             timeEntries: {
               where: { status: 'APPROVED' },
@@ -112,8 +115,39 @@ export async function getPersonalEarningsData(filters: PersonalEarningsFilters) 
   const employeeAppointmentCounts = new Map<string, number>();
   let ownCompletedMinutes = 0;
   let ownAppointmentCount = 0;
+  let ownForecastMinutes = 0;
+  let ownForecastAppointmentCount = 0;
+  const forecastCustomerIds = new Set<string>();
+  const forecastEmployeeMinutes = new Map<string, number>();
+  const forecastEmployeeAppointmentCounts = new Map<string, number>();
+  const now = new Date();
 
   for (const appointment of appointments) {
+    const isForecast =
+      appointment.status !== 'COMPLETED' && appointment.startAt.getTime() >= now.getTime();
+    if (isForecast) {
+      forecastCustomerIds.add(appointment.customerId);
+      if (appointment.assignedEmployeeId === ownEmployeeId) {
+        ownForecastMinutes += appointment.durationMinutes;
+        ownForecastAppointmentCount += 1;
+      } else if (
+        appointment.assignedEmployeeId &&
+        commissionEmployeeIds.has(appointment.assignedEmployeeId)
+      ) {
+        forecastEmployeeMinutes.set(
+          appointment.assignedEmployeeId,
+          (forecastEmployeeMinutes.get(appointment.assignedEmployeeId) ?? 0) +
+            appointment.durationMinutes,
+        );
+        forecastEmployeeAppointmentCounts.set(
+          appointment.assignedEmployeeId,
+          (forecastEmployeeAppointmentCounts.get(appointment.assignedEmployeeId) ?? 0) + 1,
+        );
+      }
+      continue;
+    }
+    if (appointment.status !== 'COMPLETED') continue;
+
     const completedMinutes =
       appointment.timeEntries.length > 0
         ? appointment.timeEntries.reduce(
@@ -155,6 +189,16 @@ export async function getPersonalEarningsData(filters: PersonalEarningsFilters) 
     employeeCommissionCentsPerHour:
       ctx.membership.employeeCommissionCentsPerHour,
   });
+  const forecastEmployeeCompletedMinutes = [...forecastEmployeeMinutes.values()].reduce(
+    (sum, minutes) => sum + minutes,
+    0,
+  );
+  const forecastCalculated = computePersonalEarnings({
+    ownCompletedMinutes: ownForecastMinutes,
+    hourlyWageCents: ctx.membership.hourlyWageCents,
+    employeeCompletedMinutes: forecastEmployeeCompletedMinutes,
+    employeeCommissionCentsPerHour: ctx.membership.employeeCommissionCentsPerHour,
+  });
 
   const employeeRows = commissionEmployees
     .map((employee) => {
@@ -190,14 +234,21 @@ export async function getPersonalEarningsData(filters: PersonalEarningsFilters) 
             employeeId: ownEmployeeId,
             routeDate: { gte: period.start, lt: period.end },
           },
-          select: { totalDistanceMeters: true },
+          select: { routeDate: true, totalDistanceMeters: true },
         })
       : [];
-  const ownDrivenMeters = ownRoutePlans.reduce(
-    (sum, plan) => sum + plan.totalDistanceMeters,
-    0,
-  );
+  const todayStart = dayPeriodInZone(now, ctx.organization.timezone).start;
+  const ownDrivenMeters = ownRoutePlans
+    .filter((plan) => plan.routeDate < todayStart)
+    .reduce((sum, plan) => sum + plan.totalDistanceMeters, 0);
+  const forecastDrivenMeters = ownRoutePlans
+    .filter((plan) => plan.routeDate >= todayStart)
+    .reduce((sum, plan) => sum + plan.totalDistanceMeters, 0);
   const mileageCents = centsForKilometers(ownDrivenMeters, mileageRatePerKmCents);
+  const forecastMileageCents = centsForKilometers(
+    forecastDrivenMeters,
+    mileageRatePerKmCents,
+  );
 
   // Brutto → Netto: nur schätzen, wenn das Vergütungsprofil vollständig ist.
   // Der steuerfreie Zuschlag (z. B. Werbepauschale) hängt an den eigenen
@@ -205,6 +256,10 @@ export async function getPersonalEarningsData(filters: PersonalEarningsFilters) 
   const membership = ctx.membership;
   const taxFreeBonusCents = centsForMinutes(
     ownCompletedMinutes,
+    membership.taxFreeBonusCentsPerHour,
+  );
+  const forecastTaxFreeBonusCents = centsForMinutes(
+    ownForecastMinutes,
     membership.taxFreeBonusCentsPerHour,
   );
   const profile = {
@@ -240,6 +295,29 @@ export async function getPersonalEarningsData(filters: PersonalEarningsFilters) 
     mileage: {
       drivenMeters: ownDrivenMeters,
       cents: mileageCents,
+    },
+    forecast: {
+      /** Zeigt auch in einem leeren Zukunftsmonat bewusst eine 0-Prognose. */
+      relevant: period.end.getTime() > now.getTime(),
+      ownMinutes: ownForecastMinutes,
+      ownAppointmentCount: ownForecastAppointmentCount,
+      customerCount: forecastCustomerIds.size,
+      commissionMinutes: forecastEmployeeCompletedMinutes,
+      commissionAppointmentCount: [...forecastEmployeeAppointmentCounts.values()].reduce(
+        (sum, count) => sum + count,
+        0,
+      ),
+      ownEarningsCents: forecastCalculated.ownEarningsCents,
+      commissionEarningsCents: forecastCalculated.commissionEarningsCents,
+      taxFreeBonusCents: forecastTaxFreeBonusCents,
+      mileage: {
+        drivenMeters: forecastDrivenMeters,
+        cents: forecastMileageCents,
+      },
+      totalEarningsCents:
+        forecastCalculated.totalEarningsCents +
+        forecastTaxFreeBonusCents +
+        forecastMileageCents,
     },
     /**
      * Netto-Schätzung – `null`, solange die Angaben in den Einstellungen

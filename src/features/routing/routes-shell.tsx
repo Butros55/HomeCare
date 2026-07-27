@@ -1340,6 +1340,7 @@ function SingleRoutePlanner({
                     icon={<Car aria-hidden />}
                     label="Fahrtzeit"
                     value={formatTravelSeconds(route.totalTravelSeconds)}
+                    hint="reine Fahrzeit · ohne Warten und Puffer"
                   />
                   <StatTile
                     icon={<Check aria-hidden />}
@@ -1824,9 +1825,11 @@ function StopRow({
       {stop.travelSecondsFromPrevious > 0 ? (
         <p className="mb-1.5 flex items-center gap-1.5 text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
           <Car className="size-3" aria-hidden />
-          {formatTravelSeconds(stop.travelSecondsFromPrevious)} ·{' '}
+          {formatTravelSeconds(stop.travelSecondsFromPrevious)} Fahrt ·{' '}
           {formatDistance(stop.distanceMetersFromPrevious)}
-          {stop.waitSeconds > 60 ? ` · ${Math.round(stop.waitSeconds / 60)} Min. Warten` : ''}
+          {stop.waitSeconds > 60
+            ? ` · separat ${Math.round(stop.waitSeconds / 60)} Min. Warten`
+            : ''}
         </p>
       ) : null}
       <div className="flex items-center gap-2.5">

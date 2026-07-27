@@ -332,7 +332,11 @@ function VariantCard({
             label="Rückkehr"
             value={variant.returnArrivalAt ? formatTime(new Date(variant.returnArrivalAt), timezone) : '—'}
           />
-          <MiniStat icon={<Car aria-hidden />} label="Fahrtzeit" value={formatTravelSeconds(variant.totalTravelSeconds)} />
+          <MiniStat
+            icon={<Car aria-hidden />}
+            label="Fahrtzeit (ohne Warten)"
+            value={formatTravelSeconds(variant.totalTravelSeconds)}
+          />
           <MiniStat icon={<MapPin aria-hidden />} label="Distanz" value={formatDistance(variant.totalDistanceMeters)} />
           <MiniStat
             icon={<Check aria-hidden />}
