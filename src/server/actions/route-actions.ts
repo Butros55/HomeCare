@@ -10,6 +10,7 @@ import { computeRoutePathCached } from '@/server/providers/routing';
 import type { RoutePath } from '@/server/providers/types';
 import {
   computeRoutePlan,
+  confirmSuggestedRouteAppointment,
   discardRoutePlan,
   getRoutePlanningData,
   listRoutePlanDates,
@@ -104,6 +105,20 @@ export async function saveRouteAction(
     const result = await saveRoutePlan({ ...data, publish });
     revalidatePath('/routes');
     revalidatePath('/dashboard');
+    return result;
+  });
+}
+
+export async function confirmSuggestedRouteAppointmentAction(
+  appointmentId: string,
+): Promise<ActionResult<{ appointmentId: string; customerConfirmationStatus: 'CONFIRMED' }>> {
+  return runAction(async () => {
+    const parsed = z.string().min(1).parse(appointmentId);
+    const result = await confirmSuggestedRouteAppointment(parsed);
+    revalidatePath('/routes');
+    revalidatePath('/calendar');
+    revalidatePath('/dashboard');
+    revalidatePath('/reports');
     return result;
   });
 }

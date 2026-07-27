@@ -184,6 +184,10 @@ describe('Teamplanung – flexibler Bestandstermin blockiert Vorschlag nicht meh
       orderBy: { startAt: 'asc' },
     });
     expect(dayAppointments).toHaveLength(2);
+    expect(
+      dayAppointments.find((appointment) => appointment.id === accepted.appointmentId)
+        ?.customerConfirmationStatus,
+    ).toBe('PENDING');
     for (let i = 1; i < dayAppointments.length; i += 1) {
       expect(dayAppointments[i]!.startAt.getTime()).toBeGreaterThanOrEqual(
         dayAppointments[i - 1]!.endAt.getTime(),

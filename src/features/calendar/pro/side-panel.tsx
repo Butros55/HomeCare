@@ -40,6 +40,7 @@ interface ProCalendarSidePanelProps {
 }
 
 const KIND_META: Record<ProEventKind, { description: string; color: string }> = {
+  pending: { description: 'Kundenbestätigung noch offen', color: 'bg-orange-500' },
   planned: { description: 'Geplante Einsätze', color: 'bg-sky-500' },
   confirmed: { description: 'Bestätigt oder unterwegs', color: 'bg-emerald-500' },
   done: { description: 'Abgeschlossene Einsätze', color: 'bg-violet-500' },
@@ -53,6 +54,7 @@ const PAGE_META: Array<{ page: CalendarPanelPage; label: string; icon: typeof Ca
 ];
 
 const DOT_BY_KIND: Record<ProEventKind, string> = {
+  pending: 'bg-orange-500',
   planned: 'bg-sky-500',
   confirmed: 'bg-emerald-500',
   done: 'bg-violet-500',

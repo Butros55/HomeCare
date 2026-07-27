@@ -40,6 +40,7 @@ export interface ActionItem {
     | 'ADDRESS_MISSING'
     | 'CONFLICT'
     | 'ASSIGNMENT_DECLINED'
+    | 'CUSTOMER_CONFIRMATION_PENDING'
     | 'ROUTE_UNPLANNED'
     | 'BUDGET_ENDING';
   title: string;
@@ -57,6 +58,7 @@ export interface TodayEntry {
   startAt: Date;
   endAt: Date;
   status: string;
+  customerConfirmationStatus: string;
   addressLine: string | null;
   latitude: number | null;
   longitude: number | null;
@@ -78,6 +80,7 @@ export interface MyDayEntry {
   startAt: Date;
   endAt: Date;
   status: string;
+  customerConfirmationStatus: string;
   /** Termin läuft laut Status oder befindet sich gerade im geplanten Zeitfenster. */
   isCurrent: boolean;
   /** Terminale/abgesagte Termine bieten keinen Schnellabschluss mehr an. */
@@ -237,6 +240,7 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
   const explicitCurrent = todayAppointments.find(
     (appointment) =>
       appointment.status === 'IN_PROGRESS' &&
+      appointment.customerConfirmationStatus !== 'PENDING' &&
       isAppointmentCompletableStatus(appointment.status),
   );
   const currentAppointment =
@@ -244,6 +248,7 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
     todayAppointments.find(
       (appointment) =>
         isAppointmentCompletableStatus(appointment.status) &&
+        appointment.customerConfirmationStatus !== 'PENDING' &&
         appointment.startAt.getTime() <= now.getTime() &&
         appointment.endAt.getTime() > now.getTime(),
     ) ??
@@ -277,8 +282,11 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
       startAt: appointment.startAt,
       endAt: appointment.endAt,
       status: appointment.status,
+      customerConfirmationStatus: appointment.customerConfirmationStatus,
       isCurrent: currentAppointment?.id === appointment.id,
-      canComplete: isAppointmentCompletableStatus(appointment.status),
+      canComplete:
+        appointment.customerConfirmationStatus !== 'PENDING' &&
+        isAppointmentCompletableStatus(appointment.status),
       unassigned: appointment.assignedEmployeeId === null,
       addressLine: appointment.locationAddress
         ? `${appointment.locationAddress.street} ${appointment.locationAddress.houseNumber}, ${appointment.locationAddress.postalCode} ${appointment.locationAddress.city}`
@@ -417,9 +425,13 @@ export async function getMyDayData(ctx: OrgContext, options: { includeUnassigned
       customerColor: appointment.customer.color,
       startAt: appointment.startAt,
       title: appointment.title,
+      customerConfirmationStatus: appointment.customerConfirmationStatus,
     })),
     counts: {
       todayCount: todayAppointments.length,
+      pendingCustomerConfirmationCount: todayAppointments.filter(
+        (appointment) => appointment.customerConfirmationStatus === 'PENDING',
+      ).length,
       todayMinutes: todayAppointments.reduce((sum, a) => sum + a.durationMinutes, 0),
       todayTravelSeconds,
       weekPlannedMinutes,
@@ -498,6 +510,7 @@ export async function getDashboardData(ctx: OrgContext) {
     upcomingAppointments,
     unassignedCount,
     declinedCount,
+    pendingConfirmationCount,
     unreadNotifications,
   ] = await Promise.all([
     db.appointment.findMany({
@@ -553,6 +566,16 @@ export async function getDashboardData(ctx: OrgContext) {
           },
         })
       : Promise.resolve(0),
+    db.appointment.count({
+      where: {
+        organizationId: orgId,
+        deletedAt: null,
+        startAt: { gte: now },
+        customerConfirmationStatus: 'PENDING',
+        status: 'PLANNED',
+        ...(isPlanner ? {} : scopeFilter),
+      },
+    }),
     db.notification.count({
       where: { userId: ctx.user.id, organizationId: orgId, readAt: null },
     }),
@@ -804,6 +827,7 @@ export async function getDashboardData(ctx: OrgContext) {
         startAt: appointment.startAt,
         endAt: appointment.endAt,
         status: appointment.status,
+        customerConfirmationStatus: appointment.customerConfirmationStatus,
         addressLine: appointment.locationAddress
           ? `${appointment.locationAddress.street} ${appointment.locationAddress.houseNumber}, ${appointment.locationAddress.postalCode} ${appointment.locationAddress.city}`
           : null,
@@ -863,6 +887,14 @@ export async function getDashboardData(ctx: OrgContext) {
       title: `${unassignedCount} Termin${unassignedCount === 1 ? '' : 'e'} ohne Mitarbeiter`,
       detail: 'Zuweisung im Kalender vornehmen',
       href: '/calendar?zuweisung=offen',
+    });
+  }
+  if (pendingConfirmationCount > 0) {
+    actionItems.push({
+      kind: 'CUSTOMER_CONFIRMATION_PENDING',
+      title: `${pendingConfirmationCount} vorgemerkte${pendingConfirmationCount === 1 ? 'r Termin' : ' Termine'}`,
+      detail: 'Kunden anrufen und vorgeschlagene Zeiten bestätigen',
+      href: '/routes',
     });
   }
   if (isPlanner) {
@@ -985,6 +1017,9 @@ export async function getDashboardData(ctx: OrgContext) {
   return {
     counts: {
       todayCount: todayAppointments.length,
+      pendingCustomerConfirmationCount: todayAppointments.filter(
+        (appointment) => appointment.customerConfirmationStatus === 'PENDING',
+      ).length,
       unassignedCount,
       openHoursCustomerCount: openHoursCustomers.length,
       openHoursTotalMinutes: openHoursCustomers.reduce((sum, c) => sum + c.openMinutes, 0),
@@ -1006,6 +1041,7 @@ export async function getDashboardData(ctx: OrgContext) {
         : null,
       startAt: appointment.startAt,
       status: appointment.status,
+      customerConfirmationStatus: appointment.customerConfirmationStatus,
     })),
     actionItems,
     next7: {

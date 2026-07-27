@@ -26,18 +26,31 @@ export default async function RoutesPage({
   // Route; nur das volle Leitungs-UI erhält Mitarbeiterwahl + Teamplanung.
   const teamMode = mode === 'team';
 
-  const employees = teamMode
-    ? await db.employee.findMany({
+  const scope = await getManagedEmployeeIds(ctx);
+  const [employees, customers] = await Promise.all([
+    db.employee.findMany({
         where: {
           organizationId: ctx.organization.id,
           deletedAt: null,
           status: 'ACTIVE',
-          ...employeeScopeFilter(await getManagedEmployeeIds(ctx)),
+          ...employeeScopeFilter(scope),
         },
         select: { id: true, firstName: true, lastName: true, userId: true },
         orderBy: [{ lastName: 'asc' }],
-      })
-    : [];
+      }),
+    hasPermission(ctx, 'customers.read')
+      ? db.customer.findMany({
+          where: {
+            organizationId: ctx.organization.id,
+            deletedAt: null,
+            status: { not: 'ARCHIVED' },
+          },
+          select: { id: true, firstName: true, lastName: true },
+          orderBy: [{ lastName: 'asc' }],
+          take: 500,
+        })
+      : Promise.resolve([]),
+  ]);
 
   const ownEmployeeId = ctx.employee?.id ?? null;
   const initialEmployeeId = teamMode
@@ -56,16 +69,19 @@ export default async function RoutesPage({
     <RoutesShell
       teamMode={teamMode}
       employees={
-        teamMode
-          ? employees.map((e) => ({ id: e.id, name: employeeDisplayName(e, ctx.user.id) }))
-          : []
+        employees.map((e) => ({ id: e.id, name: employeeDisplayName(e, ctx.user.id) }))
       }
+      customers={customers.map((customer) => ({
+        id: customer.id,
+        name: `${customer.firstName} ${customer.lastName}`,
+      }))}
       ownEmployeeId={ownEmployeeId}
       initialEmployeeId={initialEmployeeId}
       initialDate={params.datum ?? toDateInputValue(new Date(), ctx.organization.timezone)}
       autoPlan={params.plan === '1'}
       canManage={canManageRoutes || canSelfPlan}
       canAccept={canManageRoutes || canSelfPlan}
+      canManageAppointments={hasPermission(ctx, 'appointments.manage')}
       soloMode={mode === 'solo'}
       hourBudgetsEnabled={ctx.organization.hourBudgetsEnabled}
       timezone={ctx.organization.timezone}

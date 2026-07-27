@@ -24,7 +24,7 @@ import { formatMinutesAsHours } from '@/lib/duration';
 import { formatEuroCents } from '@/lib/earnings';
 import { formatDistance, formatTravelSeconds, googleMapsDirectionsUrl } from '@/lib/geo';
 import {
-  APPOINTMENT_STATUS,
+  appointmentDisplayStatus,
   SIMPLE_APPOINTMENT_STATUS,
   simpleAppointmentStatus,
   statusOf,
@@ -92,7 +92,11 @@ export async function MyDayDashboard({
               icon={<CalendarDays />}
               label="Termine heute"
               value={data.counts.todayCount}
-              hint={`${formatMinutesAsHours(data.counts.todayMinutes)} Einsatzzeit`}
+              hint={
+                data.counts.pendingCustomerConfirmationCount > 0
+                  ? `${data.counts.pendingCustomerConfirmationCount} vorgemerkt · ${formatMinutesAsHours(data.counts.todayMinutes)}`
+                  : `${formatMinutesAsHours(data.counts.todayMinutes)} Einsatzzeit`
+              }
             />
           </Link>
           <Link href={`/routes?datum=${todayIso}`} className="rounded-[var(--radius-xl)]">
@@ -239,12 +243,17 @@ export async function MyDayDashboard({
                 <ol className="divide-y divide-[var(--color-line-subtle)]">
                 {data.entries.map((entry) => {
                   const displayedStatus =
-                    mode === 'solo'
+                    entry.customerConfirmationStatus === 'PENDING'
+                      ? appointmentDisplayStatus(
+                          entry.status,
+                          entry.customerConfirmationStatus,
+                        )
+                      : mode === 'solo'
                       ? statusOf(
                           SIMPLE_APPOINTMENT_STATUS,
                           simpleAppointmentStatus(entry.status),
                         )
-                      : statusOf(APPOINTMENT_STATUS, entry.status);
+                      : appointmentDisplayStatus(entry.status);
                   return (
                   <li
                     key={entry.appointmentId}
@@ -360,6 +369,11 @@ export async function MyDayDashboard({
                           {formatDateTime(appointment.startAt, timezone)} · {appointment.title}
                         </span>
                       </span>
+                      {appointment.customerConfirmationStatus === 'PENDING' ? (
+                        <StatusPill size="sm" tone="hold">
+                          Vorgemerkt
+                        </StatusPill>
+                      ) : null}
                     </Link>
                   </li>
                 ))}

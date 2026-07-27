@@ -92,6 +92,78 @@ export function sumPureTravelSeconds(
   );
 }
 
+/** Flexible Einsatzzeiten werden als gut kommunizierbare 5-Minuten-Zeiten geplant. */
+export const FLEXIBLE_START_GRID_MINUTES = 5;
+
+function ceilToMinuteGrid(value: Date, gridMinutes = FLEXIBLE_START_GRID_MINUTES): Date {
+  const gridMs = gridMinutes * 60_000;
+  return new Date(Math.ceil(value.getTime() / gridMs) * gridMs);
+}
+
+function floorToMinuteGrid(value: Date, gridMinutes = FLEXIBLE_START_GRID_MINUTES): Date {
+  const gridMs = gridMinutes * 60_000;
+  return new Date(Math.floor(value.getTime() / gridMs) * gridMs);
+}
+
+/**
+ * Richtet zusammenhängende flexible Blöcke möglichst spät an dem jeweils
+ * folgenden Fixtermin aus.
+ *
+ * Beispiel: flexibel ab 06:00 (2 Std.) → 40 Min. Fahrt → Fixtermin 12:00.
+ * Statt den flexiblen Einsatz um 06:00 festzuhalten, wird sein spätester
+ * sinnvoller Beginn rückwärts aus Fixtermin, Fahrt, Puffer und Dauer ermittelt.
+ * Ein eigenes spätestes Ende des flexiblen Termins bleibt dabei die harte
+ * Obergrenze.
+ */
+function preferredFlexibleStarts(
+  order: number[],
+  input: OptimizeInput,
+): Map<number, Date> {
+  const preferred = new Map<number, Date>();
+  const matrixIndex = (stopIndex: number) => stopIndex + 1;
+  const bufferSeconds = input.bufferMinutes * 60;
+
+  for (let fixedPosition = 0; fixedPosition < order.length; fixedPosition += 1) {
+    const fixedIndex = order[fixedPosition]!;
+    const fixed = input.stops[fixedIndex]!;
+    if (!fixed.fixedStartAt) continue;
+
+    let nextStart = fixed.fixedStartAt;
+    let nextIndex = fixedIndex;
+    for (let position = fixedPosition - 1; position >= 0; position -= 1) {
+      const stopIndex = order[position]!;
+      const stop = input.stops[stopIndex]!;
+      // Nur der unmittelbar vor diesem Fixtermin liegende flexible Block wird
+      // rückwärts verdichtet. Ein früherer Fixtermin ist ein eigener Anker.
+      if (stop.fixedStartAt) break;
+
+      const travelSeconds =
+        input.matrix.travelSeconds[matrixIndex(stopIndex)]?.[matrixIndex(nextIndex)] ?? 0;
+      const latestArrivalAtNext = new Date(
+        nextStart.getTime() - (travelSeconds + bufferSeconds) * 1000,
+      );
+      const latestEnd =
+        stop.latestEndAt && stop.latestEndAt < latestArrivalAtNext
+          ? stop.latestEndAt
+          : latestArrivalAtNext;
+      let start = floorToMinuteGrid(
+        new Date(latestEnd.getTime() - stop.serviceMinutes * 60_000),
+      );
+      // Liegt die Fensteröffnung bereits hinter dem errechneten spätesten
+      // Beginn, bleibt sie als harte Untergrenze stehen. Die Vorwärtssimulation
+      // markiert die Route anschließend korrekt als unzulässig.
+      if (stop.earliestStartAt && start < stop.earliestStartAt) {
+        start = ceilToMinuteGrid(stop.earliestStartAt);
+      }
+      preferred.set(position, start);
+      nextStart = start;
+      nextIndex = stopIndex;
+    }
+  }
+
+  return preferred;
+}
+
 /** Zeitplan für eine gegebene Reihenfolge simulieren (Kern der Heuristik). */
 export function computeSchedule(
   order: number[], // Stop-Indizes (0-basiert auf stops-Array)
@@ -111,6 +183,7 @@ export function computeSchedule(
   let currentTime = input.departureAt;
   let totalDistance = 0;
   let totalWait = 0;
+  const flexibleStarts = preferredFlexibleStarts(order, input);
 
   order.forEach((stopIndex, position) => {
     const stop = stops[stopIndex]!;
@@ -136,6 +209,11 @@ export function computeSchedule(
       if (stop.earliestStartAt && serviceStart < stop.earliestStartAt) {
         serviceStart = stop.earliestStartAt; // warten bis Fensteröffnung
       }
+      const preferredStart = flexibleStarts.get(position);
+      if (preferredStart && serviceStart < preferredStart) {
+        serviceStart = preferredStart;
+      }
+      serviceStart = ceilToMinuteGrid(serviceStart);
     }
 
     const serviceEnd = new Date(serviceStart.getTime() + stop.serviceMinutes * 60_000);

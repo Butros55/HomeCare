@@ -91,6 +91,90 @@ describe('computeSchedule', () => {
     expect(result.feasible).toBe(true);
   });
 
+  it('rundet flexible Startzeiten auf den nächsten 5-Minuten-Schritt', () => {
+    const input = baseInput({
+      stops: [
+        {
+          id: 'flex',
+          latitude: 0,
+          longitude: 0,
+          serviceMinutes: 30,
+        },
+      ],
+      // Ankunft 08:02 – der kommunizierte Termin beginnt sauber um 08:05.
+      matrix: linearMatrix(1, 2 * 60),
+    });
+
+    const result = computeSchedule([0], input);
+
+    expect(result.stops[0]!.arrivalAt).toEqual(t(8, 2));
+    expect(result.stops[0]!.serviceStartAt).toEqual(t(8, 5));
+  });
+
+  it('richtet einen flexiblen Termin möglichst spät am folgenden Fixtermin aus', () => {
+    const input = baseInput({
+      stops: [
+        {
+          id: 'flex',
+          latitude: 0,
+          longitude: 0,
+          serviceMinutes: 120,
+          earliestStartAt: t(6),
+        },
+        {
+          id: 'fix',
+          latitude: 0,
+          longitude: 0,
+          serviceMinutes: 120,
+          fixedStartAt: t(12),
+        },
+      ],
+      matrix: linearMatrix(2, 40 * 60),
+      bufferMinutes: 10,
+    });
+
+    const result = computeSchedule([0, 1], input);
+
+    // 12:00 Fixbeginn − 40 Min. Fahrt − 10 Min. Puffer − 2 Std. Einsatz.
+    expect(result.stops[0]!.serviceStartAt).toEqual(t(9, 10));
+    expect(result.stops[0]!.serviceEndAt).toEqual(t(11, 10));
+    expect(result.stops[1]!.arrivalAt).toEqual(t(12));
+    expect(result.stops[1]!.serviceStartAt).toEqual(t(12));
+    expect(result.feasible).toBe(true);
+  });
+
+  it('respektiert beim Verdichten das späteste Ende des flexiblen Termins', () => {
+    const input = baseInput({
+      stops: [
+        {
+          id: 'flex',
+          latitude: 0,
+          longitude: 0,
+          serviceMinutes: 60,
+          earliestStartAt: t(6),
+          latestEndAt: t(9),
+        },
+        {
+          id: 'fix',
+          latitude: 0,
+          longitude: 0,
+          serviceMinutes: 60,
+          fixedStartAt: t(12),
+        },
+      ],
+      matrix: linearMatrix(2, 20 * 60),
+      bufferMinutes: 10,
+      departureAt: t(6),
+    });
+
+    const result = computeSchedule([0, 1], input);
+
+    expect(result.stops[0]!.serviceStartAt).toEqual(t(8));
+    expect(result.stops[0]!.serviceEndAt).toEqual(t(9));
+    expect(result.stops[1]!.serviceStartAt).toEqual(t(12));
+    expect(result.feasible).toBe(true);
+  });
+
   it('addiert Wartezeit und Puffer niemals zur Fahrtzeit', () => {
     const input = baseInput({
       stops: [

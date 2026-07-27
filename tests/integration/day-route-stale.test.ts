@@ -163,5 +163,6 @@ describe('Tagesrouten-Generator – flexibler Bestandstermin blockiert Annahme n
     expect(existingAppointment.endAt.getTime()).toBeLessThanOrEqual(at('12:00').getTime());
     const newAppointment = dayAppointments.find((a) => a.customerId === newCustomerId)!;
     expect(newAppointment.startAt.toISOString()).toBe(at('06:00').toISOString());
+    expect(newAppointment.customerConfirmationStatus).toBe('PENDING');
   });
 });

@@ -98,6 +98,7 @@ function mondayIndex(d: Date): number {
 }
 
 const CHIP_CLASS_BY_KIND: Record<ProEventKind, string> = {
+  pending: 'bg-orange-500/20 text-orange-800 dark:text-orange-200',
   planned: 'bg-sky-500/20 text-sky-700 dark:text-sky-200',
   confirmed: 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-200',
   done: 'bg-violet-500/20 text-violet-700 dark:text-violet-200',
@@ -106,6 +107,7 @@ const CHIP_CLASS_BY_KIND: Record<ProEventKind, string> = {
 };
 
 const DOT_CLASS_BY_KIND: Record<ProEventKind, string> = {
+  pending: 'bg-orange-500',
   planned: 'bg-sky-500',
   confirmed: 'bg-emerald-500',
   done: 'bg-violet-500',

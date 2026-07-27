@@ -78,6 +78,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   'appointment.rescheduled': 'Termin verschoben',
   'appointment.assigned': 'Mitarbeiterzuweisung geändert',
   'appointment.statusChanged': 'Terminstatus geändert',
+  'appointment.customerConfirmed': 'Kundentermin bestätigt',
   'appointment.cancelled': 'Termin abgesagt',
   'appointment.deleted': 'Termin gelöscht',
   'appointment.restored': 'Termin wiederhergestellt',

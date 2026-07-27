@@ -42,6 +42,7 @@ import {
   APPOINTMENT_STATUS,
   ASSIGNMENT_STATUS,
   SIMPLE_APPOINTMENT_STATUS,
+  appointmentDisplayStatus,
   simpleAppointmentStatus,
   statusOf,
 } from '@/lib/status-maps';
@@ -444,7 +445,12 @@ export function AppointmentDrawer({
                   <StatusPill
                     size="sm"
                     tone={
-                      soloMode
+                      detail.customerConfirmationStatus === 'PENDING'
+                        ? appointmentDisplayStatus(
+                            detail.status,
+                            detail.customerConfirmationStatus,
+                          ).tone
+                        : soloMode
                         ? statusOf(
                             SIMPLE_APPOINTMENT_STATUS,
                             simpleAppointmentStatus(detail.status),
@@ -452,7 +458,12 @@ export function AppointmentDrawer({
                         : statusOf(APPOINTMENT_STATUS, detail.status).tone
                     }
                   >
-                    {soloMode
+                    {detail.customerConfirmationStatus === 'PENDING'
+                      ? appointmentDisplayStatus(
+                          detail.status,
+                          detail.customerConfirmationStatus,
+                        ).label
+                      : soloMode
                       ? statusOf(
                           SIMPLE_APPOINTMENT_STATUS,
                           simpleAppointmentStatus(detail.status),
@@ -748,7 +759,15 @@ export function AppointmentDrawer({
                 <h3 className="mb-1.5 text-[length:var(--text-2xs)] font-semibold tracking-wider text-[var(--color-ink-subtle)] uppercase">
                   Status
                 </h3>
-                {soloMode ? (
+                {detail.customerConfirmationStatus === 'PENDING' ? (
+                  <div className="rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-warning-soft)] p-3">
+                    <StatusPill tone="hold">Vorgemerkt</StatusPill>
+                    <p className="mt-2 text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+                      Der Kunde muss die vorgeschlagene Zeit noch telefonisch bestätigen.
+                      Erst danach kann der Einsatz gestartet oder abgeschlossen werden.
+                    </p>
+                  </div>
+                ) : soloMode ? (
                   simpleAppointmentStatus(detail.status) === 'OPEN' ? (
                     <div className="flex flex-wrap gap-2">
                       <QuickCompleteButton

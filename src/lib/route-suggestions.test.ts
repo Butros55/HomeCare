@@ -214,6 +214,40 @@ describe('planRouteWithAutoDeparture', () => {
     expect(result.latestDepartureAt).toEqual(t(8));
   });
 
+  it('verschiebt einen frühen flexiblen Termin kompakt vor den folgenden Fixtermin', () => {
+    const stops: RouteStopInput[] = [
+      {
+        id: 'flex',
+        latitude: 0,
+        longitude: 0,
+        serviceMinutes: 120,
+        earliestStartAt: t(6),
+      },
+      {
+        id: 'fix',
+        latitude: 0,
+        longitude: 0,
+        serviceMinutes: 120,
+        fixedStartAt: t(12),
+      },
+    ];
+    const result = planRouteWithAutoDeparture({
+      stops,
+      matrix: linearMatrix(4, 40 * 60),
+      bufferMinutes: 10,
+      returnToEnd: false,
+      earliestDepartureAt: DAY_START,
+    });
+
+    expect(result.stops.map((stop) => stop.id)).toEqual(['flex', 'fix']);
+    expect(result.stops[0]!.serviceStartAt).toEqual(t(9, 10));
+    expect(result.stops[1]!.serviceStartAt).toEqual(t(12));
+    // Start → flex sind 40 Min.; zusätzlich bleiben die gewünschten 10 Min. Puffer.
+    expect(result.latestDepartureAt).toEqual(t(8, 20));
+    expect(result.workdaySeconds).toBe(5 * 60 * 60 + 40 * 60);
+    expect(result.feasible).toBe(true);
+  });
+
   it('leere Stoppliste ergibt eine leere gültige Route', () => {
     const result = planRouteWithAutoDeparture({
       stops: [],
@@ -262,7 +296,7 @@ function candidateSetup(candidateHops: number) {
 const minuteToUtc = (minute: number) => new Date(DAY_START.getTime() + minute * 60_000);
 
 describe('evaluateCandidate', () => {
-  it('findet einen zulässigen Termin im 15-Minuten-Raster innerhalb des Fensters', () => {
+  it('findet einen zulässigen Termin im 5-Minuten-Raster innerhalb des Fensters', () => {
     const { matrix, baseStops, baseRoute } = candidateSetup(1);
     const result = evaluateCandidate({
       baseStops,
@@ -279,7 +313,7 @@ describe('evaluateCandidate', () => {
       minuteToUtc,
     });
     expect(result.feasible).toBe(true);
-    expect(result.startAt!.getUTCMinutes() % 15).toBe(0);
+    expect(result.startAt!.getUTCMinutes() % 5).toBe(0);
     expect(result.impact!.extraTravelSeconds).toBeGreaterThan(0);
     // Einsatz liegt vollständig im Fenster.
     expect(result.startAt!.getTime()).toBeGreaterThanOrEqual(minuteToUtc(480).getTime());

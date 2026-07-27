@@ -33,6 +33,17 @@ export const APPOINTMENT_STATUS: Record<string, { label: string; tone: StatusTon
   NO_SHOW: { label: 'Nicht angetroffen', tone: 'stuck' },
 };
 
+/** Für automatisch vorgeschlagene, noch telefonisch zu klärende Termine. */
+export function appointmentDisplayStatus(
+  status: string,
+  customerConfirmationStatus?: string | null,
+): { label: string; tone: StatusTone } {
+  if (customerConfirmationStatus === 'PENDING') {
+    return { label: 'Vorgemerkt', tone: 'hold' };
+  }
+  return statusOf(APPOINTMENT_STATUS, status);
+}
+
 /**
  * Im Alleine-Modus reichen drei leicht verständliche Zustände. Das
  * detaillierte Domänenmodell bleibt für den Team-Modus unverändert.

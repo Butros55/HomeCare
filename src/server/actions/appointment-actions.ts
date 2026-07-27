@@ -343,6 +343,7 @@ export async function getAppointmentDetailAction(appointmentId: string) {
       endAt: appointment.endAt.toISOString(),
       durationMinutes: appointment.durationMinutes,
       status: appointment.status,
+      customerConfirmationStatus: appointment.customerConfirmationStatus,
       assignmentStatus: appointment.assignmentStatus,
       isFlexible: appointment.isFlexible,
       routeRelevant: appointment.routeRelevant,

@@ -21,6 +21,7 @@ import {
   acceptRouteSuggestion,
   generateRouteSuggestions,
 } from '@/server/services/route-suggestion-service';
+import { confirmSuggestedRouteAppointment } from '@/server/services/route-service';
 
 import { buildContext, createEmployee, createOrg, createUserWithMembership, resetDatabase } from './helpers';
 
@@ -145,6 +146,13 @@ describe('Stundenbudgets AUS – Vorschläge ohne Konto', () => {
     const appt = await db.appointment.findUnique({ where: { id: accepted.appointmentId } });
     expect(appt?.customerId).toBe(noAccountCustomerId);
     expect(appt?.durationMinutes).toBe(90);
+    expect(appt?.customerConfirmationStatus).toBe('PENDING');
+    await confirmSuggestedRouteAppointment(accepted.appointmentId);
+    const confirmed = await db.appointment.findUnique({
+      where: { id: accepted.appointmentId },
+    });
+    expect(confirmed?.customerConfirmationStatus).toBe('CONFIRMED');
+    expect(confirmed?.status).toBe('CONFIRMED');
     // Aufräumen für spätere Läufe dieses Suites.
     await db.routeStop.deleteMany({});
     await db.routePlan.deleteMany({});

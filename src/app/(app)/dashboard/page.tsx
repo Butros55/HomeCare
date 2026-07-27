@@ -25,7 +25,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { formatDate, formatDateTime, formatTime, formatWeekday } from '@/lib/dates';
 import { formatMinutesAsHours } from '@/lib/duration';
 import { formatTravelSeconds, googleMapsDirectionsUrl } from '@/lib/geo';
-import { APPOINTMENT_STATUS, statusOf } from '@/lib/status-maps';
+import { appointmentDisplayStatus } from '@/lib/status-maps';
 import { hasPermission, requireOrganizationMembership, uiModeFor } from '@/server/permissions';
 import { getDashboardData } from '@/server/services/dashboard-service';
 import { MyDayDashboard } from './my-day';
@@ -92,7 +92,16 @@ export default async function DashboardPage() {
         {/* Kennzahlkarten – klickbar, führen zu gefilterten Ansichten */}
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-5" data-tour="dashboard-stats">
           <Link href="/calendar" className="rounded-[var(--radius-xl)]">
-            <StatTile icon={<CalendarDays />} label="Termine heute" value={data.counts.todayCount} hint="Zum Kalender" />
+            <StatTile
+              icon={<CalendarDays />}
+              label="Termine heute"
+              value={data.counts.todayCount}
+              hint={
+                data.counts.pendingCustomerConfirmationCount > 0
+                  ? `${data.counts.pendingCustomerConfirmationCount} vorgemerkt`
+                  : 'Zum Kalender'
+              }
+            />
           </Link>
           {data.isPlanner && data.hourBudgetsEnabled ? (
             <Link href="/customers?openHours=1" className="rounded-[var(--radius-xl)]">
@@ -254,8 +263,21 @@ export default async function DashboardPage() {
                               {entry.hasConflict ? (
                                 <AlertTriangle className="size-4 shrink-0 text-[var(--color-warning)]" aria-label="Konflikt" />
                               ) : null}
-                              <StatusPill size="sm" tone={statusOf(APPOINTMENT_STATUS, entry.status).tone}>
-                                {statusOf(APPOINTMENT_STATUS, entry.status).label}
+                              <StatusPill
+                                size="sm"
+                                tone={
+                                  appointmentDisplayStatus(
+                                    entry.status,
+                                    entry.customerConfirmationStatus,
+                                  ).tone
+                                }
+                              >
+                                {
+                                  appointmentDisplayStatus(
+                                    entry.status,
+                                    entry.customerConfirmationStatus,
+                                  ).label
+                                }
                               </StatusPill>
                               {entry.latitude != null && entry.longitude != null ? (
                                 <Button asChild variant="ghost" size="icon-sm" aria-label="Navigation starten">
@@ -362,6 +384,11 @@ export default async function DashboardPage() {
                               {appointment.employeeName ? ` · ${appointment.employeeName}` : ' · offen'}
                             </span>
                           </span>
+                          {appointment.customerConfirmationStatus === 'PENDING' ? (
+                            <StatusPill size="sm" tone="hold">
+                              Vorgemerkt
+                            </StatusPill>
+                          ) : null}
                         </Link>
                       </li>
                     ))}

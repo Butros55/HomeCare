@@ -15,6 +15,7 @@ import {
   Lock,
   MapPin,
   Navigation,
+  Phone,
   Plus,
   RefreshCcw,
   Route as RouteIcon,
@@ -34,7 +35,7 @@ import { toast } from 'sonner';
 import { PageHeader } from '@/components/layout/page-header';
 import { RoutePlanningDataSkeleton } from '@/components/layout/page-loading-skeleton';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Checkbox, Skeleton } from '@/components/ui/misc';
 import {
@@ -61,6 +62,7 @@ import {
   acceptDayRouteAction,
   acceptRouteSuggestionAction,
   computeRouteAction,
+  confirmSuggestedRouteAppointmentAction,
   discardRouteAction,
   generateDayRoutesAction,
   generateRouteSuggestionsAction,
@@ -76,9 +78,11 @@ import type {
   GenerateSuggestionsResult,
   RouteSuggestionDto,
 } from '@/server/services/route-suggestion-service';
+import { deleteAppointmentAction } from '@/server/actions/appointment-actions';
 import { SuggestionCard } from '@/features/routing/suggestion-card';
 import { RouteDateStrip } from '@/features/routing/route-date-strip';
 import { DayRouteDialog, type DayRouteFormValues } from '@/features/routing/day-route-dialog';
+import { AppointmentDrawer } from '@/features/calendar/appointment-drawer';
 import { useRoadPath } from '@/features/map/use-road-path';
 import { computeRouteEarnings, formatEuroCents } from '@/lib/earnings';
 
@@ -123,12 +127,14 @@ function requestGps(): Promise<{ latitude: number; longitude: number; timestamp:
 export function RoutesShell({
   teamMode,
   employees,
+  customers,
   ownEmployeeId,
   initialEmployeeId,
   initialDate,
   autoPlan = false,
   canManage,
   canAccept,
+  canManageAppointments,
   soloMode,
   hourBudgetsEnabled,
   timezone,
@@ -136,12 +142,15 @@ export function RoutesShell({
   /** true = Leitungs-UI mit Einzelroute + Teamplanung; false = nur eigene Route. */
   teamMode: boolean;
   employees: { id: string; name: string }[];
+  customers: { id: string; name: string }[];
   ownEmployeeId: string | null;
   initialEmployeeId: string;
   initialDate: string;
   /** Beim Öffnen (Deep-Link ?plan=1) den „Tag automatisch planen"-Dialog aufklappen. */
   autoPlan?: boolean;
   canManage: boolean;
+  /** Detailpanel darf immer öffnen; Bearbeiten richtet sich nach Terminrecht. */
+  canManageAppointments: boolean;
   /**
    * Vorschläge übernehmen: eigene Route (Selbstplanung) immer, fremde/Team nur
    * mit Leitungsrolle. Serverseitig zusätzlich per Scope durchgesetzt.
@@ -198,6 +207,7 @@ export function RoutesShell({
             <TabsContent value="single" className="mt-4">
               <SingleRoutePlanner
                 employees={employees}
+                customers={customers}
                 ownEmployeeId={ownEmployeeId}
                 initialEmployeeId={initialEmployeeId}
                 date={date}
@@ -208,6 +218,7 @@ export function RoutesShell({
                 setReturnToStart={setReturnToStart}
                 canManage={effManage}
                 canAccept={effAccept}
+                canManageAppointments={canManageAppointments}
                 soloMode={soloMode}
                 hourBudgetsEnabled={hourBudgetsEnabled}
                 timezone={timezone}
@@ -233,6 +244,7 @@ export function RoutesShell({
         ) : (
           <SingleRoutePlanner
             employees={employees}
+            customers={customers}
             ownEmployeeId={ownEmployeeId}
             initialEmployeeId={initialEmployeeId}
             date={date}
@@ -243,6 +255,7 @@ export function RoutesShell({
             setReturnToStart={setReturnToStart}
             canManage={effManage}
             canAccept={effAccept}
+            canManageAppointments={canManageAppointments}
             soloMode={soloMode}
             hourBudgetsEnabled={hourBudgetsEnabled}
             timezone={timezone}
@@ -261,6 +274,7 @@ export function RoutesShell({
 
 function SingleRoutePlanner({
   employees,
+  customers,
   ownEmployeeId,
   initialEmployeeId,
   date,
@@ -271,6 +285,7 @@ function SingleRoutePlanner({
   setReturnToStart,
   canManage,
   canAccept,
+  canManageAppointments,
   soloMode,
   hourBudgetsEnabled,
   timezone,
@@ -278,6 +293,7 @@ function SingleRoutePlanner({
   showEmployeeSelect,
 }: {
   employees: { id: string; name: string }[];
+  customers: { id: string; name: string }[];
   ownEmployeeId: string | null;
   initialEmployeeId: string;
   date: string;
@@ -288,6 +304,7 @@ function SingleRoutePlanner({
   setReturnToStart: (value: boolean) => void;
   canManage: boolean;
   canAccept: boolean;
+  canManageAppointments: boolean;
   /** Alleine-Modus: sofort speichern statt speichern/freigeben. */
   soloMode: boolean;
   /** Kunden-Stundenkonten org-weit aktiv? Aus = keine „offene Stunden"-Texte. */
@@ -304,6 +321,11 @@ function SingleRoutePlanner({
   const [loading, setLoading] = React.useState(Boolean(initialEmployeeId && date));
   const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
   const [route, setRoute] = React.useState<ComputedRoute | null>(null);
+  const [drawerAppointmentId, setDrawerAppointmentId] = React.useState<string | null>(null);
+  const [stopRemoval, setStopRemoval] = React.useState<{
+    appointmentId: string;
+    customerName: string;
+  } | null>(null);
   const [manualOrder, setManualOrder] = React.useState<string[] | null>(null);
   const [pending, startTransition] = React.useTransition();
   // Nach dem Laden einmal rechnen, wenn es Termine, aber noch keine
@@ -556,6 +578,63 @@ function SingleRoutePlanner({
           toast.success('Route gespeichert.');
         }
       }
+    });
+  };
+
+  /** Terminänderungen aus dem lokalen Drawer sofort in Route und Karte übernehmen. */
+  const refreshAfterAppointmentChange = async () => {
+    const ids = await reloadData({ keepRoute: true });
+    if (ids && ids.length > 0) {
+      compute(ids, { manual: false, silent: true });
+    } else {
+      setRoute(null);
+      setManualOrder(null);
+    }
+  };
+
+  const removeStopOnly = () => {
+    if (!stopRemoval) return;
+    setStopMembership(stopRemoval.appointmentId, false);
+    setStopRemoval(null);
+  };
+
+  const deleteStopAppointment = () => {
+    if (!stopRemoval || !canManageAppointments) return;
+    const appointmentId = stopRemoval.appointmentId;
+    startTransition(async () => {
+      const result = await deleteAppointmentAction(appointmentId, 'single');
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+      toast.success('Termin und zugehöriger Routenstopp wurden gelöscht.');
+      setStopRemoval(null);
+      if (drawerAppointmentId === appointmentId) setDrawerAppointmentId(null);
+      await refreshAfterAppointmentChange();
+    });
+  };
+
+  const confirmCustomerAppointment = (appointmentId: string) => {
+    startTransition(async () => {
+      const result = await confirmSuggestedRouteAppointmentAction(appointmentId);
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
+      }
+      setRoute((current) =>
+        current
+          ? {
+              ...current,
+              stops: current.stops.map((stop) =>
+                stop.appointmentId === appointmentId
+                  ? { ...stop, customerConfirmationStatus: 'CONFIRMED' as const }
+                  : stop,
+              ),
+            }
+          : current,
+      );
+      toast.success('Der Termin ist als vom Kunden bestätigt markiert.');
+      await reloadData({ keepRoute: true });
     });
   };
 
@@ -1174,7 +1253,16 @@ function SingleRoutePlanner({
                           route.stops[index + 1]!.isFlexible
                         }
                         onMove={moveStop}
-                        onRemove={(id) => setStopMembership(id, false)}
+                        onRemove={() =>
+                          setStopRemoval({
+                            appointmentId: stop.appointmentId,
+                            customerName: stop.customerName,
+                          })
+                        }
+                        onOpen={(id) => setDrawerAppointmentId(id)}
+                        onConfirm={confirmCustomerAppointment}
+                        canConfirm={canManage}
+                        confirming={pending}
                       />
                     ))}
                   </ol>
@@ -1389,6 +1477,80 @@ function SingleRoutePlanner({
           </div>
         </div>
       )}
+
+      {drawerAppointmentId ? (
+        <AppointmentDrawer
+          appointmentId={drawerAppointmentId}
+          onClose={() => setDrawerAppointmentId(null)}
+          onChanged={() => {
+            void refreshAfterAppointmentChange();
+          }}
+          onDeleted={() => {
+            setDrawerAppointmentId(null);
+            void refreshAfterAppointmentChange();
+          }}
+          onUpsert={() => {
+            void refreshAfterAppointmentChange();
+          }}
+          canManage={canManageAppointments}
+          soloMode={soloMode}
+          ownEmployeeId={ownEmployeeId}
+          employees={employees}
+          customers={customers}
+        />
+      ) : null}
+
+      <Dialog
+        open={stopRemoval !== null}
+        onOpenChange={(open) => {
+          if (!open) setStopRemoval(null);
+        }}
+      >
+        <DialogContent
+          title="Stopp entfernen?"
+          description={
+            stopRemoval
+              ? `Was soll mit dem Termin von ${stopRemoval.customerName} passieren?`
+              : undefined
+          }
+        >
+          <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+            Du kannst nur den Stopp aus dieser Route nehmen. Der Termin bleibt dann im
+            Kalender bestehen.
+            {canManageAppointments
+              ? ' Alternativ kannst du den einzelnen Termin zusammen mit dem Stopp löschen.'
+              : ''}
+          </p>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setStopRemoval(null)}
+              disabled={pending}
+            >
+              Abbrechen
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={removeStopOnly}
+              disabled={pending}
+            >
+              Nur Stopp entfernen
+            </Button>
+            {canManageAppointments ? (
+              <Button
+                type="button"
+                variant="danger"
+                onClick={deleteStopAppointment}
+                loading={pending}
+              >
+                <Trash2 aria-hidden /> Termin mitlöschen
+              </Button>
+            ) : null}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <DayRouteDialog
         open={dayDialogOpen}
@@ -1808,6 +1970,10 @@ function StopRow({
   canMoveDown,
   onMove,
   onRemove,
+  onOpen,
+  onConfirm,
+  canConfirm,
+  confirming,
 }: {
   stop: ComputedRoute['stops'][number];
   index: number;
@@ -1819,6 +1985,10 @@ function StopRow({
   canMoveDown: boolean;
   onMove: (index: number, direction: -1 | 1) => void;
   onRemove: (appointmentId: string) => void;
+  onOpen: (appointmentId: string) => void;
+  onConfirm: (appointmentId: string) => void;
+  canConfirm: boolean;
+  confirming: boolean;
 }) {
   return (
     <li className="px-3 py-2.5">
@@ -1840,7 +2010,12 @@ function StopRow({
         >
           {stop.sequence}
         </span>
-        <span className="min-w-0 flex-1">
+        <button
+          type="button"
+          className="min-w-0 flex-1 rounded-[var(--radius-md)] text-left outline-none hover:text-[var(--color-brand)] focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] focus-visible:ring-offset-2"
+          onClick={() => onOpen(stop.appointmentId)}
+          aria-label={`Termin ${stop.customerName} öffnen und bearbeiten`}
+        >
           <span className="flex items-center gap-1.5 truncate text-[length:var(--text-sm)] font-medium">
             <span className="truncate">{stop.customerName}</span>
             {stop.isFlexible ? (
@@ -1855,6 +2030,11 @@ function StopRow({
                 <Lock className="size-2.5" aria-hidden /> fix
               </span>
             )}
+            {stop.customerConfirmationStatus === 'PENDING' ? (
+              <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--color-warning-soft)] px-1.5 py-px text-[length:var(--text-2xs)] font-medium text-[var(--color-warning)]">
+                vorgemerkt
+              </span>
+            ) : null}
           </span>
           <span className="block truncate text-[length:var(--text-2xs)] text-[var(--color-ink-subtle)]">
             {formatTime(new Date(stop.serviceStartAt), timezone)}–
@@ -1865,8 +2045,47 @@ function StopRow({
               <AlertTriangle className="size-3 shrink-0" aria-hidden /> {stop.warning}
             </span>
           ) : null}
-        </span>
+        </button>
         <div className="flex shrink-0 items-center gap-0.5">
+          {stop.customerConfirmationStatus === 'PENDING' ? (
+            <>
+              {stop.customerPhone ? (
+                <Button
+                  asChild
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`${stop.customerName} anrufen`}
+                  title={`${stop.customerName} anrufen`}
+                >
+                  <a href={`tel:${stop.customerPhone}`}>
+                    <Phone aria-hidden />
+                  </a>
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled
+                  aria-label="Keine Telefonnummer hinterlegt"
+                  title="Keine Telefonnummer hinterlegt"
+                >
+                  <Phone aria-hidden />
+                </Button>
+              )}
+              {canConfirm ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => onConfirm(stop.appointmentId)}
+                  disabled={confirming}
+                >
+                  <Check aria-hidden /> Bestätigen
+                </Button>
+              ) : null}
+            </>
+          ) : null}
           <Button asChild variant="ghost" size="icon-sm" aria-label="Navigation zum Stopp">
             <a
               href={googleMapsDirectionsUrl({ latitude: stop.latitude, longitude: stop.longitude })}

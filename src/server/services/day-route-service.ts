@@ -1004,6 +1004,7 @@ export async function acceptDayRoute(input: {
             endAt: visit.endAt,
             durationMinutes: visit.dur,
             status: 'PLANNED',
+            customerConfirmationStatus: 'PENDING',
             assignmentStatus: 'ASSIGNED',
             isFlexible: true,
             earliestStartAt: minuteToUtc(flexWindow.startMinute),

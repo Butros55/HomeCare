@@ -4,18 +4,27 @@ import type { CalendarEventDto } from '@/server/services/calendar-service';
  * Ereignismodell des portierten StudyMate-Kalenders, gespeist aus HomeCare-
  * Terminen (CalendarEventDto). `kind` bestimmt die Farbwelt der Chips/Blöcke:
  *
+ *  - pending    → Orange      (Kundenbestätigung offen)
  *  - planned    → Himmelblau  (geplant)
  *  - confirmed  → Smaragd     (bestätigt / läuft)
  *  - done       → Violett     (abgeschlossen)
  *  - open       → Bernstein   (keine Zuordnung – Handlungsbedarf)
  *  - cancelled  → schraffiert (abgesagt / nicht erschienen)
  */
-export type ProEventKind = 'planned' | 'confirmed' | 'done' | 'open' | 'cancelled';
+export type ProEventKind = 'pending' | 'planned' | 'confirmed' | 'done' | 'open' | 'cancelled';
 
-export const PRO_EVENT_KINDS: ProEventKind[] = ['planned', 'confirmed', 'done', 'open', 'cancelled'];
-export const SOLO_EVENT_KINDS: ProEventKind[] = ['open', 'done', 'cancelled'];
+export const PRO_EVENT_KINDS: ProEventKind[] = [
+  'pending',
+  'planned',
+  'confirmed',
+  'done',
+  'open',
+  'cancelled',
+];
+export const SOLO_EVENT_KINDS: ProEventKind[] = ['pending', 'open', 'done', 'cancelled'];
 
 export const PRO_KIND_LABELS: Record<ProEventKind, string> = {
+  pending: 'Vorgemerkt',
   planned: 'Geplant',
   confirmed: 'Bestätigt',
   done: 'Abgeschlossen',
@@ -24,6 +33,7 @@ export const PRO_KIND_LABELS: Record<ProEventKind, string> = {
 };
 
 export const SOLO_KIND_LABELS: Record<ProEventKind, string> = {
+  pending: 'Vorgemerkt',
   planned: 'Offen',
   confirmed: 'Offen',
   done: 'Abgeschlossen',
@@ -57,6 +67,7 @@ export interface ProCalendarEvent {
 export function kindForEvent(event: CalendarEventDto, soloMode = false): ProEventKind {
   if (event.status === 'CANCELLED' || event.status === 'NO_SHOW') return 'cancelled';
   if (event.status === 'COMPLETED') return 'done';
+  if (event.customerConfirmationStatus === 'PENDING') return 'pending';
   if (soloMode || !event.employeeId) return 'open';
   if (event.status === 'CONFIRMED' || event.status === 'IN_PROGRESS') return 'confirmed';
   return 'planned';

@@ -48,6 +48,7 @@ export interface CalendarEventDto {
   employeeId: string | null;
   employeeName: string | null;
   status: string;
+  customerConfirmationStatus: string;
   assignmentStatus: string;
   seriesId: string | null;
   isFlexible: boolean;
@@ -169,6 +170,7 @@ export async function listCalendarEvents(
       ? `${appointment.assignedEmployee.firstName} ${appointment.assignedEmployee.lastName}`
       : null,
     status: appointment.status,
+    customerConfirmationStatus: appointment.customerConfirmationStatus,
     assignmentStatus: appointment.assignmentStatus,
     seriesId: appointment.seriesId,
     isFlexible: appointment.isFlexible,
@@ -282,6 +284,7 @@ export async function listCalendarEventsByIds(ids: string[]): Promise<CalendarEv
       ? `${appointment.assignedEmployee.firstName} ${appointment.assignedEmployee.lastName}`
       : null,
     status: appointment.status,
+    customerConfirmationStatus: appointment.customerConfirmationStatus,
     assignmentStatus: appointment.assignmentStatus,
     seriesId: appointment.seriesId,
     isFlexible: appointment.isFlexible,

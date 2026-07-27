@@ -73,7 +73,7 @@ import {
  *  2. Harte Filter: Wunschmitarbeiter, Verfügbarkeiten (Kunde ∩ Mitarbeiter),
  *     Abwesenheiten, Tageshöchstarbeitszeit, Mindestdauer 15 Minuten.
  *  3. Geografischer Vorfilter, dann Bewertung mit echten Fahrzeitmatrizen:
- *     Kandidat wird im 15-Minuten-Raster in die Route eingesetzt; nur
+ *     Kandidat wird im 5-Minuten-Raster in die Route eingesetzt; nur
  *     vollständig zulässige Zeitpläne werden Vorschläge.
  *  4. Deterministische Rangfolge; optional priorisiert Ollama und liefert
  *     Begründungen (niemals Entscheidungen über Machbarkeit).
@@ -1456,6 +1456,7 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
           endAt,
           durationMinutes: payload.dur,
           status: 'PLANNED',
+          customerConfirmationStatus: 'PENDING',
           assignmentStatus: 'ASSIGNED',
           isFlexible: true,
           earliestStartAt: minuteToUtc(flexWindow.startMinute),

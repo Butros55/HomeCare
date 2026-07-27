@@ -108,6 +108,12 @@ const timelineRevealVisible = {
 
 // Ereignisblöcke (Apple-Calendar-Look wie in der Referenz; Farbwelt = Status).
 const EVENT_STYLE: Record<ProEventKind, { block: string; rail: string; title: string }> = {
+  pending: {
+    block:
+      'border-orange-300/70 bg-orange-100/85 text-orange-950 shadow-orange-950/5 dark:border-orange-400/40 dark:bg-orange-500/20 dark:text-orange-100 md:shadow-md md:dark:border-orange-400/60 md:dark:bg-orange-500/30',
+    rail: 'bg-orange-500',
+    title: 'text-orange-950 dark:text-orange-50',
+  },
   planned: {
     block:
       'border-sky-300/60 bg-sky-200/75 text-sky-950 shadow-sky-950/5 dark:border-sky-400/40 dark:bg-sky-500/20 dark:text-sky-100 md:shadow-md md:dark:border-sky-400/60 md:dark:bg-sky-500/30',

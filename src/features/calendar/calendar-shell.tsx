@@ -684,6 +684,7 @@ export function CalendarShell(props: CalendarShellProps) {
 
 function toEventInput(event: CalendarEventDto, colorBy: string): EventInput {
   let color: string;
+  const pendingCustomerConfirmation = event.customerConfirmationStatus === 'PENDING';
   switch (colorBy) {
     case 'employee':
     case 'team':
@@ -695,6 +696,7 @@ function toEventInput(event: CalendarEventDto, colorBy: string): EventInput {
     default:
       color = event.customerColor;
   }
+  if (pendingCustomerConfirmation) color = 'var(--color-warning)';
   const cancelled = event.status === 'CANCELLED' || event.status === 'NO_SHOW';
   return {
     id: event.id,
@@ -715,6 +717,7 @@ function toEventInput(event: CalendarEventDto, colorBy: string): EventInput {
       cancelled,
       seriesId: event.seriesId,
       city: event.city,
+      pendingCustomerConfirmation,
     },
   };
 }
@@ -728,6 +731,7 @@ function renderEventContent(arg: EventContentArg) {
     unassigned: boolean;
     cancelled: boolean;
     seriesId: string | null;
+    pendingCustomerConfirmation: boolean;
   };
   const isList = arg.view.type.startsWith('list');
   return (
@@ -749,6 +753,7 @@ function renderEventContent(arg: EventContentArg) {
         {isList ? ` · ${arg.event.title}` : ''}
         {p.employeeName && isList ? ` · ${p.employeeName}` : ''}
         {p.unassigned ? ' · offen' : ''}
+        {p.pendingCustomerConfirmation ? ' · vorgemerkt' : ''}
       </span>
       {/* Marker oben rechts: Konflikt (auffällig) und/oder Serie (subtil). */}
       <span className="hcp-event-markers" aria-hidden>

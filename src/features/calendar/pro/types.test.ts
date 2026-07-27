@@ -7,6 +7,7 @@ import { kindForEvent, toProEvent } from './types';
 function event(
   status: string,
   employeeId: string | null = 'employee-1',
+  customerConfirmationStatus = 'NOT_REQUIRED',
 ): CalendarEventDto {
   return {
     id: 'appointment-1',
@@ -19,6 +20,7 @@ function event(
     employeeId,
     employeeName: employeeId ? 'Test Mitarbeiter' : null,
     status,
+    customerConfirmationStatus,
     assignmentStatus: employeeId ? 'ACCEPTED' : 'UNASSIGNED',
     seriesId: null,
     isFlexible: false,
@@ -52,5 +54,10 @@ describe('Pro-Kalender im Alleine-Modus', () => {
     expect(kindForEvent(event('PLANNED'), false)).toBe('planned');
     expect(kindForEvent(event('CONFIRMED'), false)).toBe('confirmed');
     expect(kindForEvent(event('PLANNED', null), false)).toBe('open');
+  });
+
+  it('zeigt eine offene Kundenbestätigung überall als vorgemerkt', () => {
+    expect(kindForEvent(event('PLANNED', 'employee-1', 'PENDING'), false)).toBe('pending');
+    expect(kindForEvent(event('PLANNED', 'employee-1', 'PENDING'), true)).toBe('pending');
   });
 });

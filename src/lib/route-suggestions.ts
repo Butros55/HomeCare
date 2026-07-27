@@ -8,7 +8,7 @@
  *     empfohlene Abfahrt berechnet, mit der der erste Termin inklusive
  *     Puffer erreichbar bleibt (planRouteWithAutoDeparture).
  *  3. Kandidaten-Bewertung: ein vorgeschlagener Einsatz wird im
- *     15-Minuten-Raster als fester Stopp in die Route eingesetzt; nur
+ *     5-Minuten-Raster als fester Stopp in die Route eingesetzt; nur
  *     vollständig zulässige Zeitpläne zählen. Ergebnis sind die Auswirkungen
  *     (Mehrfahrt, Wartezeit, Arbeitstag, Abfahrt/Rückkehr).
  *
@@ -303,7 +303,7 @@ export function sliceMatrix(full: Matrix, indices: number[]): Matrix {
   };
 }
 
-export const SUGGESTION_GRID_MINUTES = 15;
+export const SUGGESTION_GRID_MINUTES = 5;
 
 export interface CandidateEvaluationInput {
   /** Bestehende (ausgewählte) Stopps der Route. */

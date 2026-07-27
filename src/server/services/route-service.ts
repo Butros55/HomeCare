@@ -122,6 +122,8 @@ export interface RouteCandidate {
   title: string;
   customerName: string;
   customerColor: string;
+  customerPhone: string | null;
+  customerConfirmationStatus: 'NOT_REQUIRED' | 'PENDING' | 'CONFIRMED' | 'DECLINED';
   startAt: Date;
   endAt: Date;
   durationMinutes: number;
@@ -275,7 +277,15 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
         startAt: { gte: day.start, lt: day.end },
       },
       include: {
-        customer: { select: { firstName: true, lastName: true, color: true, routeNotes: true } },
+        customer: {
+          select: {
+            firstName: true,
+            lastName: true,
+            color: true,
+            phone: true,
+            routeNotes: true,
+          },
+        },
         locationAddress: true,
       },
       orderBy: { startAt: 'asc' },
@@ -291,7 +301,15 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
             startAt: { gte: day.start, lt: day.end },
           },
           include: {
-            customer: { select: { firstName: true, lastName: true, color: true, routeNotes: true } },
+            customer: {
+              select: {
+                firstName: true,
+                lastName: true,
+                color: true,
+                phone: true,
+                routeNotes: true,
+              },
+            },
             locationAddress: true,
           },
           orderBy: { startAt: 'asc' },
@@ -305,7 +323,9 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
           include: {
             appointment: {
               include: {
-                customer: { select: { firstName: true, lastName: true, color: true } },
+                customer: {
+                  select: { firstName: true, lastName: true, color: true, phone: true },
+                },
                 locationAddress: true,
               },
             },
@@ -323,6 +343,8 @@ export async function getRoutePlanningData(employeeId: string, dateInput: string
     title: appointment.title,
     customerName: `${appointment.customer.firstName} ${appointment.customer.lastName}`,
     customerColor: appointment.customer.color,
+    customerPhone: appointment.customer.phone,
+    customerConfirmationStatus: appointment.customerConfirmationStatus,
     startAt: appointment.startAt,
     endAt: appointment.endAt,
     durationMinutes: appointment.durationMinutes,
@@ -442,7 +464,9 @@ type PersistedPlan = Prisma.RoutePlanGetPayload<{
       include: {
         appointment: {
           include: {
-            customer: { select: { firstName: true; lastName: true; color: true } };
+            customer: {
+              select: { firstName: true; lastName: true; color: true; phone: true };
+            };
             locationAddress: true;
           };
         };
@@ -486,6 +510,8 @@ function savedRouteToDto(plan: PersistedPlan, stops: PersistedPlan['stops']) {
       title: stop.appointment.title,
       customerName: `${stop.appointment.customer.firstName} ${stop.appointment.customer.lastName}`,
       customerColor: stop.appointment.customer.color,
+      customerPhone: stop.appointment.customer.phone,
+      customerConfirmationStatus: stop.appointment.customerConfirmationStatus,
       addressLine: stop.appointment.locationAddress
         ? `${stop.appointment.locationAddress.street} ${stop.appointment.locationAddress.houseNumber}, ${stop.appointment.locationAddress.postalCode} ${stop.appointment.locationAddress.city}`
         : '',
@@ -545,7 +571,12 @@ export async function computeRoutePlan(input: ComputeRouteInput) {
       organizationId: ctx.organization.id,
       deletedAt: null,
     },
-    include: { locationAddress: true, customer: { select: { firstName: true, lastName: true, color: true } } },
+    include: {
+      locationAddress: true,
+      customer: {
+        select: { firstName: true, lastName: true, color: true, phone: true },
+      },
+    },
   });
   if (appointments.length === 0) {
     throw new AppError('ROUTE_NOT_FEASIBLE', { message: 'Keine Termine für die Route ausgewählt.' });
@@ -713,6 +744,8 @@ export async function computeRoutePlan(input: ComputeRouteInput) {
         title: appointment.title,
         customerName: `${appointment.customer.firstName} ${appointment.customer.lastName}`,
         customerColor: appointment.customer.color,
+        customerPhone: appointment.customer.phone,
+        customerConfirmationStatus: appointment.customerConfirmationStatus,
         addressLine: `${appointment.locationAddress!.street} ${appointment.locationAddress!.houseNumber}, ${appointment.locationAddress!.postalCode} ${appointment.locationAddress!.city}`,
         latitude: appointment.locationAddress!.latitude!,
         longitude: appointment.locationAddress!.longitude!,
@@ -730,6 +763,71 @@ export async function computeRoutePlan(input: ComputeRouteInput) {
 }
 
 export type ComputedRoute = Awaited<ReturnType<typeof computeRoutePlan>>;
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Markiert einen automatisch vorgeschlagenen Termin nach dem Telefonat als
+ * vom Kunden bestätigt. Manuell im Kalender angelegte Termine haben
+ * `NOT_REQUIRED` und laufen nicht durch diesen Schritt.
+ */
+export async function confirmSuggestedRouteAppointment(
+  appointmentId: string,
+): Promise<{ appointmentId: string; customerConfirmationStatus: 'CONFIRMED' }> {
+  const ctx = await requireOrganizationMembership();
+  const appointment = await db.appointment.findUnique({
+    where: { id: appointmentId },
+    select: {
+      id: true,
+      organizationId: true,
+      assignedEmployeeId: true,
+      status: true,
+      customerConfirmationStatus: true,
+    },
+  });
+  assertSameOrg(ctx, appointment);
+
+  const isOwn = appointment.assignedEmployeeId === ctx.employee?.id;
+  if (
+    !isOwn &&
+    !hasPermission(ctx, 'appointments.manage') &&
+    !hasPermission(ctx, 'routes.manage')
+  ) {
+    throw new AppError('ACCESS_DENIED');
+  }
+  if (appointment.customerConfirmationStatus !== 'PENDING') {
+    throw new AppError('VALIDATION_FAILED', {
+      message: 'Dieser Termin wartet nicht mehr auf eine Kundenbestätigung.',
+    });
+  }
+  if (appointment.status !== 'PLANNED') {
+    throw new AppError('VALIDATION_FAILED', {
+      message: 'Nur vorgemerkte, geplante Termine können bestätigt werden.',
+    });
+  }
+
+  await db.$transaction(async (tx) => {
+    await tx.appointment.update({
+      where: { id: appointment.id },
+      data: {
+        customerConfirmationStatus: 'CONFIRMED',
+        status: 'CONFIRMED',
+      },
+    });
+    await writeAuditLog(
+      {
+        organizationId: ctx.organization.id,
+        actorUserId: ctx.user.id,
+        action: 'appointment.customerConfirmed',
+        entityType: 'Appointment',
+        entityId: appointment.id,
+      },
+      tx,
+    );
+  });
+
+  return { appointmentId: appointment.id, customerConfirmationStatus: 'CONFIRMED' };
+}
 
 // ---------------------------------------------------------------------------
 
@@ -758,8 +856,28 @@ export async function saveRoutePlan(
     });
   }
   const date = fromDateInputValue(input.date)!;
+  const rescheduledFlexibleStops = computed.stops.filter((stop) => stop.isFlexible);
 
   const plan = await db.$transaction(async (tx) => {
+    // Die optimierte Zeit eines flexiblen Termins ist Teil des Ergebnisses,
+    // nicht nur eine Darstellung im Routenplan. So bleiben Kalender, Termin-
+    // Detail und Route nach dem Speichern synchron.
+    for (const stop of rescheduledFlexibleStops) {
+      await tx.appointment.updateMany({
+        where: {
+          id: stop.appointmentId,
+          organizationId: ctx.organization.id,
+          assignedEmployeeId: input.employeeId,
+          isFlexible: true,
+          deletedAt: null,
+        },
+        data: {
+          startAt: new Date(stop.serviceStartAt),
+          endAt: new Date(stop.serviceEndAt),
+        },
+      });
+    }
+
     // Bestehenden Plan des Tages ersetzen (eindeutig je Mitarbeiter+Datum).
     await tx.routePlan.deleteMany({
       where: { employeeId: input.employeeId, routeDate: date },
@@ -812,6 +930,9 @@ export async function saveRoutePlan(
           date: input.date,
           stops: computed.stops.length,
           warnings: computed.warnings.length,
+          rescheduledFlexibleAppointmentIds: rescheduledFlexibleStops.map(
+            (stop) => stop.appointmentId,
+          ),
         },
       },
       tx,
