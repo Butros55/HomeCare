@@ -42,12 +42,14 @@ import {
 import { CustomerHourTiles } from '@/features/hours/hour-detail-tiles';
 import { AccountHistoryList, AccountMonthSwitcher } from '@/features/hours/account-month';
 import { CustomerAppointmentButtons } from '@/features/appointments/create-appointment-button';
+import { CustomerAvailabilityEditor } from '@/features/customers/availability-editor';
 
 export const metadata: Metadata = { title: 'Kunde' };
 
 const TABS = [
   { key: 'uebersicht', label: 'Übersicht' },
   { key: 'termine', label: 'Termine' },
+  { key: 'verfuegbarkeit', label: 'Verfügbarkeit' },
   { key: 'stunden', label: 'Stunden' },
   { key: 'mitarbeiter', label: 'Mitarbeiter' },
   { key: 'route', label: 'Route & Karte' },
@@ -160,6 +162,13 @@ export default async function CustomerDetailPage({
           />
         ) : null}
         {tab === 'termine' ? <AppointmentsTab customerId={customerId} timezone={timezone} /> : null}
+        {tab === 'verfuegbarkeit' ? (
+          <AvailabilityTab
+            customerId={customerId}
+            slots={customer.availabilities}
+            canManage={canManage}
+          />
+        ) : null}
         {tab === 'stunden' ? (
           <HoursTab
             customerId={customerId}
@@ -394,6 +403,46 @@ async function OverviewTab({
         </PanelBody>
       </Panel>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/**
+ * Verfügbarkeit des Kunden – eigener Reiter (wie beim Mitarbeiter), damit die
+ * Zeitfenster unabhängig von den Stammdaten gepflegt werden können.
+ */
+function AvailabilityTab({
+  customerId,
+  slots,
+  canManage,
+}: {
+  customerId: string;
+  slots: { weekday: number; startTime: string; endTime: string }[];
+  canManage: boolean;
+}) {
+  return (
+    <Panel>
+      <PanelHeader>
+        <PanelTitle>Verfügbarkeit</PanelTitle>
+      </PanelHeader>
+      <PanelBody className="space-y-3">
+        <p className="text-[length:var(--text-sm)] text-[var(--color-ink-muted)]">
+          Wochenzeitfenster, in denen der Kunde Termine wahrnehmen kann. Sie begrenzen die
+          Terminvorschläge der Routenplanung; liegt ein Termin außerhalb, wird das im
+          Termin-Detail mit den konkreten Zeiten benannt.
+        </p>
+        <CustomerAvailabilityEditor
+          customerId={customerId}
+          initialSlots={slots.map((slot) => ({
+            weekday: slot.weekday,
+            startTime: slot.startTime,
+            endTime: slot.endTime,
+          }))}
+          readOnly={!canManage}
+        />
+      </PanelBody>
+    </Panel>
   );
 }
 

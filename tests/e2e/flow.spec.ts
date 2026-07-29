@@ -117,7 +117,8 @@ test('5–8: Serientermin anlegen, im Kalender sehen, Anna zuweisen', async ({ p
   await selectOption(page, 'Mitarbeiter zuweisen', /Anna Berg/);
   // 16:00 liegt außerhalb von Annas Verfügbarkeit → Konfliktwarnung ist Pflicht.
   await expect(page.getByRole('alertdialog', { name: 'Trotz Warnungen zuweisen?' })).toBeVisible();
-  await expect(page.getByText('außerhalb der hinterlegten Verfügbarkeit')).toBeVisible();
+  // Die Meldung nennt konkret Terminzeit + Wochentag + die hinterlegten Fenster.
+  await expect(page.getByText(/liegt außerhalb der Verfügbarkeit von Anna Berg/)).toBeVisible();
   await page.getByRole('button', { name: 'Trotzdem zuweisen' }).click();
   await expect(page.getByText('Mitarbeiter zugewiesen.')).toBeVisible();
 });

@@ -280,6 +280,19 @@ export async function collectConflicts(
         select: { latitude: true, longitude: true },
       });
 
+  // Zeitfenster des Kunden (keine Einträge = uneingeschränkt) – damit die
+  // Meldung konkret sagen kann, wann der Kunde überhaupt kann.
+  const [customer, customerAvailabilities] = await Promise.all([
+    db.customer.findUnique({
+      where: { id: candidate.customerId },
+      select: { firstName: true, lastName: true },
+    }),
+    db.customerAvailability.findMany({
+      where: { customerId: candidate.customerId },
+      select: { weekday: true, startTime: true, endTime: true },
+    }),
+  ]);
+
   let existingAppointments: Prisma.AppointmentGetPayload<{
     include: {
       locationAddress: { select: { latitude: true; longitude: true } };
@@ -290,6 +303,7 @@ export async function collectConflicts(
   let availabilities: { weekday: number; startTime: string; endTime: string }[] = [];
   let maximumMinutesPerDay: number | null = null;
   let plannedMinutesSameDay = 0;
+  let employeeLabel: string | null = null;
   let travel: Parameters<typeof checkAppointmentConflicts>[0]['travel'];
 
   if (candidate.assignedEmployeeId) {
@@ -300,7 +314,7 @@ export async function collectConflicts(
     const [employee, appointments, absenceRows, availabilityRows] = await Promise.all([
       db.employee.findUnique({
         where: { id: candidate.assignedEmployeeId },
-        select: { maximumMinutesPerDay: true },
+        select: { maximumMinutesPerDay: true, firstName: true, lastName: true },
       }),
       db.appointment.findMany({
         where: {
@@ -341,6 +355,7 @@ export async function collectConflicts(
     absences = absenceRows;
     availabilities = availabilityRows;
     maximumMinutesPerDay = employee?.maximumMinutesPerDay ?? null;
+    employeeLabel = employee ? `${employee.firstName} ${employee.lastName}` : null;
     plannedMinutesSameDay = appointments
       .filter((a) => a.startAt >= day.start && a.startAt < day.end)
       .reduce((sum, a) => sum + a.durationMinutes, 0);
@@ -420,6 +435,14 @@ export async function collectConflicts(
     })),
     absences,
     availabilities,
+    // Im Alleine-Modus ist „der Mitarbeiter" der Nutzer selbst.
+    availabilityOwner: ctx.organization.soloMode
+      ? 'deiner Verfügbarkeit'
+      : employeeLabel
+        ? `der Verfügbarkeit von ${employeeLabel}`
+        : 'der Verfügbarkeit des Mitarbeiters',
+    customerAvailabilities,
+    customerName: customer ? `${customer.firstName} ${customer.lastName}` : undefined,
     maximumMinutesPerDay,
     plannedMinutesSameDay,
     travel,

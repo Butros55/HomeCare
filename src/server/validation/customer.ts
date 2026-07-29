@@ -75,8 +75,6 @@ export const customerFormSchema = z.object({
     .min(15, 'Mindestens 15 Minuten.')
     .max(600, 'Höchstens 10 Stunden.')
     .default(120),
-  /** Verfügbarkeits-Zeitfenster (leer = alle Tage und Zeiten möglich). */
-  availability: availabilityListSchema,
   address: z.object({
     street: z.string().trim().min(1, 'Straße ist erforderlich.').max(150),
     houseNumber: z.string().trim().min(1, 'Hausnummer ist erforderlich.').max(20),
@@ -99,6 +97,18 @@ export const customerFormSchema = z.object({
 
 export type CustomerFormInput = z.input<typeof customerFormSchema>;
 export type CustomerFormData = z.output<typeof customerFormSchema>;
+
+/**
+ * Verfügbarkeit des Kunden – eigener Bereich (Reiter „Verfügbarkeit"), analog
+ * zum Mitarbeiter. Bewusst NICHT Teil des Kundenformulars: sonst würde jedes
+ * Speichern der Stammdaten die Zeitfenster mitschreiben (und leer überschreiben).
+ */
+export const customerAvailabilityFormSchema = z.object({
+  customerId: z.string().min(1),
+  slots: availabilityListSchema,
+});
+export type CustomerAvailabilityFormInput = z.input<typeof customerAvailabilityFormSchema>;
+export type CustomerAvailabilityFormData = z.output<typeof customerAvailabilityFormSchema>;
 
 export const customerListParamsSchema = z.object({
   q: z.string().trim().max(100).optional(),

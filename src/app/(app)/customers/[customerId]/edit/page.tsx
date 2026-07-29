@@ -69,11 +69,6 @@ export default async function EditCustomerPage({
                 : '',
               routeNotes: customer.routeNotes ?? '',
               defaultAppointmentDurationMinutes: customer.defaultAppointmentDurationMinutes,
-              availability: customer.availabilities.map((slot) => ({
-                weekday: slot.weekday,
-                startTime: slot.startTime,
-                endTime: slot.endTime,
-              })),
               address: {
                 street: address?.street ?? '',
                 houseNumber: address?.houseNumber ?? '',

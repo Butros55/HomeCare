@@ -9,11 +9,17 @@ import {
   archiveCustomer,
   createCustomer,
   importCustomersCsv,
+  replaceCustomerAvailability,
   restoreCustomer,
   updateCustomer,
   type CustomerImportResult,
 } from '@/server/services/customer-service';
-import { customerFormSchema, type CustomerFormInput } from '@/server/validation/customer';
+import {
+  customerAvailabilityFormSchema,
+  customerFormSchema,
+  type CustomerAvailabilityFormInput,
+  type CustomerFormInput,
+} from '@/server/validation/customer';
 
 /**
  * Kundenadressen fließen in Karte, Routenplanung, Kalender und Dashboard ein –
@@ -46,6 +52,19 @@ export async function updateCustomerAction(
     const data = customerFormSchema.parse(input);
     await updateCustomer(customerId, data);
     revalidateCustomerViews(customerId);
+    return { done: true as const };
+  });
+}
+
+/** Verfügbarkeit des Kunden (eigener Reiter) – ersetzt alle Zeitfenster. */
+export async function replaceCustomerAvailabilityAction(
+  input: CustomerAvailabilityFormInput,
+): Promise<ActionResult<{ done: true }>> {
+  return runAction(async () => {
+    const data = customerAvailabilityFormSchema.parse(input);
+    await replaceCustomerAvailability(data);
+    // Zeitfenster steuern Terminvorschläge und Konfliktwarnungen.
+    revalidateCustomerViews(data.customerId);
     return { done: true as const };
   });
 }

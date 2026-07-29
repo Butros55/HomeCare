@@ -18,6 +18,7 @@ export type ConflictType =
   | 'OVERLAP'
   | 'ABSENCE'
   | 'OUTSIDE_AVAILABILITY'
+  | 'OUTSIDE_CUSTOMER_AVAILABILITY'
   | 'INSUFFICIENT_TRAVEL_TIME'
   | 'DAY_MAX_EXCEEDED'
   | 'OUTSIDE_CUSTOMER_WINDOW'
@@ -81,6 +82,16 @@ export interface ConflictCheckInput {
   existingAppointments: ExistingAppointment[];
   absences: AbsenceSlot[];
   availabilities: AvailabilitySlot[];
+  /**
+   * Wendung nach „außerhalb …" für `availabilities` – damit sofort klar ist,
+   * WESSEN Verfügbarkeit verletzt wird: „deiner Verfügbarkeit" im Alleine-Modus,
+   * „der Verfügbarkeit von Anna Meier" im Team.
+   */
+  availabilityOwner?: string;
+  /** Wochenzeitfenster des Kunden (leer = keine Einschränkung). */
+  customerAvailabilities?: AvailabilitySlot[];
+  /** Kundenname für die Meldung („… der Zeitfenster von Tim Bojer"). */
+  customerName?: string;
   maximumMinutesPerDay?: number | null;
   /** Bereits geplante Minuten des Mitarbeiters am selben Kalendertag (ohne Kandidat). */
   plannedMinutesSameDay?: number;
@@ -99,6 +110,64 @@ export interface ConflictCheckInput {
 
 const fmtTime = (date: Date, timezone: string) =>
   new Intl.DateTimeFormat('de-DE', { timeZone: timezone, hour: '2-digit', minute: '2-digit' }).format(date);
+
+const WEEKDAY_NAMES = [
+  'Montag',
+  'Dienstag',
+  'Mittwoch',
+  'Donnerstag',
+  'Freitag',
+  'Samstag',
+  'Sonntag',
+];
+
+/** „08:00–12:00 und 14:00–17:00" – die Fenster eines Wochentags lesbar auflisten. */
+function describeWindows(slots: AvailabilitySlot[]): string {
+  return slots
+    .slice()
+    .sort((a, b) => a.startTime.localeCompare(b.startTime))
+    .map((slot) => `${slot.startTime}–${slot.endTime}`)
+    .join(' und ');
+}
+
+/** Die Wochentage, an denen überhaupt Fenster gepflegt sind (Kurzform). */
+function describeOtherDays(slots: AvailabilitySlot[]): string {
+  const byDay = new Map<number, AvailabilitySlot[]>();
+  for (const slot of slots) {
+    const list = byDay.get(slot.weekday) ?? [];
+    list.push(slot);
+    byDay.set(slot.weekday, list);
+  }
+  return [...byDay.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([day, list]) => `${WEEKDAY_NAMES[day - 1]} ${describeWindows(list)}`)
+    .join(', ');
+}
+
+/**
+ * Konkrete Meldung für „außerhalb der Verfügbarkeit": nennt die Terminzeit, den
+ * Wochentag und die tatsächlich hinterlegten Zeitfenster – so ist ohne
+ * Nachschlagen klar, warum es klemmt und wann es stattdessen passen würde.
+ * `subject` ist die vollständige Wendung nach „außerhalb", z. B. „deiner
+ * Verfügbarkeit" oder „der Zeitfenster von Tim Bojer".
+ */
+function availabilityMessage(
+  subject: string,
+  weekday: number,
+  appointmentRange: string,
+  slots: AvailabilitySlot[],
+): string {
+  const dayName = WEEKDAY_NAMES[weekday - 1] ?? 'an diesem Tag';
+  const sameDay = slots.filter((slot) => slot.weekday === weekday);
+  const head = `Der Termin (${appointmentRange}) liegt außerhalb ${subject}`;
+  if (sameDay.length > 0) {
+    return `${head}: ${dayName} nur ${describeWindows(sameDay)}.`;
+  }
+  const others = describeOtherDays(slots);
+  return others
+    ? `${head}: ${dayName} ist gar keine Zeit hinterlegt (möglich: ${others}).`
+    : `${head}: ${dayName} ist keine Zeit hinterlegt.`;
+}
 
 export function checkAppointmentConflicts(input: ConflictCheckInput): Conflict[] {
   const conflicts: Conflict[] = [];
@@ -152,12 +221,14 @@ export function checkAppointmentConflicts(input: ConflictCheckInput): Conflict[]
     }
   }
 
-  // 4) Außerhalb der Verfügbarkeit (nur wenn überhaupt Verfügbarkeiten gepflegt sind).
-  if (candidate.assignedEmployeeId && input.availabilities.length > 0) {
-    const weekday = isoWeekdayInZone(candidate.startAt, timezone);
-    const startMinutes = minutesOfDayInZone(candidate.startAt, timezone);
-    const endMinutes = startMinutes + candidate.durationMinutes;
-    const covered = input.availabilities.some((slot) => {
+  // 4) Außerhalb der Verfügbarkeit (nur wenn überhaupt Verfügbarkeiten gepflegt
+  //    sind – keine Einträge heißen ausdrücklich „immer möglich").
+  const weekday = isoWeekdayInZone(candidate.startAt, timezone);
+  const appointmentRange = `${fmtTime(candidate.startAt, timezone)}–${fmtTime(candidate.endAt, timezone)}`;
+  const startMinutes = minutesOfDayInZone(candidate.startAt, timezone);
+  const endMinutes = startMinutes + candidate.durationMinutes;
+  const coveredBy = (slots: AvailabilitySlot[]) =>
+    slots.some((slot) => {
       if (slot.weekday !== weekday) return false;
       const [sh, sm] = slot.startTime.split(':').map(Number);
       const [eh, em] = slot.endTime.split(':').map(Number);
@@ -165,13 +236,37 @@ export function checkAppointmentConflicts(input: ConflictCheckInput): Conflict[]
       const slotEnd = (eh ?? 0) * 60 + (em ?? 0);
       return startMinutes >= slotStart && endMinutes <= slotEnd;
     });
-    if (!covered) {
+
+  if (candidate.assignedEmployeeId && input.availabilities.length > 0) {
+    if (!coveredBy(input.availabilities)) {
       conflicts.push({
         type: 'OUTSIDE_AVAILABILITY',
         severity: 'WARNING',
-        message: 'Der Termin liegt außerhalb der hinterlegten Verfügbarkeit.',
+        message: availabilityMessage(
+          input.availabilityOwner ?? 'der Verfügbarkeit des Mitarbeiters',
+          weekday,
+          appointmentRange,
+          input.availabilities,
+        ),
       });
     }
+  }
+
+  // 4b) Außerhalb der Zeitfenster des KUNDEN – zeigt direkt, wann der Kunde kann.
+  const customerSlots = input.customerAvailabilities ?? [];
+  if (customerSlots.length > 0 && !coveredBy(customerSlots)) {
+    conflicts.push({
+      type: 'OUTSIDE_CUSTOMER_AVAILABILITY',
+      severity: 'WARNING',
+      message: availabilityMessage(
+        input.customerName
+          ? `der Zeitfenster von ${input.customerName}`
+          : 'der Zeitfenster des Kunden',
+        weekday,
+        appointmentRange,
+        customerSlots,
+      ),
+    });
   }
 
   // 5) Unzureichende Fahrzeit zwischen Terminen.

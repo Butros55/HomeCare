@@ -165,6 +165,54 @@ describe('checkAppointmentConflicts', () => {
     expect(checkAppointmentConflicts(baseInput({ availabilities: [] }))).toEqual([]);
   });
 
+  it('nennt Terminzeit, Wochentag und die konkreten Zeitfenster', () => {
+    const [conflict] = checkAppointmentConflicts(
+      baseInput({
+        availabilities: [
+          { weekday: 3, startTime: '12:00', endTime: '16:00' },
+          { weekday: 3, startTime: '18:00', endTime: '20:00' },
+        ],
+        availabilityOwner: 'deiner Verfügbarkeit',
+      }),
+    );
+    expect(conflict?.message).toBe(
+      'Der Termin (09:00–11:00) liegt außerhalb deiner Verfügbarkeit: Mittwoch nur 12:00–16:00 und 18:00–20:00.',
+    );
+  });
+
+  it('sagt es klar, wenn am Wochentag gar keine Zeit hinterlegt ist', () => {
+    const [conflict] = checkAppointmentConflicts(
+      baseInput({
+        availabilities: [{ weekday: 1, startTime: '08:00', endTime: '12:00' }],
+        availabilityOwner: 'der Verfügbarkeit von Anna Meier',
+      }),
+    );
+    expect(conflict?.message).toBe(
+      'Der Termin (09:00–11:00) liegt außerhalb der Verfügbarkeit von Anna Meier: Mittwoch ist gar keine Zeit hinterlegt (möglich: Montag 08:00–12:00).',
+    );
+  });
+
+  it('warnt auch, wenn der Termin außerhalb der Zeitfenster des Kunden liegt', () => {
+    const conflicts = checkAppointmentConflicts(
+      baseInput({
+        customerAvailabilities: [{ weekday: 3, startTime: '13:00', endTime: '17:00' }],
+        customerName: 'Tim Bojer',
+      }),
+    );
+    expect(conflicts.map((c) => c.type)).toEqual(['OUTSIDE_CUSTOMER_AVAILABILITY']);
+    expect(conflicts[0]?.message).toBe(
+      'Der Termin (09:00–11:00) liegt außerhalb der Zeitfenster von Tim Bojer: Mittwoch nur 13:00–17:00.',
+    );
+  });
+
+  it('ohne Kundenzeitfenster gilt „alle Zeiten möglich"', () => {
+    expect(checkAppointmentConflicts(baseInput({ customerAvailabilities: [] }))).toEqual([]);
+    const inside = checkAppointmentConflicts(
+      baseInput({ customerAvailabilities: [{ weekday: 3, startTime: '08:00', endTime: '12:00' }] }),
+    );
+    expect(inside).toEqual([]);
+  });
+
   it('erkennt unzureichende Fahrzeit vom Vorgänger', () => {
     const conflicts = checkAppointmentConflicts(
       baseInput({

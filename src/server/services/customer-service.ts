@@ -29,6 +29,7 @@ import {
 } from '@/server/services/hours-service';
 import {
   customerFormSchema,
+  type CustomerAvailabilityFormData,
   type CustomerFormData,
   type CustomerListParams,
 } from '@/server/validation/customer';
@@ -223,6 +224,7 @@ export async function getCustomerDetail(customerId: string) {
     include: {
       addresses: { orderBy: { label: 'asc' } },
       preferredEmployee: { select: { id: true, firstName: true, lastName: true, status: true } },
+      availabilities: { orderBy: [{ weekday: 'asc' }, { startTime: 'asc' }] },
     },
   });
   assertSameOrg(ctx, customer);
@@ -326,16 +328,6 @@ export async function createCustomer(data: CustomerFormData): Promise<{ customer
         defaultAppointmentDurationMinutes: data.defaultAppointmentDurationMinutes,
       },
     });
-    if (data.availability.length > 0) {
-      await tx.customerAvailability.createMany({
-        data: data.availability.map((slot) => ({
-          customerId: created.id,
-          weekday: slot.weekday,
-          startTime: slot.startTime,
-          endTime: slot.endTime,
-        })),
-      });
-    }
     await tx.address.create({
       data: {
         organizationId: orgId,
@@ -436,18 +428,9 @@ export async function updateCustomer(
       },
     });
 
-    // Verfügbarkeits-Zeitfenster vollständig ersetzen (leer = uneingeschränkt).
-    await tx.customerAvailability.deleteMany({ where: { customerId } });
-    if (data.availability.length > 0) {
-      await tx.customerAvailability.createMany({
-        data: data.availability.map((slot) => ({
-          customerId,
-          weekday: slot.weekday,
-          startTime: slot.startTime,
-          endTime: slot.endTime,
-        })),
-      });
-    }
+    // Verfügbarkeits-Zeitfenster werden hier bewusst NICHT angefasst – sie haben
+    // einen eigenen Bereich (replaceCustomerAvailability), damit das Speichern
+    // der Stammdaten sie nicht überschreibt.
 
     if (address) {
       await tx.address.update({
@@ -499,6 +482,44 @@ export async function updateCustomer(
         entityType: 'Customer',
         entityId: customerId,
         metadata: { changedFields, addressChanged },
+      },
+      tx,
+    );
+  });
+}
+
+/**
+ * Wochenzeitfenster des Kunden vollständig ersetzen (eigener Bereich, analog zur
+ * Mitarbeiter-Verfügbarkeit). Eine leere Liste heißt ausdrücklich „alle Tage und
+ * Zeiten möglich" – deshalb ist Leeren erlaubt und kein Fehler.
+ */
+export async function replaceCustomerAvailability(
+  input: CustomerAvailabilityFormData,
+): Promise<void> {
+  const ctx = await requirePermission('customers.manage');
+  const customer = await db.customer.findUnique({ where: { id: input.customerId } });
+  assertSameOrg(ctx, customer);
+
+  await db.$transaction(async (tx) => {
+    await tx.customerAvailability.deleteMany({ where: { customerId: input.customerId } });
+    if (input.slots.length > 0) {
+      await tx.customerAvailability.createMany({
+        data: input.slots.map((slot) => ({
+          customerId: input.customerId,
+          weekday: slot.weekday,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+        })),
+      });
+    }
+    await writeAuditLog(
+      {
+        organizationId: ctx.organization.id,
+        actorUserId: ctx.user.id,
+        action: 'customer.availability.updated',
+        entityType: 'Customer',
+        entityId: input.customerId,
+        metadata: { slotCount: input.slots.length },
       },
       tx,
     );
