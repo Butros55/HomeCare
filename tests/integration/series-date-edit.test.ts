@@ -70,6 +70,13 @@ describe('Serientermin mit Datumswechsel bearbeiten (Team-Modus)', () => {
   }
 
   const dayOf = (d: Date) => d.toISOString().slice(0, 10);
+  const toUtc = (day: string) => new Date(`${day}T00:00:00.000Z`);
+  const startOfTodayUtc = () => {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  };
+  const addDaysUtc = (date: Date, days: number) =>
+    new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 
   it('Ganze Serie: Datumswechsel verschiebt den Serienstart (Wochentag folgt)', async () => {
     const seriesId = await makeWeeklySeries('2026-08-05'); // Mittwoch
@@ -155,6 +162,94 @@ describe('Serientermin mit Datumswechsel bearbeiten (Team-Modus)', () => {
     );
     expect(events.length).toBeGreaterThan(0);
     expect(events.some((e) => e.seriesId === goodId)).toBe(true);
+  });
+
+  it('Ganze Serie verschieben: offene Vorkommen vor dem neuen Start entfallen', async () => {
+    // Serienstart in der Vergangenheit (heute ist im Test der echte Tag) – nach
+    // dem Verschieben darf am alten Starttag KEIN verwaister Termin bleiben.
+    const past = dayOf(addDaysUtc(startOfTodayUtc(), -2));
+    const future = dayOf(addDaysUtc(startOfTodayUtc(), 14));
+    const seriesId = await makeWeeklySeries(past);
+    expect(await db.appointment.count({ where: { seriesId, occurrenceDate: toUtc(past) } })).toBe(1);
+
+    const first = await db.appointment.findFirstOrThrow({
+      where: { seriesId },
+      orderBy: { startAt: 'asc' },
+    });
+    await updateAppointment(first.id, { date: future, startTime: '10:00' }, { scope: 'all', confirmed: true });
+
+    const series = await db.appointmentSeries.findUniqueOrThrow({ where: { id: seriesId } });
+    expect(dayOf(series.startDate)).toBe(future);
+    const remaining = await db.appointment.findMany({ where: { seriesId }, orderBy: { startAt: 'asc' } });
+    expect(remaining.length).toBeGreaterThan(0);
+    // Kein Vorkommen mehr vor dem neuen Serienstart, insbesondere nicht am alten.
+    expect(remaining.every((a) => dayOf(a.occurrenceDate!) >= future)).toBe(true);
+    expect(dayOf(remaining[0]!.occurrenceDate!)).toBe(future);
+  });
+
+  it('Ganze Serie verschieben: abgeschlossene Vorkommen bleiben als Historie', async () => {
+    const past = dayOf(addDaysUtc(startOfTodayUtc(), -2));
+    const future = dayOf(addDaysUtc(startOfTodayUtc(), 14));
+    const seriesId = await makeWeeklySeries(past);
+    const oldFirst = await db.appointment.findFirstOrThrow({
+      where: { seriesId },
+      orderBy: { startAt: 'asc' },
+    });
+    await db.appointment.update({
+      where: { id: oldFirst.id },
+      data: { status: 'COMPLETED', completedAt: new Date() },
+    });
+
+    const next = await db.appointment.findFirstOrThrow({
+      where: { seriesId, status: 'PLANNED' },
+      orderBy: { startAt: 'asc' },
+    });
+    await updateAppointment(next.id, { date: future, startTime: '10:00' }, { scope: 'all', confirmed: true });
+
+    const kept = await db.appointment.findUnique({ where: { id: oldFirst.id } });
+    expect(kept?.status).toBe('COMPLETED');
+  });
+
+  it('Dieser und folgende auf dem Serienstart verschiebt die ganze Serie (ohne Rest am alten Tag)', async () => {
+    const past = dayOf(addDaysUtc(startOfTodayUtc(), -2));
+    const future = dayOf(addDaysUtc(startOfTodayUtc(), 14));
+    const seriesId = await makeWeeklySeries(past);
+    const first = await db.appointment.findFirstOrThrow({
+      where: { seriesId },
+      orderBy: { startAt: 'asc' },
+    });
+
+    await updateAppointment(first.id, { date: future, startTime: '10:00' }, { scope: 'following', confirmed: true });
+
+    // Kein Split: es bleibt bei genau einer Serie, verschoben auf das neue Datum.
+    expect(await db.appointmentSeries.count({ where: { customerId } })).toBe(1);
+    const series = await db.appointmentSeries.findUniqueOrThrow({ where: { id: seriesId } });
+    expect(dayOf(series.startDate)).toBe(future);
+    const remaining = await db.appointment.findMany({ where: { seriesId } });
+    expect(remaining.every((a) => dayOf(a.occurrenceDate!) >= future)).toBe(true);
+  });
+
+  it('liefert nach einer Serienänderung eine gültige Termin-ID zurück (nicht die gelöschte)', async () => {
+    // Der Drawer lädt danach den Termin nach – zeigte die ID ins Leere, meldete
+    // die UI „Unerwarteter Fehler" und der Kalender lud komplett neu.
+    const future = dayOf(addDaysUtc(startOfTodayUtc(), 7));
+    const later = dayOf(addDaysUtc(startOfTodayUtc(), 21));
+    const seriesId = await makeWeeklySeries(future);
+    const first = await db.appointment.findFirstOrThrow({
+      where: { seriesId },
+      orderBy: { startAt: 'asc' },
+    });
+
+    const result = await updateAppointment(
+      first.id,
+      { date: later, startTime: '10:00' },
+      { scope: 'all', confirmed: true },
+    );
+    if (result.requiresConfirmation) throw new Error('unerwartete Rückfrage');
+    expect(result.appointmentId).toBeTruthy();
+    const target = await db.appointment.findUnique({ where: { id: result.appointmentId! } });
+    expect(target).not.toBeNull();
+    expect(dayOf(target!.occurrenceDate!)).toBe(later);
   });
 
   it('ohne Datumswechsel bleibt es bei einer Serie (nur Zeit ändern)', async () => {

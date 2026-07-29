@@ -90,7 +90,7 @@ function failureMessage(result: { message: string; details?: unknown }): string 
 
 /** Detail-Drawer eines Termins mit allen Aktionen (Anforderung 13). */
 export function AppointmentDrawer({
-  appointmentId,
+  appointmentId: appointmentIdProp,
   onClose,
   canManage,
   soloMode = false,
@@ -126,6 +126,15 @@ export function AppointmentDrawer({
   onUpsert?: (ids: string[]) => void;
 }) {
   const router = useRouter();
+  // Serienweite Änderungen erzeugen das bearbeitete Vorkommen neu – es bekommt
+  // eine neue ID. Der Drawer folgt ihr, statt auf einen gelöschten Termin zu
+  // zeigen (das meldete zuvor „Unerwarteter Fehler" und schloss den Drawer).
+  const [appointmentId, setAppointmentId] = React.useState(appointmentIdProp);
+  const [lastPropId, setLastPropId] = React.useState(appointmentIdProp);
+  if (appointmentIdProp !== lastPropId) {
+    setLastPropId(appointmentIdProp);
+    setAppointmentId(appointmentIdProp);
+  }
   const [detail, setDetail] = React.useState<Detail | null>(null);
   const [editOpen, setEditOpen] = React.useState(false);
   const [cancelOpen, setCancelOpen] = React.useState(false);
@@ -508,14 +517,14 @@ export function AppointmentDrawer({
 
                   {resolution ? (
                     <div className="mt-3 rounded-[var(--radius-md)] border border-[var(--color-line)] bg-[var(--color-panel)] p-2.5">
+                      {/* Ohne umplanbare Termine wird NUR der konkrete Grund gezeigt –
+                          nicht zusätzlich ein allgemeines „geht nicht" (doppelte Meldung). */}
                       <p className="text-[length:var(--text-xs)] font-medium text-[var(--color-ink-muted)]">
-                        Vorschlag – flexible Termine werden umgeplant, fixe bleiben:
+                        {resolution.moves.length === 0
+                          ? 'Automatisch umplanen ist hier nicht möglich:'
+                          : 'Vorschlag – flexible Termine werden umgeplant, fixe bleiben:'}
                       </p>
-                      {resolution.moves.length === 0 ? (
-                        <p className="mt-1.5 text-[length:var(--text-sm)]">
-                          Kein automatischer Vorschlag möglich – bitte manuell anpassen.
-                        </p>
-                      ) : (
+                      {resolution.moves.length > 0 ? (
                         <ul className="mt-1.5 space-y-1 text-[length:var(--text-sm)]">
                           {resolution.moves.map((move) => (
                             <li key={move.appointmentId} className="flex flex-wrap items-center gap-1">
@@ -529,34 +538,48 @@ export function AppointmentDrawer({
                             </li>
                           ))}
                         </ul>
-                      )}
+                      ) : null}
                       {resolution.unresolved.length > 0 ? (
-                        <ul className="mt-1.5 space-y-1 text-[length:var(--text-xs)] text-[var(--color-danger)]">
+                        <ul
+                          className={cn(
+                            'mt-1.5 space-y-1',
+                            resolution.moves.length === 0
+                              ? 'text-[length:var(--text-sm)] text-[var(--color-ink)]'
+                              : 'text-[length:var(--text-xs)] text-[var(--color-danger)]',
+                          )}
+                        >
                           {resolution.unresolved.map((item) => (
                             <li key={item.appointmentId}>
-                              {item.title}: {item.reason}
+                              {resolution.moves.length === 0 ? item.reason : `${item.title}: ${item.reason}`}
                             </li>
                           ))}
                         </ul>
+                      ) : resolution.moves.length === 0 ? (
+                        <p className="mt-1.5 text-[length:var(--text-sm)]">
+                          Es gibt keinen flexiblen Termin, der sich verschieben ließe – bitte manuell
+                          anpassen.
+                        </p>
                       ) : null}
                       <div className="mt-2.5 flex justify-end gap-2">
+                        {/* Ohne Vorschlag gibt es nichts zu übernehmen – dann nur schließen. */}
                         <Button
-                          variant="ghost"
+                          variant={resolution.moves.length === 0 ? 'secondary' : 'ghost'}
                           size="sm"
                           onClick={() => setResolution(null)}
                           disabled={resolving}
                         >
-                          Verwerfen
+                          {resolution.moves.length === 0 ? 'Verstanden' : 'Verwerfen'}
                         </Button>
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          loading={resolving}
-                          disabled={resolution.moves.length === 0}
-                          onClick={applyResolution}
-                        >
-                          <Check aria-hidden /> Übernehmen
-                        </Button>
+                        {resolution.moves.length > 0 ? (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            loading={resolving}
+                            onClick={applyResolution}
+                          >
+                            <Check aria-hidden /> Übernehmen
+                          </Button>
+                        ) : null}
                       </div>
                     </div>
                   ) : conflictInfo.canResolve ? (
@@ -573,8 +596,10 @@ export function AppointmentDrawer({
 
                   {/* Umweisung: freie + nächstgelegene Mitarbeiter. Hilft
                       besonders bei „außerhalb Verfügbarkeit" – da löst ein
-                      anderer Mitarbeiter den Konflikt, nicht das Umplanen. */}
-                  {canManage && detail?.employee ? (
+                      anderer Mitarbeiter den Konflikt, nicht das Umplanen.
+                      Im Alleine-Modus gibt es niemanden zum Umweisen – dort wird
+                      die Umweisung komplett ausgeblendet. */}
+                  {canManage && !soloMode && detail?.employee ? (
                     <div className="mt-2.5">
                       {!replacements ? (
                         <Button
@@ -915,11 +940,18 @@ export function AppointmentDrawer({
           open={editOpen}
           onOpenChange={setEditOpen}
           onChanged={(opts) => {
-            load();
-            loadConflicts();
+            // Wurde das Vorkommen neu erzeugt (Serienänderung), zeigt der Drawer
+            // ab jetzt auf die neue ID – der Nachlade-Effekt greift automatisch.
+            const nextId = opts?.appointmentIds?.[0];
+            if (nextId && nextId !== appointmentId) {
+              setAppointmentId(nextId);
+            } else {
+              load();
+              loadConflicts();
+            }
             if (opts?.seriesWide) {
-              // Serienweite Bearbeitung betrifft viele Termine → kompletter
-              // (async) Refetch statt gezieltem Einzel-Upsert.
+              // Serienweite Bearbeitung betrifft viele Termine → stiller Refetch
+              // im Hintergrund (die Termine bleiben sichtbar, kein Neuladen).
               if (onChanged) onChanged();
               else router.refresh();
             } else {

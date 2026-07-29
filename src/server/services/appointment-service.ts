@@ -970,6 +970,12 @@ export async function updateAppointment(
     });
   };
 
+  // Serienweite Änderungen erzeugen die betroffenen Vorkommen neu – der
+  // bearbeitete Termin bekommt dabei eine NEUE ID. Damit der Aufrufer (Drawer,
+  // Kalender) danach nicht auf eine gelöschte ID zeigt, wird die ID des
+  // Termins zurückgegeben, der das bearbeitete Vorkommen jetzt repräsentiert.
+  let resultAppointmentId = appointment.id;
+
   if (options.scope === 'single' || !appointment.seriesId || !appointment.series) {
     await applySingle();
   } else {
@@ -1087,6 +1093,11 @@ export async function updateAppointment(
       );
       await materializeSeries(series.id);
       await materializeSeries(newSeriesId);
+      resultAppointmentId = await resolveOccurrenceAppointmentId(
+        appointment.id,
+        newSeriesId,
+        newDate,
+      );
     } else {
       // Eine Serie: ganze Serie verschieben ODER nur Zeit/Rhythmus ab dem Bezugstag.
       const newStartDate = dateChanged ? newDate : series.startDate;
@@ -1102,11 +1113,15 @@ export async function updateAppointment(
           message: 'Die Wiederholungsregel ist ungültig – bitte den Rhythmus prüfen.',
         });
       }
-      // Verschiebung: Vergangenes bleibt auf dem alten Rhythmus stehen (Historie);
-      // ab heute neu. Ohne Verschiebung wie bisher (ganze Serie ab heute,
-      // „folgende" ab dem gewählten Vorkommen).
+      // Verschiebung des Serienstarts: die Serie beginnt jetzt an einem anderen
+      // Tag – ALLE noch offenen Vorkommen des alten Rhythmus entfallen, auch die
+      // vor heute. Sonst bliebe am alten Starttag ein „verwaister" Termin stehen,
+      // den die Serie gar nicht mehr vorsieht. Historie (abgeschlossen, abgesagt,
+      // laufend) und einzeln geänderte Vorkommen bleiben immer erhalten.
+      // Ohne Verschiebung wie bisher (ganze Serie ab heute, „folgende" ab dem
+      // gewählten Vorkommen) – vergangene Zeiten werden nicht rückwirkend geändert.
       const fromDate = dateChanged
-        ? today
+        ? null
         : options.scope === 'all'
           ? today
           : oldOccurrenceDate;
@@ -1133,7 +1148,7 @@ export async function updateAppointment(
               metadata: {
                 scope: options.scope,
                 shifted: dateChanged,
-                fromDate: fromDate.toISOString().slice(0, 10),
+                fromDate: fromDate ? fromDate.toISOString().slice(0, 10) : 'alle',
               },
             },
             tx,
@@ -1142,6 +1157,11 @@ export async function updateAppointment(
         { timeout: 30_000, maxWait: 8_000 },
       );
       await materializeSeries(series.id);
+      resultAppointmentId = await resolveOccurrenceAppointmentId(
+        appointment.id,
+        series.id,
+        dateChanged ? newDate : oldOccurrenceDate,
+      );
     }
   }
 
@@ -1170,7 +1190,8 @@ export async function updateAppointment(
   }
   await notifyLeadershipAboutEmployeePlanning(
     ctx,
-    appointment.id,
+    // Nach einer Serienänderung zeigt der Deep-Link auf den neu erzeugten Termin.
+    resultAppointmentId,
     appointment.customerId,
     startAt,
     'geändert',
@@ -1179,7 +1200,30 @@ export async function updateAppointment(
     await notifyAppointmentConflict(ctx, assignedEmployeeId, appointment.customerId, startAt, conflicts);
   }
 
-  return { requiresConfirmation: false, appointmentId: appointment.id };
+  return { requiresConfirmation: false, appointmentId: resultAppointmentId };
+}
+
+/**
+ * Nach einer serienweiten Änderung: die ID des Termins ermitteln, der das
+ * bearbeitete Vorkommen jetzt repräsentiert. Existiert der ursprüngliche Termin
+ * noch, bleibt es bei ihm; sonst der neu materialisierte Termin am Zieldatum.
+ */
+async function resolveOccurrenceAppointmentId(
+  previousId: string,
+  seriesId: string,
+  occurrenceDate: Date,
+): Promise<string> {
+  const previous = await db.appointment.findUnique({
+    where: { id: previousId },
+    select: { id: true },
+  });
+  if (previous) return previous.id;
+  const replacement = await db.appointment.findFirst({
+    where: { seriesId, occurrenceDate, deletedAt: null },
+    select: { id: true },
+    orderBy: { createdAt: 'desc' },
+  });
+  return replacement?.id ?? previousId;
 }
 
 /** Drag-and-drop/Resize: reine Zeitänderung mit Konfliktprüfung. */

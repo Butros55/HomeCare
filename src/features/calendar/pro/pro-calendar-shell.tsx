@@ -59,6 +59,8 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
   const [eventsLoading, setEventsLoading] = React.useState(true);
   const loadedRangeRef = React.useRef<{ start: Date; end: Date } | null>(null);
   const [reloadToken, setReloadToken] = React.useState(0);
+  /** Nächster Ladevorgang ohne Ladezustand (Termine bleiben stehen). */
+  const silentReloadRef = React.useRef(false);
 
   const [panelOpen, setPanelOpen] = React.useState(false);
   const [panelPage, setPanelPage] = React.useState<CalendarPanelPage>('calendars');
@@ -97,7 +99,12 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
     if (covered) return;
 
     let cancelled = false;
-    setEventsLoading(true);
+    // Stiller Refetch (nach einer Änderung): die bisherigen Termine bleiben
+    // sichtbar, statt dass der ganze Kalender kurz durch ein Skelett ersetzt
+    // wird. Nur echtes Erstladen/Fensterwechsel zeigt den Ladezustand.
+    const silent = silentReloadRef.current;
+    silentReloadRef.current = false;
+    if (!silent) setEventsLoading(true);
     const params = new URLSearchParams({
       start: desiredStart.toISOString(),
       end: desiredEnd.toISOString(),
@@ -120,10 +127,14 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
     };
   }, [month, reloadToken]);
 
-  const refetch = React.useCallback(() => {
+  const refetch = React.useCallback((options?: { silent?: boolean }) => {
     loadedRangeRef.current = null;
+    silentReloadRef.current = options?.silent ?? false;
     setReloadToken((token) => token + 1);
   }, []);
+
+  /** Nach einer Änderung: im Hintergrund aktualisieren, ohne Ladezustand. */
+  const refetchSilently = React.useCallback(() => refetch({ silent: true }), [refetch]);
 
   // Optimistisch: gelöschte Termine sofort aus der lokalen Liste entfernen –
   // die Divs verschwinden per State-Update, ganz ohne Refetch/Reload.
@@ -141,7 +152,7 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
       const idSet = new Set(ids);
       getCalendarEventsAction(ids).then((result) => {
         if (!result.ok) {
-          refetch();
+          refetchSilently();
           return;
         }
         setEvents((current) => [
@@ -150,7 +161,7 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
         ]);
       });
     },
-    [refetch],
+    [refetchSilently],
   );
 
   // Externe Änderungen (z. B. „Schnell anlegen" aus der Topbar) sofort einspielen –
@@ -163,12 +174,12 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
       if (detail?.appointmentIds && detail.appointmentIds.length > 0 && !detail.seriesWide) {
         upsertEvents(detail.appointmentIds);
       } else {
-        refetch();
+        refetchSilently();
       }
     };
     window.addEventListener('hcp:appointments-changed', handler);
     return () => window.removeEventListener('hcp:appointments-changed', handler);
-  }, [upsertEvents, refetch]);
+  }, [upsertEvents, refetchSilently]);
 
   const proEvents = React.useMemo(
     () => events.map((event) => toProEvent(event, props.soloMode)),
@@ -350,7 +361,7 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
             if (!opts?.seriesWide && opts?.appointmentIds?.length) {
               upsertEvents(opts.appointmentIds);
             } else {
-              refetch();
+              refetchSilently();
             }
           }}
           customers={props.customers}
@@ -365,7 +376,7 @@ export function ProCalendarShell(props: ProCalendarShellProps) {
         <AppointmentDrawer
           appointmentId={drawerAppointmentId}
           onClose={() => setDrawerAppointmentId(null)}
-          onChanged={refetch}
+          onChanged={refetchSilently}
           onDeleted={removeEvents}
           onUpsert={upsertEvents}
           canManage={props.canManage}

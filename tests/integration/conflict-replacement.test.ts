@@ -110,4 +110,17 @@ describe('Konfliktlösung: Ersatz-Mitarbeiter (frei + nächste)', () => {
     const busyIndex = result.candidates.findIndex((c) => c.employeeId === busyId);
     expect(freeIndex).toBeLessThan(busyIndex);
   });
+
+  it('schlägt im Alleine-Modus niemanden vor (auch nicht aus einer früheren Team-Phase)', async () => {
+    const organization = authState.ctx!.organization;
+    await db.organization.update({ where: { id: organization.id }, data: { soloMode: true } });
+    authState.ctx = { ...authState.ctx!, organization: { ...organization, soloMode: true } };
+    try {
+      const result = await suggestReplacementEmployees(appointmentId);
+      expect(result.candidates).toEqual([]);
+    } finally {
+      await db.organization.update({ where: { id: organization.id }, data: { soloMode: false } });
+      authState.ctx = { ...authState.ctx!, organization };
+    }
+  });
 });

@@ -15,7 +15,10 @@ vi.mock('@/server/permissions', async (importOriginal) => {
 });
 
 import { db } from '@/server/db';
-import { suggestResolutionForAppointment } from '@/server/services/conflict-service';
+import {
+  getAppointmentConflicts,
+  suggestResolutionForAppointment,
+} from '@/server/services/conflict-service';
 
 import { buildContext, createEmployee, createOrg, createUserWithMembership, resetDatabase } from './helpers';
 
@@ -83,5 +86,26 @@ describe('Konflikt-Auflösung – erklärt konkret, wer betroffen ist', () => {
     expect(reasons).toContain('Anna Müller');
     // … und es gibt eine handlungsleitende Empfehlung (verschieben/neu zuweisen).
     expect(reasons).toMatch(/verschieben|neu zuweisen/);
+  });
+
+  it('bietet „automatisch auflösen" gar nicht erst an, wenn nichts verschiebbar ist', async () => {
+    // Beide Termine sind fix → die Auflösung könnte nichts bewegen. Der Button
+    // darf dann nicht erscheinen (sonst endet ein Klick immer im „geht nicht").
+    const info = await getAppointmentConflicts(firstAppointmentId);
+    expect(info.conflicts.length).toBeGreaterThan(0);
+    expect(info.canResolve).toBe(false);
+  });
+
+  it('bietet „automatisch auflösen" an, sobald ein Termin des Tages flexibel ist', async () => {
+    const other = await db.appointment.findFirstOrThrow({
+      where: { id: { not: firstAppointmentId } },
+    });
+    await db.appointment.update({ where: { id: other.id }, data: { isFlexible: true } });
+    try {
+      const info = await getAppointmentConflicts(firstAppointmentId);
+      expect(info.canResolve).toBe(true);
+    } finally {
+      await db.appointment.update({ where: { id: other.id }, data: { isFlexible: false } });
+    }
   });
 });

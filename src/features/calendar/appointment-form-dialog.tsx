@@ -394,7 +394,7 @@ export function AppointmentFormDialog({
                 {scope !== 'single' ? (
                   <FieldHint>
                     {scope === 'all'
-                      ? 'Datum & Uhrzeit gelten für die ganze Serie – ein neues Datum verschiebt den Serienstart (Wochentag folgt).'
+                      ? 'Datum & Uhrzeit gelten für die ganze Serie – ein neues Datum verschiebt den Serienstart (Wochentag folgt). Noch offene Termine des alten Rhythmus entfallen; abgeschlossene und abgesagte bleiben als Historie erhalten.'
                       : 'Gilt ab dem gewählten Termin – ein neues Datum verschiebt die Serie ab diesem Tag; frühere Termine bleiben.'}
                   </FieldHint>
                 ) : null}

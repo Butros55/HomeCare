@@ -326,7 +326,9 @@ export async function getAppointmentDetailAction(appointmentId: string) {
       },
     });
     if (!appointment || appointment.organizationId !== ctx.organization.id) {
-      throw new Error('not found');
+      // Bewusst AppError: sonst meldet die UI „Unerwarteter Fehler" statt der
+      // klaren Ursache (z. B. Termin wurde zwischenzeitlich neu erzeugt/gelöscht).
+      throw new AppError('APPOINTMENT_NOT_FOUND');
     }
     if (
       ctx.organization.soloMode &&

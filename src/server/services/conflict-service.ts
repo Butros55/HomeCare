@@ -94,13 +94,41 @@ export async function getAppointmentConflicts(
       conflict.type === 'INSUFFICIENT_TRAVEL_TIME' ||
       conflict.type === 'ABSENCE',
   );
-  // Auflösbar, wenn es einen planbaren Konflikt gibt und die Leitung planen darf.
+  // Die automatische Auflösung verschiebt ausschließlich FLEXIBLE Termine des
+  // Tages. Ist am betroffenen Tag kein einziger Termin flexibel, kann sie nichts
+  // ausrichten – dann wird sie gar nicht erst angeboten, statt hinterher nur
+  // „geht nicht" zu melden.
   const canResolve =
     scheduleConflicts.length > 0 &&
     appointment.assignedEmployeeId != null &&
-    hasPermission(ctx, 'appointments.manage');
+    hasPermission(ctx, 'appointments.manage') &&
+    (await hasFlexibleAppointmentOnDay(ctx, appointment.assignedEmployeeId, appointment.startAt));
 
   return { conflicts: conflicts.map(serialize), canResolve };
+}
+
+/**
+ * Gibt es am Kalendertag des Termins mindestens einen flexiblen Termin desselben
+ * Mitarbeiters? Nur dann hat die automatische Auflösung überhaupt etwas zu
+ * verschieben (sie arbeitet immer auf dem ganzen Tag).
+ */
+async function hasFlexibleAppointmentOnDay(
+  ctx: OrgContext,
+  employeeId: string,
+  date: Date,
+): Promise<boolean> {
+  const day = dayPeriodInZone(date, ctx.organization.timezone);
+  const count = await db.appointment.count({
+    where: {
+      organizationId: ctx.organization.id,
+      assignedEmployeeId: employeeId,
+      deletedAt: null,
+      status: { in: [...RESERVING_STATUSES] },
+      startAt: { gte: day.start, lt: day.end },
+      isFlexible: true,
+    },
+  });
+  return count > 0;
 }
 
 function serialize(conflict: Conflict): SerializedConflict {
@@ -151,6 +179,10 @@ export async function suggestReplacementEmployees(
 ): Promise<ReplacementSuggestion> {
   const ctx = await requireOrganizationMembership();
   if (!hasPermission(ctx, 'appointments.manage')) throw new AppError('ACCESS_DENIED');
+  // Alleine-Modus: es gibt niemanden, an den umgewiesen werden könnte. Auch wenn
+  // aus einer früheren Team-Phase noch Mitarbeiterdatensätze existieren, dürfen
+  // sie hier nicht als Vorschlag auftauchen.
+  if (ctx.organization.soloMode) return { appointmentId, candidates: [] };
 
   const appointment = await db.appointment.findUnique({
     where: { id: appointmentId },
@@ -411,6 +443,10 @@ async function computeResolution(
     const clashLabel = clashing
       .map((o) => `„${o.title}" (${customerOf(o)}, ${label(o.startAt, o.endAt)})`)
       .join(' und ');
+    // Im Alleine-Modus gibt es keine Umweisung – dann auch nicht darauf verweisen.
+    const reassignHint = ctx.organization.soloMode
+      ? 'Bitte einen der beiden Termine auf eine andere Zeit legen.'
+      : 'Bitte einen davon verschieben oder über „Freie Mitarbeiter in der Nähe" neu zuweisen.';
     let reason: string;
     if (appointment.isFlexible) {
       reason = clashLabel
@@ -418,7 +454,7 @@ async function computeResolution(
         : 'Kein freies Zeitfenster – bitte das Zeitfenster erweitern oder manuell umplanen.';
     } else {
       reason = clashLabel
-        ? `Fest terminiert (${label(appointment.startAt, appointment.endAt)}) und überschneidet sich mit ${clashLabel} – beide Termine sind fest. Bitte einen davon verschieben oder über „Freie Mitarbeiter in der Nähe" neu zuweisen.`
+        ? `Fest terminiert (${label(appointment.startAt, appointment.endAt)}) und überschneidet sich mit ${clashLabel} – beide Termine sind fest. ${reassignHint}`
         : 'Fest terminiert und nicht automatisch verschiebbar – bitte manuell anpassen.';
     }
     return { appointmentId: id, title: appointment.title, reason };
