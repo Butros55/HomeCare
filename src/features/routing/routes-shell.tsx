@@ -343,6 +343,8 @@ function SingleRoutePlanner({
   const [declinedTokens, setDeclinedTokens] = React.useState<Set<string>>(new Set());
   const [generating, setGenerating] = React.useState(false);
   const [acceptingToken, setAcceptingToken] = React.useState<string | null>(null);
+  /** Riegel gegen parallele Übernahmen (siehe acceptSuggestion). */
+  const acceptInFlightRef = React.useRef(false);
 
   // Nach einer Datenänderung nicht mehr annehmbare Vorschläge blenden nach links
   // aus (customerId-basiert, da die Tokens bei jeder Revalidierung neu vergeben
@@ -759,6 +761,12 @@ function SingleRoutePlanner({
   };
 
   const acceptSuggestion = async (suggestion: RouteSuggestionDto) => {
+    // Nur EINE Annahme gleichzeitig: Zwei parallele Übernahmen planen gegen
+    // denselben Stand und die zweite scheitert zwangsläufig („nicht mehr
+    // aktuell"). Der Riegel liegt in einem Ref, damit auch schnelle
+    // Doppelklicks vor dem nächsten Rendern zuverlässig abprallen.
+    if (acceptInFlightRef.current) return;
+    acceptInFlightRef.current = true;
     setAcceptingToken(suggestion.token);
     try {
       const result = await acceptRouteSuggestionAction(suggestion.token);
@@ -781,6 +789,7 @@ function SingleRoutePlanner({
         }
       }
     } finally {
+      acceptInFlightRef.current = false;
       setAcceptingToken(null);
     }
   };
@@ -1597,6 +1606,8 @@ function TeamPlanner({
   const [generating, setGenerating] = React.useState(false);
   const [declinedTokens, setDeclinedTokens] = React.useState<Set<string>>(new Set());
   const [acceptingToken, setAcceptingToken] = React.useState<string | null>(null);
+  /** Riegel gegen parallele Übernahmen (siehe acceptSuggestion). */
+  const acceptInFlightRef = React.useRef(false);
 
   const generate = async () => {
     setGenerating(true);
@@ -1620,6 +1631,11 @@ function TeamPlanner({
   };
 
   const acceptSuggestion = async (suggestion: RouteSuggestionDto) => {
+    // Nur EINE Annahme gleichzeitig – zwei parallele Übernahmen planen gegen
+    // denselben Stand, die zweite müsste zwangsläufig scheitern. In der
+    // Teamplanung liegen viele Karten nebeneinander, hier passiert das leicht.
+    if (acceptInFlightRef.current) return;
+    acceptInFlightRef.current = true;
     setAcceptingToken(suggestion.token);
     try {
       const response = await acceptRouteSuggestionAction(suggestion.token);
@@ -1631,6 +1647,7 @@ function TeamPlanner({
         if (response.code === 'SUGGESTION_STALE') await generate();
       }
     } finally {
+      acceptInFlightRef.current = false;
       setAcceptingToken(null);
     }
   };
@@ -1913,6 +1930,7 @@ function TeamEmployeePanel({
             hourBudgetsEnabled={hourBudgetsEnabled}
             declined={false}
             pending={acceptingToken === suggestion.token}
+            busy={acceptingToken !== null}
             onAccept={onAccept}
             onDecline={onDecline}
             onUndoDecline={onUndoDecline}
@@ -2332,6 +2350,7 @@ function SuggestionsBody({
                 hourBudgetsEnabled={hourBudgetsEnabled}
                 declined={false}
                 pending={acceptingToken === suggestion.token}
+                busy={acceptingToken !== null}
                 onAccept={onAccept}
                 onDecline={onDecline}
                 onUndoDecline={onUndoDecline}

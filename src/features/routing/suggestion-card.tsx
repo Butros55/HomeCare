@@ -84,6 +84,7 @@ export function SuggestionCard({
   hourBudgetsEnabled,
   declined,
   pending,
+  busy,
   onAccept,
   onDecline,
   onUndoDecline,
@@ -95,6 +96,13 @@ export function SuggestionCard({
   hourBudgetsEnabled: boolean;
   declined: boolean;
   pending: boolean;
+  /**
+   * Irgendeine Übernahme läuft gerade (auch die einer anderen Karte). Es wird
+   * bewusst immer nur EINE Annahme zugelassen: Parallele Übernahmen planen
+   * gegen denselben Stand, die zweite müsste zwangsläufig als „nicht mehr
+   * aktuell" scheitern.
+   */
+  busy?: boolean;
   onAccept: (suggestion: RouteSuggestionDto) => void;
   onDecline: (suggestion: RouteSuggestionDto) => void;
   onUndoDecline: (suggestion: RouteSuggestionDto) => void;
@@ -238,11 +246,25 @@ export function SuggestionCard({
           )}
         </p>
         <div className="flex shrink-0 gap-2">
-          <Button variant="secondary" size="sm" disabled={pending} onClick={() => onDecline(suggestion)}>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={pending || busy}
+            onClick={() => onDecline(suggestion)}
+          >
             <X aria-hidden /> Ablehnen
           </Button>
           {canAccept ? (
-            <Button variant="primary" size="sm" loading={pending} onClick={() => onAccept(suggestion)}>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={pending}
+              // Während einer laufenden Übernahme bleiben die übrigen Karten
+              // gesperrt, statt einen aussichtslosen zweiten Versuch zu starten.
+              disabled={busy && !pending}
+              title={busy && !pending ? 'Eine Übernahme läuft gerade …' : undefined}
+              onClick={() => onAccept(suggestion)}
+            >
               <Check aria-hidden /> Termin übernehmen
             </Button>
           ) : null}

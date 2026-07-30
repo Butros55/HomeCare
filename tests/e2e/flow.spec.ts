@@ -80,7 +80,9 @@ test('4: Owner lädt das Stundenkonto auf und überträgt Stunden', async ({ pag
   await page.getByRole('button', { name: 'Aufladen' }).click();
   await page.locator('#topup-minutes').fill('10');
   await page.getByRole('dialog').getByRole('button', { name: 'Aufladen' }).click();
-  await expect(page.getByText(/aufgeladen/)).toBeVisible();
+  // Auf die Erfolgsmeldung prüfen ("10 h aufgeladen."), nicht auf das bloße Wort:
+  // in der Kontobewegungsliste steht danach zusätzlich "Stunden aufgeladen".
+  await expect(page.getByText(/\d+([.,]\d+)?\s*h aufgeladen\./)).toBeVisible();
 
   // 2,5 h an Paula Probe zuweisen (Parser: "2,5" → 150 Minuten).
   await page.getByRole('button', { name: 'Stunden zuweisen' }).first().click();

@@ -637,8 +637,10 @@ export async function computeRoutePlan(input: ComputeRouteInput) {
   };
 
   // Simulationsbeginn: 00:00 des Planungstags (Org-Wandzeit) – die Engine
-  // verschiebt die Abfahrt anschließend so spät wie möglich.
-  const day = dayPeriodInZone(date, ctx.organization.timezone);
+  // verschiebt die Abfahrt anschließend so spät wie möglich. HEUTE beginnt die
+  // Simulation dagegen bei „jetzt": An vergangene Zeiten führt keine Route, also
+  // wird weder eine Abfahrt noch ein Einsatz in der Vergangenheit geplant.
+  const horizon = resolvePlanningHorizon({ date, timezone: ctx.organization.timezone, now });
   const timeFormatter = new Intl.DateTimeFormat('de-DE', {
     timeZone: ctx.organization.timezone,
     hour: '2-digit',
@@ -656,15 +658,20 @@ export async function computeRoutePlan(input: ComputeRouteInput) {
       matrix,
       bufferMinutes: input.bufferMinutes,
       returnToEnd: input.returnToStart,
-      earliestDepartureAt: day.start,
+      earliestDepartureAt: horizon.earliestDepartureAt,
       formatTime,
     };
     if (input.manualOrder) {
       const order = subStops.map((_, i) => i);
-      const probe = computeSchedule(order, { ...planInput, departureAt: day.start });
+      const probe = computeSchedule(order, {
+        ...planInput,
+        departureAt: horizon.earliestDepartureAt,
+      });
       const first = probe.stops[0];
       const shiftSeconds = first ? Math.max(0, first.waitSeconds - input.bufferMinutes * 60) : 0;
-      const latestDepartureAt = new Date(day.start.getTime() + shiftSeconds * 1000);
+      const latestDepartureAt = new Date(
+        horizon.earliestDepartureAt.getTime() + shiftSeconds * 1000,
+      );
       const schedule =
         shiftSeconds > 0
           ? computeSchedule(order, { ...planInput, departureAt: latestDepartureAt })

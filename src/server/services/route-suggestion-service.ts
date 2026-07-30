@@ -59,6 +59,7 @@ import {
   isPastForRoutePlanning,
   isPastPlanningDay,
   ORIGIN_LABELS,
+  resolvePlanningHorizon,
   resolveRouteOrigin,
   type GpsCoordinate,
   type RouteOriginType,
@@ -107,6 +108,36 @@ export interface SuggestionTokenPayload {
   buffer: number;
   ret: boolean;
   exp: number; // Epoch ms
+  /**
+   * Fingerabdruck der Planungsgrundlage (Basisroute des Mitarbeiters am Tag)
+   * zum Zeitpunkt der Erzeugung. Dient AUSSCHLIESSLICH der Diagnose: Schlägt
+   * eine Annahme fehl, ist damit protokolliert, ob sich die Grundlage wirklich
+   * geändert hat. Er löst NIE selbst eine Ablehnung aus – sonst entstünden
+   * genau die falschen „nicht mehr aktuell"-Meldungen wieder, die dieser Umbau
+   * beseitigt (eine unbeteiligte Änderung am Tag darf nicht blockieren).
+   * Optional, damit ältere Tokens gültig bleiben.
+   */
+  fp?: string;
+}
+
+/**
+ * Fingerabdruck der Basisroute: Reihenfolge-unabhängige Kurzfassung der
+ * routenrelevanten Termine (Zeiten, Dauer, Beweglichkeit) eines Mitarbeiters am
+ * Planungstag.
+ */
+function planningFingerprint(
+  appointments: { id: string; startAt: Date; endAt: Date; isFlexible: boolean }[],
+): string {
+  const parts = appointments
+    .map(
+      (a) =>
+        `${a.id}:${a.startAt.getTime()}:${a.endAt.getTime()}:${a.isFlexible ? 'f' : 'x'}`,
+    )
+    .sort();
+  return createHmac('sha256', 'planning-fingerprint')
+    .update(parts.join('|'))
+    .digest('base64url')
+    .slice(0, 16);
 }
 
 function tokenSecret(): string {
@@ -461,8 +492,12 @@ export async function generateRouteSuggestions(
   const ctx = await requireOrganizationMembership();
   const date = fromDateInputValue(input.date);
   if (!date) throw new AppError('VALIDATION_FAILED', { message: 'Ungültiges Datum.' });
+  // „Jetzt" EINMAL pro Operation bestimmen und an alle Mitarbeiter-Panels
+  // weiterreichen: So sehen alle Vorschläge desselben Laufs denselben
+  // Planungshorizont (heute ab jetzt) und bleiben untereinander konsistent.
+  const now = new Date();
   // Für vergangene Tage werden keine Vorschläge mehr erzeugt (nur Ansicht).
-  if (isPastPlanningDay(date, ctx.organization.timezone)) {
+  if (isPastPlanningDay(date, ctx.organization.timezone, now)) {
     throw new AppError('VALIDATION_FAILED', {
       message: 'Für vergangene Tage können keine Vorschläge erzeugt werden.',
     });
@@ -544,6 +579,7 @@ export async function generateRouteSuggestions(
         input,
         demand,
         customersWithAvailability,
+        now,
       }).catch((error): EmployeePanelInternal => {
         console.error(`[route-suggestions] Mitarbeiter ${employee.id} fehlgeschlagen:`, error);
         return {
@@ -679,12 +715,17 @@ async function buildEmployeePanel(args: {
   input: GenerateSuggestionsInput;
   demand: DemandCandidate[];
   customersWithAvailability: Set<string>;
+  /** „Jetzt" des gesamten Laufs (Org-Zeitzone) – Basis des Planungshorizonts. */
+  now: Date;
 }): Promise<EmployeePanelInternal> {
-  const { ctx, employee, date, input, demand } = args;
+  const { ctx, employee, date, input, demand, now } = args;
   const timezone = ctx.organization.timezone;
   const day = dayPeriodInZone(date, timezone);
   const weekday = isoWeekdayInZone(day.start, timezone);
   const dayParts = calendarDayInZone(day.start, timezone);
+  // Heute wird ausschließlich ab „jetzt" geplant: keine Abfahrt und kein
+  // Einsatzbeginn in der Vergangenheit. Für künftige Tage ist das 00:00.
+  const horizon = resolvePlanningHorizon({ date, timezone, now });
 
   // ---- Startpunkt --------------------------------------------------------
   let originType: RouteOriginType;
@@ -773,7 +814,10 @@ async function buildEmployeePanel(args: {
       a.routeRelevant &&
       a.status !== 'DRAFT' &&
       a.locationAddress?.latitude != null &&
-      a.locationAddress?.longitude != null,
+      a.locationAddress?.longitude != null &&
+      // Vergangene fixe bzw. abgelaufene flexible Termine gehören nicht mehr in
+      // die (heutige) Basisroute – sie machten sie nur unzulässig.
+      !isPastForRoutePlanning(a, now),
   );
   const selectedIds =
     input.scope === 'self' && input.appointmentIds
@@ -854,9 +898,18 @@ async function buildEmployeePanel(args: {
           });
           const unconstrained =
             candidate.availabilitySlots.length === 0 && availabilityRows.length === 0;
-          const windows = unconstrained
+          const openWindows = unconstrained
             ? intersectWindows(rawWindows, [DEFAULT_PLANNING_WINDOW])
             : rawWindows;
+          // Heute: nur noch der verbleibende Tag ist planbar. Das Zeitraster der
+          // Bewertung startet damit nie vor „jetzt" – ein Vorschlag in der
+          // Vergangenheit kann gar nicht erst entstehen.
+          const windows =
+            horizon.earliestServiceMinute > 0
+              ? intersectWindows(openWindows, [
+                  { startMinute: horizon.earliestServiceMinute, endMinute: 24 * 60 },
+                ])
+              : openWindows;
           const duration = suggestionDurationMinutes({
             defaultDurationMinutes: candidate.defaultDurationMinutes,
             openMinutes: candidate.openMinutes,
@@ -921,7 +974,7 @@ async function buildEmployeePanel(args: {
     matrix: baseMatrix,
     bufferMinutes: input.bufferMinutes,
     returnToEnd: input.returnToStart,
-    earliestDepartureAt: day.start,
+    earliestDepartureAt: horizon.earliestDepartureAt,
     formatTime,
   });
 
@@ -966,7 +1019,7 @@ async function buildEmployeePanel(args: {
       matrix: candidateMatrix,
       bufferMinutes: input.bufferMinutes,
       returnToEnd: input.returnToStart,
-      earliestDepartureAt: day.start,
+      earliestDepartureAt: horizon.earliestDepartureAt,
       minuteToUtc: (minute) =>
         zonedWallTimeToUtc(dayParts.year, dayParts.month, dayParts.day, minutesToTime(minute), timezone),
       formatTime,
@@ -1022,6 +1075,7 @@ async function buildEmployeePanel(args: {
       buffer: input.bufferMinutes,
       ret: input.returnToStart,
       exp: Date.now() + TOKEN_TTL_MS,
+      fp: planningFingerprint(baseAppointments),
     });
 
     const extraTravelMinutes = Math.round(evaluation.impact.extraTravelSeconds / 60);
@@ -1169,6 +1223,9 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
    * (echte Kollision, Guthaben, Zuständigkeit …), statt nur die generische
    * Meldung zu sehen. Der Grund ist bewusst nicht Teil der Nutzermeldung.
    */
+  // Wird gesetzt, sobald die aktuelle Basisroute geladen ist (s. unten) – rein
+  // für die Fehlerdiagnose: „hat sich die Planungsgrundlage überhaupt geändert?"
+  let currentFingerprint: string | null = null;
   const staleError = (reason: string, message?: string): AppError => {
     console.warn('[route-accept] SUGGESTION_STALE', {
       reason,
@@ -1177,12 +1234,27 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
       cust: payload.cust,
       date: payload.date,
       start: payload.start,
+      // true/false = Basisroute verändert; null = noch nicht ermittelt bzw.
+      // Token ohne Fingerabdruck (älterer Stand).
+      baseChanged:
+        payload.fp && currentFingerprint ? payload.fp !== currentFingerprint : null,
     });
     return new AppError('SUGGESTION_STALE', message ? { message } : undefined);
   };
 
   if (Number.isNaN(startAt.getTime()) || startAt < day.start || endAt > day.end) {
     throw staleError('start-out-of-day');
+  }
+
+  // Heute ausschließlich ab „jetzt" planen: Ein Vorschlag, dessen Beginn
+  // inzwischen verstrichen ist (Token liegt bis zu 15 Min. herum), wird ehrlich
+  // abgelehnt statt in die Vergangenheit geschrieben.
+  const horizon = resolvePlanningHorizon({ date, timezone, now });
+  if (startAt < horizon.earliestDepartureAt) {
+    throw staleError(
+      'start-in-past',
+      'Die vorgeschlagene Zeit ist inzwischen verstrichen – bitte Vorschläge neu generieren.',
+    );
   }
 
   // ---- Stammdaten (Scope-Prüfung vor der Transaktion) ---------------------
@@ -1246,6 +1318,7 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
       !isPastForRoutePlanning(a, now),
   );
   const routableIds = new Set(routable.map((a) => a.id));
+  currentFingerprint = planningFingerprint(routable);
   const baseStops: RouteStopInput[] = routable.map((appointment) => ({
     id: appointment.id,
     latitude: appointment.locationAddress!.latitude!,
@@ -1289,7 +1362,8 @@ export async function acceptRouteSuggestion(token: string): Promise<AcceptSugges
     matrix,
     bufferMinutes: payload.buffer,
     returnToEnd: payload.ret,
-    earliestDepartureAt: day.start,
+    // Identischer Horizont wie beim Generieren (heute: ab jetzt).
+    earliestDepartureAt: horizon.earliestDepartureAt,
     formatTime: (value) => timeFormatter.format(value),
   });
   if (!planned.feasible) {

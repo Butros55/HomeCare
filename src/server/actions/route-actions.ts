@@ -158,21 +158,45 @@ export async function generateRouteSuggestionsAction(
   });
 }
 
+/**
+ * Serialisierungskonflikt (P2034) ist KEINE Veralterung: Zwei Annahmen liefen
+ * nur gleichzeitig: Postgres bricht dann eine Transaktion ab, obwohl die Daten
+ * fachlich unverändert sind. Früher wurde das sofort als „Vorschlag nicht mehr
+ * aktuell" gemeldet – ein häufiger Fehlalarm. Deshalb wird die Annahme
+ * begrenzt wiederholt (kurze, zufällige Wartezeit gegen Gleichlauf); erst
+ * danach gilt sie als gescheitert. Fachliche Prüfungen laufen bei jedem
+ * Versuch vollständig neu – es wird nichts ungeprüft angelegt.
+ */
+const SERIALIZATION_RETRIES = 3;
+
+function isSerializationConflict(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
+}
+
+async function withSerializationRetry<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isSerializationConflict(error)) throw error;
+      if (attempt >= SERIALIZATION_RETRIES) {
+        console.warn('[route-accept] Serialisierungskonflikt bleibt nach Wiederholungen bestehen.');
+        throw new AppError('SUGGESTION_STALE', {
+          message:
+            'Die Annahme kollidierte mit einer parallelen Änderung – bitte erneut versuchen.',
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25 + Math.floor(Math.random() * 75)));
+    }
+  }
+}
+
 export async function acceptRouteSuggestionAction(
   token: string,
 ): Promise<ActionResult<AcceptSuggestionResult>> {
   return runAction(async () => {
     const parsed = z.string().min(20).max(4096).parse(token);
-    let accepted: AcceptSuggestionResult;
-    try {
-      accepted = await acceptRouteSuggestion(parsed);
-    } catch (error) {
-      // Serialisierungskonflikt (paralleler Schreibzugriff) → als veraltet melden.
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
-        throw new AppError('SUGGESTION_STALE');
-      }
-      throw error;
-    }
+    const accepted = await withSerializationRetry(() => acceptRouteSuggestion(parsed));
     revalidatePath('/routes');
     revalidatePath('/calendar');
     revalidatePath('/dashboard');
@@ -213,15 +237,9 @@ export async function acceptDayRouteAction(
 ): Promise<ActionResult<AcceptDayRouteResult>> {
   return runAction(async () => {
     const parsed = z.string().min(20).max(16_384).parse(token);
-    let accepted: AcceptDayRouteResult;
-    try {
-      accepted = await acceptDayRoute({ token: parsed, publish });
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
-        throw new AppError('SUGGESTION_STALE');
-      }
-      throw error;
-    }
+    const accepted = await withSerializationRetry(() =>
+      acceptDayRoute({ token: parsed, publish }),
+    );
     revalidatePath('/routes');
     revalidatePath('/calendar');
     revalidatePath('/dashboard');

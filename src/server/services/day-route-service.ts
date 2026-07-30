@@ -50,6 +50,7 @@ import {
 import {
   isPastForRoutePlanning,
   isPastPlanningDay,
+  resolvePlanningHorizon,
   resolveRouteOrigin,
   type GpsCoordinate,
   type RouteOriginType,
@@ -253,7 +254,9 @@ export async function generateDayRoutes(
 
   const date = fromDateInputValue(input.date);
   if (!date) throw new AppError('VALIDATION_FAILED', { message: 'Ungültiges Datum.' });
-  if (isPastPlanningDay(date, ctx.organization.timezone)) {
+  // „Jetzt" einmal pro Operation – Basis für Vergangenheitsprüfung UND Horizont.
+  const now = new Date();
+  if (isPastPlanningDay(date, ctx.organization.timezone, now)) {
     throw new AppError('VALIDATION_FAILED', {
       message: 'Für vergangene Tage können keine Routen geplant werden.',
     });
@@ -269,6 +272,8 @@ export async function generateDayRoutes(
   const day = dayPeriodInZone(date, timezone);
   const weekday = isoWeekdayInZone(day.start, timezone);
   const dayParts = calendarDayInZone(day.start, timezone);
+  // Heute nur den verbleibenden Tag planen (keine Abfahrt/Einsätze rückwärts).
+  const horizon = resolvePlanningHorizon({ date, timezone, now });
   const minuteToUtc = (minute: number): Date =>
     zonedWallTimeToUtc(dayParts.year, dayParts.month, dayParts.day, minutesToTime(minute), timezone);
   const timeFormatter = new Intl.DateTimeFormat('de-DE', {
@@ -299,7 +304,6 @@ export async function generateDayRoutes(
   });
   // Vergangene fixe Termine gehören nicht mehr in die (heutige) Route – sie
   // würden sie nur unzulässig machen. Für künftige Tage trifft das nie zu.
-  const now = new Date();
   const routable = dayAppointments.filter(
     (a) =>
       a.locationAddress?.latitude != null &&
@@ -410,9 +414,16 @@ export async function generateDayRoutes(
       });
       const unconstrained =
         candidate.availabilitySlots.length === 0 && availabilityRows.length === 0;
-      const windows = unconstrained
+      const openWindows = unconstrained
         ? intersectWindows(rawWindows, [DEFAULT_PLANNING_WINDOW])
         : rawWindows;
+      // Heute: nur der verbleibende Tag ist planbar (nie rückwärts).
+      const windows =
+        horizon.earliestServiceMinute > 0
+          ? intersectWindows(openWindows, [
+              { startMinute: horizon.earliestServiceMinute, endMinute: 24 * 60 },
+            ])
+          : openWindows;
       const duration = suggestionDurationMinutes({
         defaultDurationMinutes: candidate.defaultDurationMinutes,
         openMinutes: candidate.openMinutes,
@@ -505,8 +516,14 @@ export async function generateDayRoutes(
     distanceMeters: legs.map((row) => row.map((leg) => leg.distanceMeters)),
   };
 
+  // Wunsch-Abfahrt, aber heute frühestens „jetzt" – eine Abfahrt in der
+  // Vergangenheit ist keine Planung, sondern eine Fiktion.
+  const requestedRaw =
+    input.earliestDepartureMinute != null
+      ? minuteToUtc(input.earliestDepartureMinute)
+      : horizon.earliestDepartureAt;
   const requestedDepartureAt =
-    input.earliestDepartureMinute != null ? minuteToUtc(input.earliestDepartureMinute) : day.start;
+    requestedRaw < horizon.earliestDepartureAt ? horizon.earliestDepartureAt : requestedRaw;
   // Feste Termine bleiben verankert und in der Route – kollidiert die
   // Wunsch-Abfahrt damit, startet die Route früher (sichtbarer Hinweis unten).
   const departureClamp = clampDepartureForFixedStops({
@@ -514,7 +531,8 @@ export async function generateDayRoutes(
     stops: baseStops,
     matrix: fullMatrix,
     bufferMinutes: input.bufferMinutes,
-    floor: day.start,
+    // Auch das Vorziehen wegen fester Termine geht heute nie vor „jetzt".
+    floor: horizon.earliestDepartureAt,
   });
   const earliestDepartureAt = departureClamp.earliestDepartureAt;
   const latestReturnAt =
@@ -697,6 +715,8 @@ export async function acceptDayRoute(input: {
   }
   const day = dayPeriodInZone(date, timezone);
   const weekday = isoWeekdayInZone(day.start, timezone);
+  // Identischer Horizont wie beim Generieren (heute: ab jetzt).
+  const horizon = resolvePlanningHorizon({ date, timezone, now });
 
   /** Als „veraltet" melden UND serverseitig mit Grund protokollieren (s. acceptRouteSuggestion). */
   const staleError = (reason: string, message?: string): AppError => {
@@ -727,7 +747,15 @@ export async function acceptDayRoute(input: {
   });
   for (const visit of visits) {
     if (Number.isNaN(visit.startAt.getTime()) || visit.startAt < day.start || visit.endAt > day.end) {
-      throw new AppError('SUGGESTION_STALE');
+      throw staleError('visit-out-of-day');
+    }
+    // Heute ausschließlich ab „jetzt": inzwischen verstrichene Einsätze werden
+    // ehrlich abgelehnt statt in die Vergangenheit geschrieben.
+    if (visit.startAt < horizon.earliestDepartureAt) {
+      throw staleError(
+        'visit-in-past',
+        'Die geplanten Zeiten sind inzwischen verstrichen – bitte Route neu generieren.',
+      );
     }
   }
   const customers = visits.length
@@ -825,13 +853,16 @@ export async function acceptDayRoute(input: {
   });
   // Identische Re-Planung wie beim Generieren – inklusive der vorgezogenen
   // Abfahrt, falls feste Termine vor der Wunsch-Abfahrt liegen.
-  const requestedDepartureAt = payload.earlyMin != null ? minuteToUtc(payload.earlyMin) : day.start;
+  const requestedRaw =
+    payload.earlyMin != null ? minuteToUtc(payload.earlyMin) : horizon.earliestDepartureAt;
+  const requestedDepartureAt =
+    requestedRaw < horizon.earliestDepartureAt ? horizon.earliestDepartureAt : requestedRaw;
   const { earliestDepartureAt } = clampDepartureForFixedStops({
     earliestDepartureAt: requestedDepartureAt,
     stops: [...baseStops, ...visitStops],
     matrix,
     bufferMinutes: payload.buffer,
-    floor: day.start,
+    floor: horizon.earliestDepartureAt,
   });
   const planned = planRouteWithAutoDeparture({
     stops: [...baseStops, ...visitStops],
